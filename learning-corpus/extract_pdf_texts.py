@@ -2,7 +2,7 @@ from pathlib import Path
 import subprocess, json, os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-corpus_root = Path(r'C:\Users\krist\Desktop\zotero\learning-corpus')
+corpus_root = Path(r'Path(__file__).resolve().parent.parent / 'learning-corpus'')
 text_root = corpus_root / '.text'
 text_root.mkdir(exist_ok=True)
 

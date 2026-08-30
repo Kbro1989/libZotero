@@ -127,8 +127,8 @@ def process_pdf_to_pages(pdf_path: str) -> list:
     return pages
 
 def main():
-    output_file = 'C:/Users/krist/Desktop/zotero/learning-corpus/pdf_page_math_extraction.jsonl'
-    base = 'C:/Users/krist/Desktop/zotero/learning-corpus'
+    output_file = 'Path(__file__).resolve().parent.parent / 'learning-corpus'/pdf_page_math_extraction.jsonl'
+    base = 'Path(__file__).resolve().parent.parent / 'learning-corpus''
     
     # Find all PDFs
     subdirs = ['diffusion-generative', 'efficient-inference-quantization',

@@ -2,7 +2,7 @@ from pathlib import Path
 import json, re
 from collections import Counter
 
-corpus_root = Path(r'C:\Users\krist\Desktop\zotero\learning-corpus')
+corpus_root = Path(r'Path(__file__).resolve().parent.parent / 'learning-corpus'')
 base_manifest = corpus_root / 'paper_study_notes.jsonl'
 corpus_path = corpus_root / 'kingwen_paper_study_corpus.jsonl'
 

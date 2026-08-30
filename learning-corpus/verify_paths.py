@@ -4,7 +4,7 @@
 import os
 from pathlib import Path
 
-base = Path(r'C:\Users\krist\Desktop\zotero\learning-corpus')
+base = Path(r'Path(__file__).resolve().parent.parent / 'learning-corpus'')
 dir_path = base / 'diffusion-generative'
 
 print(f"Base exists: {base.exists()}")

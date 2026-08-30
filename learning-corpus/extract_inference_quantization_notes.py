@@ -1,8 +1,8 @@
 from pathlib import Path
 import re
 
-corpus_root = Path(r'C:\Users\krist\Desktop\zotero\learning-corpus\.text')
-output_path = Path(r'C:\Users\krist\Desktop\zotero\learning-corpus\extended_study_notes_inference_quantization.md')
+corpus_root = Path(r'Path(__file__).resolve().parent.parent / 'learning-corpus' / '.text'')
+output_path = Path(r'Path(__file__).resolve().parent.parent / 'learning-corpus'\extended_study_notes_inference_quantization.md')
 
 HEXAGRAM_UPGRADE_MAP = {
     1: "training_efficiency", 2: "state_machine_agent", 3: "diffusion_generative",

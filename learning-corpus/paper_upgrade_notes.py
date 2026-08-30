@@ -2,8 +2,8 @@ from pathlib import Path
 import json, re
 from collections import Counter
 
-corpus_root = Path(r'C:\Users\krist\Desktop\zotero\learning-corpus\.text')
-output_path = Path(r'C:\Users\krist\Desktop\zotero\learning-corpus\paper_upgrade_notes.jsonl')
+corpus_root = Path(r'Path(__file__).resolve().parent.parent / 'learning-corpus' / '.text'')
+output_path = Path(r'Path(__file__).resolve().parent.parent / 'learning-corpus'\paper_upgrade_notes.jsonl')
 
 UPGRADE_PATTERNS = {
     'training_efficiency': ['pretraining', 'training speed', 'throughput', 'optimizer', 'mixed precision', 'gradient checkpointing', 'pipeline parallelism', 'tensor parallelism', 'ZeRO', 'DeepSpeed', 'Megatron', 'LAMB', 'LARS', 'learning rate schedule', 'batch size', 'gradient accumulation', 'data efficiency'],

@@ -2,7 +2,7 @@ from pathlib import Path
 import json, re
 from collections import Counter
 
-root = Path('C:/Users/krist/Desktop/zotero/learning-corpus/.text')
+root = Path('Path(__file__).resolve().parent.parent / 'learning-corpus' / '.text'')
 out_path = root.parent / 'paper_frequency_profiles.jsonl'
 
 STOP = {'the','and','for','with','from','that','this','they','have','been','were','their','would','could','should','which','where','when','what','than','then','them','also','more','most','some','into','over','such','only','other','many','much','each','about','because','through','during','before','after','above','below','between','same','different','often','however','although','while','since','until','because','both','few','most','own','same','than','too','very','just','still','already','ever','never','always','usually','sometimes','really','perhaps','certainly','definitely','probably','possible','likely','clear','known','given','shown','found','used','using','based','proposed','presented','introduced','developed','designed','implemented','evaluated','compared','analyzed','discussed','reported','demonstrated','shown','observed','results','method','approach','model','models','paper','propose','present','introduce','show','result','performance','accuracy','improvement','state','art','using','based','et','al','fig','figure','table','equation','section','appendix','references','abstract','introduction','conclusion','future','work'}

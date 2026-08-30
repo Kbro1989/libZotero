@@ -99,10 +99,10 @@ def extract_page_by_page(pdf_path: str) -> Iterator[Dict[str, Any]]:
             }
 
 def main():
-    output_file = 'C:/Users/krist/Desktop/zotero/learning-corpus/pdf_page_math_extraction.jsonl'
+    output_file = 'Path(__file__).resolve().parent.parent / 'learning-corpus'/pdf_page_math_extraction.jsonl'
     
     # Find all subdirectories with PDFs
-    base = 'C:/Users/krist/Desktop/zotero/learning-corpus'
+    base = 'Path(__file__).resolve().parent.parent / 'learning-corpus''
     subdirs = ['diffusion-generative', 'efficient-inference-quantization', 
                'graph-neural-networks', 'llm-alignment', 
                'multimodal-learning', 'video-generation']

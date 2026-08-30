@@ -7,7 +7,7 @@ import json, re
 from collections import Counter
 from emotional_engine import collapse_full_128
 
-corpus_root = Path(r'C:\Users\krist\Desktop\zotero\learning-corpus')
+corpus_root = Path(r'Path(__file__).resolve().parent.parent / 'learning-corpus'')
 text_root = corpus_root / '.text'
 shotgun_path = Path(r'C:\Users\krist\Desktop\KING-WEN-I-CHING-IMMUTABLE-TABLES\kingwen_train_data\full_shotgun_expansion_all.jsonl')
 

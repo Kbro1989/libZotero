@@ -6,8 +6,8 @@ curated King Wen hexagram mappings from full-text .txt papers.
 from pathlib import Path
 import re, json, hashlib, textwrap
 
-CORPUS = Path(r"C:\Users\krist\Desktop\zotero\learning-corpus\.text")
-OUT = Path(r"C:\Users\krist\Desktop\zotero\learning-corpus\.text\_extracted_notes_draft_v2.md")
+CORPUS = Path(r"Path(__file__).resolve().parent.parent / 'learning-corpus' / '.text'")
+OUT = Path(r"Path(__file__).resolve().parent.parent / 'learning-corpus' / '.text'\_extracted_notes_draft_v2.md")
 
 # Curated topic-to-hex mapping for these paper families.
 # Each entry: list of keyword tuples (substring, hexagram char, rationale note)

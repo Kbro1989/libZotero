@@ -1,5 +1,5 @@
 import os, re, json, glob
-root = r'C:\Users\krist\Desktop\zotero\learning-corpus'
+root = r'Path(__file__).resolve().parent.parent / 'learning-corpus''
 text_dir = os.path.join(root, '.text')
 out_path = os.path.join(root, 'kingwen_paper_study_corpus.jsonl')
 

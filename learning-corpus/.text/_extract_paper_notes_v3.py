@@ -4,8 +4,8 @@ Fast extractor for study notes. Minimal per-file processing to avoid timeout.
 from pathlib import Path
 import re
 
-CORPUS = Path(r"C:\Users\krist\Desktop\zotero\learning-corpus\.text")
-OUT = Path(r"C:\Users\krist\Desktop\zotero\learning-corpus\.text\_extracted_notes_draft_v3.md")
+CORPUS = Path(r"Path(__file__).resolve().parent.parent / 'learning-corpus' / '.text'")
+OUT = Path(r"Path(__file__).resolve().parent.parent / 'learning-corpus' / '.text'\_extracted_notes_draft_v3.md")
 
 TARGETS = [
     "2103.00020_Learning Transferable Visual Models From Natural Language Supervision.txt",

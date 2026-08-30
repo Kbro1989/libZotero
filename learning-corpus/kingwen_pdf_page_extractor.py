@@ -7,7 +7,7 @@ No subprocess - uses pdftotext output directly.
 import os
 import json
 
-base = "C:/Users/krist/Desktop/zotero/learning-corpus"
+base = "Path(__file__).resolve().parent.parent / 'learning-corpus'"
 output = base + "/pdf_page_math_extraction.jsonl"
 
 pdf_dirs = ['diffusion-generative', 'efficient-inference-quantization',

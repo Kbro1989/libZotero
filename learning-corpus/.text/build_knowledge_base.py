@@ -10,7 +10,7 @@ from pathlib import Path
 from collections import defaultdict
 import re
 
-TEXT_DIR = Path("/c/Users/krist/Desktop/zotero/learning-corpus/.text")
+TEXT_DIR = Path("Path(__file__).resolve().parent.parent / 'learning-corpus' / '.text'")
 OUTPUT_FILE = Path("/c/Users/krist/Desktop/zotero/knowledge-base.json")
 
 # Domain classification patterns

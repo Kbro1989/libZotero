@@ -10,7 +10,7 @@ import json, re
 from collections import Counter
 from emotional_engine import collapse_full_128
 
-corpus_root = Path(r'C:\Users\krist\Desktop\zotero\learning-corpus')
+corpus_root = Path(r'Path(__file__).resolve().parent.parent / 'learning-corpus'')
 text_root = corpus_root / '.text'
 output_path = corpus_root / 'kingwen_standpoint_corpus.jsonl'
 corpus_path = corpus_root / 'kingwen_paper_study_corpus.jsonl'

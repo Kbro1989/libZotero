@@ -202,7 +202,7 @@ def process_paper(paper_entry: Dict) -> Tuple[Dict, List[Dict], List[Dict]]:
     source_id = hashlib.sha256(f"{title}|{year}".encode()).hexdigest()[:32]
     
     # Read TXT content
-    txt_path = f'C:/Users/krist/Desktop/zotero/learning-corpus/.text/{paper_id}.txt'
+    txt_path = f'Path(__file__).resolve().parent.parent / 'learning-corpus' / '.text'/{paper_id}.txt'
     text_content = ""
     if os.path.exists(txt_path):
         with open(txt_path, 'r', encoding='utf-8', errors='ignore') as f:
@@ -240,7 +240,7 @@ def main():
     parser = argparse.ArgumentParser(description='Ingest Zotero corpus with math preservation')
     parser.add_argument('--db-path', default='unified_corpus.db', help='Database path')
     parser.add_argument('--batch-size', type=int, default=10, help='Batch size for inserts')
-    parser.add_argument('--manifest', default='C:/Users/krist/Desktop/zotero/learning-corpus/arxiv-manifest.json',
+    parser.add_argument('--manifest', default='Path(__file__).resolve().parent.parent / 'learning-corpus'/arxiv-manifest.json',
                        help='Path to arXiv manifest JSON')
     args = parser.parse_args()
     

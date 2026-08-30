@@ -115,8 +115,8 @@ if __name__ == '__main__':
         text_dir = sys.argv[1]
         output_path = sys.argv[2]
     else:
-        text_dir = 'C:/Users/krist/Desktop/zotero/learning-corpus/.text'
-        output_path = 'C:/Users/krist/Desktop/zotero/learning-corpus/page_precision_math.jsonl'
+        text_dir = 'Path(__file__).resolve().parent.parent / 'learning-corpus' / '.text''
+        output_path = 'Path(__file__).resolve().parent.parent / 'learning-corpus'/page_precision_math.jsonl'
     
     process_all_txts(text_dir, output_path)
     print(f"\nOutput written to: {output_path}")

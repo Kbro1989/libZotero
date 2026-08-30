@@ -2,9 +2,9 @@ from pathlib import Path
 import json, re
 from collections import Counter
 
-corpus_root = Path(r'C:\Users\krist\Desktop\zotero\learning-corpus\.text')
-manifest_path = Path(r'C:\Users\krist\Desktop\zotero\learning-corpus\paper_study_notes.jsonl')
-output_path = Path(r'C:\Users\krist\Desktop\zotero\learning-corpus\kingwen_paper_study_corpus.jsonl')
+corpus_root = Path(r'Path(__file__).resolve().parent.parent / 'learning-corpus' / '.text'')
+manifest_path = Path(r'Path(__file__).resolve().parent.parent / 'learning-corpus'\paper_study_notes.jsonl')
+output_path = Path(r'Path(__file__).resolve().parent.parent / 'learning-corpus'\kingwen_paper_study_corpus.jsonl')
 
 HEXAGRAM_UPGRADE_MAP = {
     1: "training_efficiency",

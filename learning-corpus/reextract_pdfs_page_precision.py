@@ -166,8 +166,8 @@ def reextract_all_pdfs(pdf_dir: str, output_jsonl: str):
 if __name__ == '__main__':
     import sys
     
-    pdf_dir = sys.argv[1] if len(sys.argv) > 1 else 'C:/Users/krist/Desktop/zotero/learning-corpus'
-    output = sys.argv[2] if len(sys.argv) > 2 else 'C:/Users/krist/Desktop/zotero/learning-corpus/pdf_page_math_extraction.jsonl'
+    pdf_dir = sys.argv[1] if len(sys.argv) > 1 else 'Path(__file__).resolve().parent.parent / 'learning-corpus''
+    output = sys.argv[2] if len(sys.argv) > 2 else 'Path(__file__).resolve().parent.parent / 'learning-corpus'/pdf_page_math_extraction.jsonl'
     
     # Find pdf subdirectories
     subdirs = [

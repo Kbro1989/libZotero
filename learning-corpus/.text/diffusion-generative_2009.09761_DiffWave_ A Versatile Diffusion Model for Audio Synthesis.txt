@@ -1,0 +1,62 @@
+Published as a conference paper at ICLR 2021
+
+arXiv:2009.09761v3 [eess.AS] 30 Mar 2021
+
+DIFFWAVE: A VERSATILE DIFFUSION MODEL FOR AUDIO SYNTHESIS
+
+Zhifeng Kong  Computer Science and Engineering, UCSD z4kong@eng.ucsd.edu
+
+Wei Ping NVIDIA wping@nvidia.com
+
+Jiaji Huang, Kexin Zhao Baidu Research {huangjiaji,kexinzhao}@baidu.com
+
+Bryan Catanzaro NVIDIA bcatanzaro@nvidia.com
+
+ABSTRACT
+In this work, we propose DiffWave, a versatile diffusion probabilistic model for conditional and unconditional waveform generation. The model is non-autoregressive, and converts the white noise signal into structured waveform through a Markov chain with a constant number of steps at synthesis. It is efficiently trained by optimizing a variant of variational bound on the data likelihood. DiffWave produces high-fidelity audio in different waveform generation tasks, including neural vocoding conditioned on mel spectrogram, class-conditional generation, and unconditional generation. We demonstrate that DiffWave matches a strong WaveNet vocoder in terms of speech quality (MOS: 4.44 versus 4.43), while synthesizing orders of magnitude faster. In particular, it significantly outperforms autoregressive and GAN-based waveform models in the challenging unconditional generation task in terms of audio quality and sample diversity from various automatic and human evaluations. 1
+1 INTRODUCTION
+Deep generative models have produced high-fidelity raw audio in speech synthesis and music generation. In previous work, likelihood-based models, including autoregressive models (van den Oord et al., 2016; Kalchbrenner et al., 2018; Mehri et al., 2017) and flow-based models (Prenger et al., 2019; Ping et al., 2020; Kim et al., 2019), have predominated in audio synthesis because of the simple training objective and superior ability of modeling the fine details of waveform in real data. There are other waveform models, which often require auxiliary losses for training, such as flow-based models trained by distillation (van den Oord et al., 2018; Ping et al., 2019), variational auto-encoder (VAE) based model (Peng et al., 2020), and generative adversarial network (GAN) based models (Kumar et al., 2019; Bin´kowski et al., 2020; Yamamoto et al., 2020).
+Most of previous waveform models focus on audio synthesis with informative local conditioner (e.g., mel spectrogram or aligned linguistic features), with only a few exceptions for unconditional generation (Mehri et al., 2017; Donahue et al., 2019). It has been noticed that autoregressive models (e.g., WaveNet) tend to generate made-up word-like sounds (van den Oord et al., 2016), or inferior samples (Donahue et al., 2019) under unconditional settings. This is because very long sequences need to be generated (e.g., 16,000 time-steps for one second speech) without any conditional information.
+Diffusion probabilistic models (diffusion models for brevity) are a class of promising generative models, which use a Markov chain to gradually convert a simple distribution (e.g., isotropic Gaussian) into complicated data distribution (Sohl-Dickstein et al., 2015; Goyal et al., 2017; Ho et al., 2020). Although the data likelihood is intractable, diffusion models can be efficiently trained by optimizing the variational lower bound (ELBO). Most recently, a certain parameterization has been shown successful in image synthesis (Ho et al., 2020), which is connected with denoising score matching (Song
+Contributed to the work during an internship at Baidu Research, USA. 1Audio samples are in: https://diffwave-demo.github.io/
+1
+
+Published as a conference paper at ICLR 2021
+
+qdata(x0) q(x1|x0) q(x2|x1)
+
+x0
+
+x1
+
+x2
+
+p(x0|x1) p(x1|x2)
+
+diffusion process
+
+q(xT |xT -1)
+
+······
+
+xT -1
+
+xT
+
+reverse process
+
+p(xT -1|xT ) platent(xT )
+
+Figure 1: The diffusion and reverse process in diffusion probabilistic models. The reverse process gradually converts the white noise signal into speech waveform through a Markov chain p(xt-1|xt).
+& Ermon, 2019). Diffusion models can use a diffusion (noise-adding) process without learnable parameters to obtain the "whitened" latents from training data. Therefore, no additional neural networks are required for training in contrast to other models (e.g., the encoder in VAE (Kingma & Welling, 2014) or the discriminator in GAN (Goodfellow et al., 2014)). This avoids the challenging "posterior collapse" or "mode collapse" issues stemming from the joint training of two networks, and hence is valuable for high-fidelity audio synthesis.
+In this work, we propose DiffWave, a versatile diffusion probabilistic model for raw audio synthesis. DiffWave has several advantages over previous work: i) It is non-autoregressive thus can synthesize high-dimensional waveform in parallel. ii) It is flexible as it does not impose any architectural constraints in contrast to flow-based models, which need to keep the bijection between latents and data (e.g., see more analysis in Ping et al. (2020)). This leads to small-footprint neural vocoders that still generate high-fidelity speech. iii) It uses a single ELBO-based training objective without any auxiliary losses (e.g., spectrogram-based losses) for high-fidelity synthesis. iv) It is a versatile model that produces high-quality audio signals for both conditional and unconditional waveform generation.
+Specifically, we make the following contributions:
+1. DiffWave uses a feed-forward and bidirectional dilated convolution architecture motivated by WaveNet (van den Oord et al., 2016). It matches the strong WaveNet vocoder in terms of speech quality (MOS: 4.44 vs. 4.43), while synthesizing orders of magnitude faster as it only requires a few sequential steps (e.g., 6) for generating very long waveforms.
+2. Our small DiffWave has 2.64M parameters and synthesizes 22.05 kHz high-fidelity speech (MOS: 4.37) more than 5× faster than real-time on a V100 GPU without engineered kernels. Although it is still slower than the state-of-the-art flow-based models (Ping et al., 2020; Prenger et al., 2019), it has much smaller footprint. We expect further speed-up by optimizing its inference mechanism in the future.
+3. DiffWave significantly outperforms WaveGAN (Donahue et al., 2019) and WaveNet in the challenging unconditional and class-conditional waveform generation tasks in terms of audio quality and sample diversity measured by several automatic and human evaluations.
+We organize the rest of the paper as follows. We present the diffusion models in Section 2, and introduce DiffWave architecture in Section 3. Section 4 discusses related work. We report experimental results in Section 5 and conclude the paper in Section 6.
+2 DIFFUSION PROBABILISTIC MODELS
+We define qdata(x0) as the data distribution on RL, where L is the data dimension. Let xt  RL for t = 0, 1, · · · , T be a sequence of variables with the same dimension, where t is the index for diffusion steps. Then, a diffusion model of T steps is composed of two processes: the diffusion process, and the reverse process (Sohl-Dickstein et al., 2015). Both of them are illustrated in Figure 1.
+2
+
+

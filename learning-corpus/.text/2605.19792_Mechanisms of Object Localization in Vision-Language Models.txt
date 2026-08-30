@@ -1,0 +1,943 @@
+                                        Mechanisms of Object Localization in Vision­Language Models
+
+                                                  Timothy Schaumlo¨ffel1,2 Martina G. Vilas1 Gemma Roig1,2
+
+                                                         1Goethe University Frankfurt, Germany 2The Hessian Center for AI, Germany
+                                                                   https://github.com/t9s9/vlm-loc-mechanisms
+
+arXiv:2605.19792v1 [cs.CV] 19 May 2026                          Abstract                                 underlying classification have been studied [21, 38], much
+                                                                                                         less is known about localization and detection. Closing this
+                                        Visually-grounded language models (VLMs) are highly ef-          gap is important because most VLMs inherit visual features
+                                        fective in linking visual and textual information, yet they of-  from CLIP [25], which was trained with global image-text
+                                        ten struggle with basic classification and localization tasks.   supervision and struggles with the pixel-level precision
+                                        While classification mechanisms have been studied more ex-       required for localization and detection [3, 27, 39]. Yet
+                                        tensively, the processes that support object localization re-    VLMs can still answer queries that require identifying and
+                                        main poorly understood. In this work, we investigate two         locating objects, suggesting that these models build spatial
+                                        representative families, LLaVA-1.5 and InternVL-3.5, using       structure from weakly grounded visual representations.
+                                        a suite of mechanistic interpretability tools, including token   This raises the question of how the mechanisms enabling
+                                        ablations, attention knockout, and causal mediation analy-       localization and detection emerge in VLMs.
+                                        sis. We find that localization is driven by a containerization
+                                        mechanism in which object-aligned tokens define the spa-         In this paper, we present an initial mechanistic study
+                                        tial extent of the object, while the semantic arrangement        of object localization in VLMs. We combine token-level
+                                        of tokens within those boundaries is largely irrelevant to       ablations, controlled perturbations of visual representa-
+                                        the predicted box. Only a very small set of attention heads      tions, positional decoding, attention knockout, and causal
+                                        mediates the causal effect for both classification and local-    mediation analysis to probe how information relevant for
+                                        ization, concentrating in early­mid layers for LLaVA and         localization is encoded and transformed inside the model.
+                                        mid­late layers for InternVL. The two tasks share some           Our main findings are:
+                                        early processing but ultimately depend on largely distinct
+                                        specialized heads. Overall, we provide the first layer- and      1. Grounding through containerization. Localization in-
+                                        head-level account of localization in VLMs, revealing nar-          formation is directly encoded in the visual tokens. The
+                                        row computational pathways that can guide future model              model groups these tokens into containers that define
+                                        design and grounding objectives.                                    object boundaries, largely independent of the spatial ar-
+                                                                                                            rangement of semantics within the object boundaries.
+                                        1. Introduction
+                                                                                                         2. Multi-view integration of spatial and semantic cues.
+                                        Visually-grounded Language Models (VLMs) combine a                  In architectures with global and local views, the global
+                                        pre-trained vision encoder with a large language model              view carries the dominant spatial signal for localization,
+                                        (LLM), typically refined through vision-language instruc-           while local high-resolution crops primarily refine classi-
+                                        tion tuning. The visual encoder extracts grid-level features        fication, especially for small objects. The two views pro-
+                                        from an image, a multimodal adapter maps them into the              vide complementary, rather than redundant, evidence.
+                                        language embedding space, and the resulting tokens are
+                                        processed jointly with text by the LLM. This architecture        3. Implicit spatial layout learning. The LLM infers the
+                                        allows VLMs to link visual and textual inputs and has en-           two-dimensional structure of the image from the one-
+                                        abled strong performance on tasks such as visual question           dimensional token sequence: residual positional signals
+                                        answering, captioning, and open-ended reasoning about im-           at the multimodal projection and strong corner anchors
+                                        ages [1, 8, 10, 19].                                                are sufficient for the model to reconstruct approximate
+                                        Despite these advances, VLMs continue to struggle with              row boundaries and a grid-like layout.
+                                        core vision tasks. They often misclassify or fail to accu-
+                                        rately localize objects [31, 38]. While the mechanisms           4. Sparse, task-critical attention heads. A very small
+                                                                                                            number of attention heads mediate the causal effect for
+                                                                                                            both classification and localization. In LLaVA models,
+                                                                                                            these heads emerge predominantly in the early­mid lay-
+                                                                                                            ers, whereas in InternVL they appear in the mid­late
+   layers. Despite partial overlap in early processing, the    2.2. Dataset
+   dominant heads for the two tasks are largely disjoint, yet
+   localization causally depends on classification-critical    To ensure that our analyses isolate the visual evidence used
+   heads, revealing a sequential mechanism in which object     by VLMs, we construct a carefully curated dataset derived
+   identification precedes spatial grounding.                  from the COCO validation split [18]. This requires correct-
+                                                               ing annotation inaccuracies and filtering images to remove
+2. Method                                                      ambiguous or low-quality cases prior to evaluation.
+
+We start by introducing the model architectures, the dataset,  Base Dataset and Filtering We use the COCO valida-
+and task definitions used throughout this work.                tion split and ensure that none of the evaluated models
+                                                               were trained on these samples. Because the split contains
+2.1. Visually Grounded Language Models                         multiple annotation issues (e.g., missing objects and coarse
+                                                               masks), we first apply the semi-automatic correction proce-
+We study vision­language models that follow the ViT            dure of Singh et al. [28]. We then apply a small set of quality
+MLP  LLM paradigm, where a visual encoder extracts             filters to remove extremely small or dominant objects, low-
+patch features, an MLP projects them into the language         resolution images, and ambiguous cases with multiple valid
+space, and a large language model (LLM) generates the out-     targets. A detailed description of the filtering steps is pro-
+put. We choose two representative VLMs that instantiate        vided in Appendix 6.1. After filtering, the dataset contains
+this paradigm at different levels of architectural complex-    6.403 object annotations across 3.560 images.
+ity: LLaVA-1.5 [19], a simple and interpretable baseline,
+and InternVL-3.5 [33], a state-of-the-art variant incorporat-  Object-Removed Control Set Contextual cues can
+ing token compression and multi-view processing.               lead to hallucinated detections, where models predict the
+                                                               presence of an object solely from background context. To
+LLaVA-1.5 employs a CLIP ViT-L/14 [25] visual back-            control for this effect, we construct an auxiliary object-
+bone and Vicuna LLM [7] connected by a two-layer MLP           removed variant of the dataset. For each image, the target
+adapter. Images are padded to square shape and resized to      object is removed and the missing region is inpainted using
+3362 px. The backbone outputs 24 × 24 patch embeddings,        LaMa [30], which reconstructs background structure with
+which are directly mapped into the LLM embedding space         high realism. We retain only those image pairs for which a
+without spatial aggregation. This one-to-one token mapping     model correctly identifies the object in the original image
+makes LLaVA a simple, interpretable baseline for analyzing     but fails to do so in the inpainted counterpart. This ensures
+visual­linguistic alignment. We analyze the two available      that subsequent analyses rely on real object evidence rather
+versions: LLaVA-7B and LLaVA-13B, which use Vicuna-            than contextual correlations. Examples of the inpainted
+7B/13B [7] as the language backbone, respectively.             dataset are provided in Appendix Figure 6.
+
+InternVL-3.5 uses a custom, contrastively pre-trained          Because this procedure results in model-dependent subsets,
+InternViT-300M backbone [6] and a Qwen3 LLM [34],              we take the intersection across all three models, yielding
+linked by a two-layer MLP adapter. It introduces two key       2.248 object annotations across 1.720 images as our final
+architectural extensions that distinguish it from LLaVA:       probing subset.
+(i) Pixel Shuffle: Each 2 × 2 block of visual tokens from
+the backbone is merged into a single token before pro-         2.3. Task
+jection into the text space using a learned compression.
+This reduces the number of tokens by a factor of four          We evaluate models on two complementary visual tasks:
+while preserving local spatial structure. (ii) Dynamic High-   Classifying object presence in the image and localizing its
+Resolution Processing: Input images are split into a variable  position by providing the bounding box coordinates. For
+number of 4482 px tiles that are processed independently by    each task, we design a different prompt for the same image.
+the visual backbone. The number of tiles is chosen dynami-
+cally based on the image's aspect ratio and size, enabling     Localization. The model is prompted to predict the
+more detailed processing. In parallel, a globally resized      bounding box coordinates of a target object. The pre-
+4482 px thumbnail provides coarse context. We refer to         dicted bounding boxes are parsed and compared against
+the high-resolution tiles as local views and the thumbnail     ground-truth annotations using the intersection-over-union
+as the global view. All local and global tokens are concate-   (IoU) metric. Performance is measured as the success rate,
+nated and passed to the LLM. After compression, each crop      defined as the proportion of samples where IoU exceeds
+produces 16 × 16 visual tokens. In our experiments, we         thresholds of 0.5, 0.7, and 0.9. The final localization score
+cap the number of local tiles at six to reduce computational   is obtained by averaging over these three thresholds.
+cost. We study InternVL-3.5 8B, which uses a Qwen3-8B
+language model.                                                Classification. The model is prompted to list all objects
+                                                               present in the image, restricted to COCO's category set.
+A prediction is counted as correct if the ground-truth         performance below 10% accuracy, while classification still
+class name appears anywhere in the model's response.           succeeds in 20­30% of cases. Positive padding around the
+Performance is reported as the proportion of correctly         object further amplifies the effect, while maintaining the
+classified instances. We adopt a list-based formulation over   original boundaries through negative padding has minimal
+a binary alternative to reduce object hallucinations.          influence on performance. These findings indicate that the
+                                                               essential information for both tasks resides within the object
+For more details, we refer to Appendix Section 6.2.            boundaries.
+
+3. Experiments                                                 3.1.1. Object Containerization
+
+3.1. Visual Information Ablation                               Next, we investigate the mechanisms by which the model
+                                                               encapsulates objects to generate bounding boxes. To test
+We conduct an ablation study to investigate the contribution   this, we artificially expand the ground-truth object mask
+of visual input tokens to the performance of the VLMs on       by adding p layers of surrounding tokens. Concretely,
+the classification and localization tasks.                     we randomly duplicate tokens from within the original
+                                                               object and copy them into the adjacent padding region.
+Method. We ablate visual information at the LLM in-            This procedure increases the spatial extent of the object
+put, i.e., after the multimodal projection but before posi-    while disrupting its structure: the added area is filled with
+tional encodings and autoregressive processing. To remove      misplaced but object-related features (e.g., eye-related
+image-specific content while preserving domain-consistent      tokens may appear below a mouth in a face). We then
+embedding statistics, we replace the original visual token     measure whether the predicted bounding box expands
+embeddings with a global average visual embedding com-         accordingly across ten random sampling seeds and report
+puted once over the ImageNet [11] validation set.              the outcome in Figure 1.
+We evaluate four token selection strategies for ablation:
+                                                                  LLaVa-7b                     InternVL3.5-8B               70
+   i) Object Tokens: We project the object mask onto the
+      image token grid and include all tokens that overlap     0 35.3±0.0 18.1±0.0 6.6±0.0  0 72.6±0.0 16.1±0.0 7.8±0.0     60
+      with it by at least one pixel. To probe for boundary     Extended Padding
+      sensitivity and context dependence, we shrink or dilate                                      Extended Padding         50
+      the mask by 1 or 2 token padding. For InternVL mod-                                                                                     Accuracy (%)
+      els, this procedure is applied to both the local high-   +1 24.6±0.2 44.0±0.4 24.8±0.3 +1 30.2±0.3 45.0±0.4 25.2±0.4  40
+      resolution and the global thumbnail views of the ob-
+      ject. A visualization and details of the masking proce-                                                                                   30
+      dure are provided in the appendix Figure 7.              +2 11.3±0.2 45.3±0.2 45.9±0.3 +2 15.9±0.4 34.5±0.4 45.9±0.6
+
+  ii) Register Tokens: Global image features are hypothe-                                                                                       20
+      sized to be encoded in register tokens [9]. We there-
+      fore select those tokens whose embedding norms ex-       0  +1        +2              0  +1              +2           10
+      ceed two standard deviations above the mean.             Scaled Ground Truth          Scaled Ground Truth
+
+ iii) Integrated Gradients: We identify the image tokens       Figure 1. Alignment between predicted and scaled ground-truth
+      most relevant to the model's decision by computing       bounding boxes under object padding. Each cell shows the mean
+      Integrated Gradients [29] with respect to the correct    accuracy between predictions obtained with a given padding level
+      class logits (for classification) or bounding box coor-  and ground-truth boxes scaled by different amounts. Diagonal en-
+      dinates (for localization). Tokens are ranked by their   tries correspond to matching padding and scaling levels, indicating
+      attribution magnitude, and the top-k highest-gradient    how well the predicted box size adapts to the artificially enlarged
+      tokens are selected as the most influential ones.        object. Standard deviations are annotated. LLaVA-13B results are
+                                                               shown in the appendix Figure 8.
+ iv) Random Tokens: As a control, we randomly select k
+      image tokens, repeat the process with three different    Across all architectures, the predicted bounding boxes
+      seeds, and report the mean and standard deviation.       scale consistently with the artificially enlarged objects, as
+                                                               reflected by the strong diagonal alignment: predictions
+Results. As Table 1 shows, across all three models, both       from padding = 1 inputs achieve the highest accuracy
+localization and classification tasks rely on the information  with the +1-scaled ground-truth boxes, while padding =
+encoded in object tokens. Ablating these tokens results in     2 inputs best align with the +2-scaled boxes. The results
+a significantly larger performance decline compared to re-     indicate that localization depends mainly on the presence
+moving an equal number of tokens either randomly or via        of object-related tokens within the spatial region rather
+gradient-based selection. Localization is more affected than   than on their semantically coherent arrangement. We show
+classification: removing object tokens reduces localization    qualitative examples in appendix Figure 9.
+
+                                                               To further support this claim, we shuffle the image tokens
+Table 1. Performance after token ablation. The baseline corresponds to the model without any token removal and serves as a reference
+for ablations targeting the object mask (with varying padding), highest-gradient tokens, random tokens, and register tokens. We report
+both absolute accuracy and the corresponding drop relative to the baseline. The average proportion of removed tokens is indicated as a
+percentage of all image tokens; for InternVL, if applicable, we report the number of removed tokens for the (global, local) views separately.
+Similar amounts of removed tokens are highlighted in bold. Standard deviations across random seeds are provided in appendix Table 4.
+
+Models:              LLaVA 7B                                  LLaVA 13B                   InternVL3.5 8B
+Ablation
+Strategy     Token   Loc. (%)     Cls. (%)   Loc. (%)                 Cls. (%)   Token
+Baseline      (%)                                                                 (%) Loc. (%) Cls. (%)
+- 2 Padding            35.34       58.10       46.98                   65.30
+- 1 Padding       0                                                                 0 72.64                 83.30
+Object               34.71 0.6   57.78 0.3   47.09 0.1               65.21 0.1
++ 1 Padding       1  31.73 3.6   55.29 2.8   43.74 3.2               65.48 0.2      (1,2)  72.73 0.1        83.41 0.1
++ 2 Padding       3  5.92 29.4   19.44 38.7  7.37 39.6               31.41 33.9     (4,5)  72.35 0.3        81.85 1.5
+                  8  0.73 34.6   11.25 46.9  0.59 46.4               15.12 50.2  (13,10)   11.27 61.4       33.19 50.1
+Integrated       14  0.34 35.0   10.59 47.5  0.28 46.7               12.54 52.8  (23,14)   3.77 68.9        23.71 59.6
+Gradients        21                                                              (34,18)   2.02 70.6        20.73 62.6
+                     31.54 3.8   52.67 5.4   38.80 8.2               60.36 4.9
+Random            1  22.14 13.2  48.40 9.7   23.50 23.5              54.72 10.6      1 62.46 10.2 81.49 1.8
+(3 seeds)         4  15.84 19.5  43.95 14.2  13.09 33.9              49.24 16.1      4 43.64 29.0 77.49 5.8
+                  8  8.75 26.6   37.28 20.8  5.66 41.3               44.80 20.5      8 30.13 42.5 74.69 8.6
+Register         16  2.79 32.6   29.05 29.1  1.39 45.6               35.72 29.6     16 16.21 56.4 71.00 12.3
+                 32  0.86 34.5   32.25 25.9  0.37 46.6               28.65 36.6     32 6.44 66.2 64.86 18.4
+                 48                                                                 48 3.23 69.4 59.52 23.8
+                     35.52 0.2   57.98 0.1   46.74 0.2               64.86 0.4
+                  1  35.57 0.2   57.35 0.8   45.99 1.0               64.68 0.6       1 72.32 0.3            83.44 0.1
+                  4  35.09 0.2   56.58 1.5   45.25 1.7               63.89 1.4       4 72.30 0.3            83.33 0.0
+                  8  33.71 1.6   56.39 1.7   43.76 3.2               63.92 1.4       8 71.71 0.9            83.10 0.2
+                 16  30.43 4.9   55.40 2.7   39.88 7.1               62.54 2.8      16 70.46 2.2            83.02 0.3
+                 32  25.65 9.7   54.80 3.3   34.44 12.5              61.34 4.0      32 66.88 5.8            82.62 0.7
+                 48                                                                 48 59.03 13.6           81.69 1.6
+                     35.07 0.3   59.48 1.4   46.53 0.5               64.95 0.4
+                  1                                                              (4,4) 72.64 0.0 83.41 0.1
+
+within the object mask directly at the LLM input. As shown     Table 2. Performance under input token shuffling perturbations.
+in Table 2, localization performance drops only slightly       We report localization and classification accuracy for two condi-
+under this perturbation compared to a full shuffle of all      tions: (i) shuffling all image tokens, and (ii) shuffling image tokens
+image tokens. Notably, object classification is unaffected     within the object mask. Results are averaged across three seeds.
+by either shuffling procedure, confirming that the observed
+effect is specific to localization.                            Mode       LLaVA 7B         LLaVA 13B InternVL3.5 8B
+
+Together, these findings suggest that the model employs                             Localization
+a form of containerization, in which tokens collectively
+define the spatial extent of an object, largely independent    Baseline   35.34            46.98            72.64
+of their internal semantic structure.
+                                                               Full       1.90 ± 0.10 33.4 0.30 ± 0.00 46.7 4.70 ± 0.20 67.9
+3.1.2. Contribution of Global and Local Views
+                                                               Object 35.30 ± 0.20 0.0 45.20 ± 0.20 1.8 37.70 ± 0.40 34.9
+To understand how the InternVL model distributes semantic
+and spatial information across its two visual pathways, we                          Classification
+ablate the object-aligned tokens in either the global resized
+view or the fine-grained local view. Table 3 summarizes the    Baseline   58.10            65.30                   83.30
+resulting change in accuracy for localization and classifica-                                               81.19 ± 0.39 2.1
+tion. Removing object tokens from only one view causes a       Full      62.42 ± 0.62 4.3 67.04 ± 0.33 1.7  83.15 ± 0.40 0.1
+moderate drop, whereas ablating both views simultaneously
+leads to a substantially larger decline (see Tab. 1) for both  Object 58.44 ± 0.39 0.3 65.21 ± 0.25 0.1
+tasks. This indicates that the model integrates complemen-
+tary information from the global and local pathways.           The effect is particularly pronounced for localization: re-
+                                                               moving the global object tokens reduces accuracy by
+                                                               -36.4%, while local ablation yields a smaller decline of
+                                                               -9.7%. Classification shows the same trend but with re-
+                                                               duced magnitude (-9.5% vs. -6.6%). These results iden-
+                                                               tify the global pathway as the primary carrier of spatial
+                                                               grounding, with local high-resolution cues providing ad-
+                                                               ditional semantic detail. Padding amplifies this effect. In
+single-view ablations, increasing the masked region leads to     cluding the multimodal projection, to predict the position of
+only minor additional degradation because the intact view        every image token in the input grid. We predict each spatial
+still provides sufficient object evidence. In two-view ab-       axis independently. Classifiers are trained for 10 epochs on
+lations, however, padding removes the remaining semantic         50,000 ImageNet images and evaluated on 10,000 images.
+and spatial cues in both pathways, resulting in much larger
+drops. This dissociation indicates that each view can com-       Results. In Figure 2, we observe that positional informa-
+pensate for moderate damage to the other, but neither can        tion in both visual backbones is decodable from early layers
+compensate when both are impaired, demonstrating strong          but largely vanishes by the final layers, consistent with prior
+synergy rather than redundancy between the global and lo-        findings that contrastively trained ViTs trade spatial preci-
+cal representations.                                             sion for semantic abstraction over depth [14]. In contrast, in
+                                                                 the LLM, positional identifiability is initially low. However,
+Table 3. Extended ablation experiment for separate (local and    it increases rapidly and peaks around layer 12 for LLaVA-
+global) views of the InternVL architecture.                      7B, layer 13 for LLaVA-13B and layer 7 for InternVL3.5-
+                                                                 8B. The multimodal projection retains strong signals for the
+              Strategy Token (%) Loc. (%) Cls. (%)               four image corners (see app. Fig. 11), which appear suf-
+                                                                 ficient for the LLM to infer approximate row boundaries
+              Baseline     0   72.64      83.30                  ("line breaks") across the token sequence. Tokens aligned
+                                                                 with these inferred line breaks are predicted with higher
+Global Local  - 1 Padding  5   72.41 0.2  82.52 0.8              probability than other positions (Fig. 2, right), suggesting
+                               62.93 9.7  76.65 6.6              that the model uses them as structural anchors when recon-
+              Object       11  63.20 9.4  77.45 5.9              structing spatial layouts.
+
+              + 1 Padding 15                                     3.3. Localizing Task Processing
+
+              - 1 Padding  5   72.58 0.1 83.14 0.2               Next, we investigate the location of task-specific processing
+                                                                 in the language model. Specifically, we examine whether
+              Object       14  36.20 36.4 73.80 9.5              classification and localization rely on shared or distinct
+                                                                 components by progressively narrowing the analysis from
+              + 1 Padding  24  25.86 46.8 72.06 11.2             layer groups to individual attention heads.
+
+We complement these findings as shown in appendix                3.3.1. Attention Knockout
+Figure 10 by breaking down the performance drop by
+object size. For single-view ablations, the degradation          Method. Our next experiments aim to identify where in
+decreases systematically with object size. Small objects are     the network the visual information required for the task is
+highly sensitive to the removal of either view, especially       extracted and processed. We apply the attention knock-
+for localization (global: -64.8%; local: -54.3%). Medium         out technique [13, 21], which blocks attention and thereby
+objects show reduced but still substantial dependency.           prevents communication between tokens. Unlike [21], we
+Large objects are comparatively robust: global removal           eliminate attentions from all tokens following the image to-
+still harms localization (-26.1 %), whereas local removal        kens to the object tokens, effectively removing any infor-
+can even slightly improve performance (e.g., +6.5 %),            mation extracted from the object tokens in those layers. We
+suggesting redundancy or noise in fine-detail tokens for         combine layers in groups of four and block all attention
+large objects.                                                   heads within each group, as well as across all layers, as
+                                                                 a global baseline. We evaluate the resulting performance
+In summary, we conclude that the global view sup-                drop on classification and localization tasks using our fil-
+plies the essential spatial signal for localization, while the   tered COCO subset.
+local view primarily supports the classification of small ob-
+jects. The two pathways therefore provide complementary          Results. Our results are shown in Figure 3. For the
+evidence whose integration enables robust semantic and           LLaVA models, blocking attention to the object signifi-
+spatial reasoning. These insights suggest that the number of     cantly decreases performance in the early to mid layers of
+crops could be adapted dynamically to the task, potentially      the model, while perturbing attention flow in later layers
+allowing for more efficient model configurations.                leaves performance largely unaffected. In contrast, for In-
+                                                                 ternVL, the strongest decline occurs in the middle to later
+3.2. Position Encoding                                           layers.
+                                                                 Across all models, both classification and localization rely
+Before examining how object information propagates               on early shared layers, after which localization depends on
+through the network, we first assess how much of the spa-
+tial structure needed for localization is preserved across the
+model's layers.
+
+Method. To evaluate how positional information remains
+identifiable throughout the model's processing hierarchy,
+we train a separate linear classifier for each model layer, in-
+          1.0                  InternVL3.5-8B     LLaVA-7B          LLaVA-13B 1.0  X-Axis  Y-Axis
+
+          0.8                            O                          0.8
+
+Accuracy  0.6                                  O
+
+                                                                    0.6
+
+          0.4                                  O
+
+          0.2                                                       0.4
+
+          0.0  ViT Backbone                    LLM Decoder          0.2
+
+               0 4 8 12 16 20 P0 4 8 12 16 20 24 28 32 36                          0.00 0.25 0.50 0.75 1.00
+
+                                              Layer                                           Rel. Position
+
+Figure 2. Positional decoding results. Left: average position accuracy per layer for visual backbone (0-23), the multimodal projection
+(P) and three different language models (0-39). The maximum value per language model is marked with a red circle. Right: per-position
+accuracy at maximum layer of LLM, showing higher accuracy at the image corners.
+
+          0.6                  LLaVA-7b                             those that retain strong positional information (see Sec. 3.2).
+                                                                    Compared to layer-wise knockouts (app. Fig. 12 right), ab-
+Accuracy  0.4                                                       lating groups of layers amplifies the effect, particularly for
+                                                                    classification, as further shown in Figure 12 (left), where we
+          0.2                                                       group six consecutive layers. This suggests that the model
+                                                                    accumulates object-related information across several lay-
+          0.0                                                       ers rather than relying on layer-specific mechanisms. The
+               0-3 4-7 8-11 12-15 16-19 20-23 24-27 28-31 all       following section builds on these findings by identifying
+                                     Layer                          task-specific heads through causal mediation analysis.
+
+                               InternVL3.5-8B                       3.3.2. Causal Mediation Analysis
+
+          0.8                                                       In the previous section, we presented evidence that the
+                                                                    mechanisms underlying localization and classification are
+Accuracy  0.6                                                       concentrated within a narrow region of the language
+                                                                    model's processing pipeline. Using causal mediation anal-
+          0.4                                                       ysis (CMA) [20, 32, 35], we now aim to pinpoint in which
+                                                                    model components these mechanisms reside. CMA enables
+          0.2                                                       us to estimate the causal contribution of an embedding at a
+                                                                    specific computational block within the model.
+          0.0 0-3 4-7 8-11 12-15 16-19 20-23 24-27 28-31 32-35 all
+                                     Layer                          Method. We apply CMA using activation patching to
+                                                                    identify which attention heads causally contribute to solv-
+               Classification  Baseline        Padding = 0          ing the visual task. For each example, we construct two
+                                                                    versions of the same image: a source image, where the rel-
+               Localization                    Padding = 1          evant object is present, and a base image, where the object
+                                                                    has been removed using a diffusion-based inpainting model
+Figure 3. Performance after attention knockout. We block atten-     (see Sec. 2.2). We use 50 images from this curated subset.
+tion from image tokens to object tokens across grouped layers. The  Separately for each attention head, we extract the hidden
+curves show classification and localization accuracy and compares   activations from the source run and patch them into the for-
+to accuracy of the unmodified model. Additional results can be      ward pass of the base run, yielding the counterfactual output
+found in appendix Section 9.                                        y. As in our attention-blocking experiments (Sec. 3.3.1),
+                                                                    we patch all activations associated with the prompt tokens.
+additional task-specific processing. This pattern suggests a        An overview of the setup is shown in Figure 13.
+two-step processing mechanism: the model first identifies           All outputs are evaluated under teacher-forcing using token-
+the object, then localizes it. Moreover, for the LLaVA mod-
+els, the layers with the largest localization decline align with
+level perplexity. Since fixed template tokens (e.g., brack-                                              across both tasks; even when expanding to the top-50
+ets in a bounding-box answer) are predicted with near-                                                   heads, the overlap remains limited: 20 for LLaVA-7B,
+deterministic probability and would artificially dominate                                                15 for LLaVA-13B, and 18 for InternVL. This pattern
+perplexity, we mask these tokens out when computing the                                                  indicates that while some early computations are reused,
+score. Let Pbase, Psrc, and Ppatched denote the perplexity of                                            the dominant mediators of localization and classification
+the base, source, and patched runs, respectively. We quan-                                               are largely distinct.
+tify the causal contribution of a component using the Medi-                                              Finally, we observe a substantial number of negative
+ation Fraction (MF):                                                                                     MF values, especially in InternVL, suggesting that cer-
+                                                                                                         tain activations from the source image are incompatible
+  \text {MF} = \frac {P_{\text {base}  - P_{\text {patched} }{P_{\text {base}  - P_{\text {src} }.  (1)  with those of the base image. In these cases, patching
+                                                                                                         increases perplexity, indicating that these heads encode
+MF measures how much of the performance gap between                                                      counter-evidence or contextual signals that conflict with the
+base and source is closed by the patched component: an MF                                                ground-truth output.
+close to 1 indicates that the patched head fully mediates the
+task-relevant information; MF  0 implies no contribution;                                                Overall, these results reveal that VLMs implement vi-
+and MF < 0 indicates misleading or interfering effects.                                                  sual reasoning through highly selective, low-redundancy
+For classification, we use the binary query (see Sec. 6.2).                                              pathways: only a handful of attention heads mediate
+The list formulation generates object names in an arbitrary                                              nearly the entire causal effect, and different tasks rely on
+order, which spreads probability mass across many tokens.                                                different subsets of these components, reflecting functional
+This leads to per-class perplexity differences that are too                                              specialization within the model's internal computation.
+noisy for reliable mediation estimates. In contrast, the bi-
+nary query produces a single decisive token, which makes                                                             LLaVa-7b                       LLaVa-7b
+it well suited for activation patching. Although it shows a                                                          Localization                   Classification
+higher hallucination rate in open evaluation, this is not a                                                     0                              0
+problem in our setting. The paired source­base design en-
+sures that changes in perplexity reflect causal effects.                                                        4                              4
+
+Results. Figure 4 reports the Mediation Fraction (MF)                                                           8                              8
+for every attention head across all layers. Consistent with
+the attention-blocking experiment (Sec. 3.3.1), the causal                                               Layer  12                      Layer  12
+mediation analysis locates the core processing region in the
+early­mid layers for LLaVA and in the mid­late layers for                                                       16                             16
+InternVL. For LLaVA, most non-zero MF values cluster
+around layers 11­16 for both localization and classification,                                                   20                             20
+whereas for InternVL the dominant heads appear in layers
+16­22. Outside these ranges, nearly all heads exhibit MF                                                        24                             24
+scores close to zero, indicating that the vast majority of
+attention heads are not causally involved in the task.                                                          28                             28
+
+In addition, the distribution of MF scores across heads                                                             0 6 12 18 24 30                0 6 12 18 24 30
+is highly sparse for both tasks. Only a small number of                                                                        Head                           Head
+attention heads exhibit large mediation values, indicating
+that the bulk of task-relevant information is carried by a                                                           InternVL3.5-8B                 InternVL3.5-8B
+compact set of specialized heads. The vast majority of                                                               Localization                   Classification
+heads contribute negligibly, with MF values near zero,                                                          0                              0
+suggesting that they neither facilitate nor interfere with
+the task. The two tasks differ in how this information is                                                       4                              4
+distributed: localization relies on a more concentrated sub-
+set of heads, whereas classification engages a broader set                                                      8                              8
+of heads dispersed across earlier and intermediate layers.
+Despite these differences, we do observe a limited number                                                       12                             12
+of shared heads. Among the top-10 heads ranked by MF,
+only two heads in LLaVA and one in InternVL are shared                                                   Layer  16                      Layer  16
+
+                                                                                                                20                             20
+
+                                                                                                                24                             24
+
+                                                                                                                28                             28
+
+                                                                                                                32                             32
+
+                                                                                                                    0 6 12 18 24 30                0 6 12 18 24 30
+                                                                                                                               Head                           Head
+
+                                                                                                                0.4  0.2           0.0         0.2  0.4             0.6
+                                                                                                                               Mediation Fraction
+
+                                                                                                         Figure 4. Mediation Fraction (MF) scores for every attention head
+                                                                                                         across all layers, shown separately for the localization and classifi-
+                                                                                                         cation tasks. For LLaVA-13B results, refer to appendix Figure 14.
+
+                                                                                                         3.3.3. Head Ablation Analysis
+
+                                                                                                         CMA reveals a small number of attention heads with high
+                                                                                                         MF scores per task. To determine whether these heads are
+                                                                                                         necessary rather than merely correlated with performance,
+               LLaVA 7b                           InternVL3.5 8B     tions across layers and modalities to mitigate hallucinations,
+                                                                     while Yu and Lee [36] uses layer-wise probing to reveal
+          0.3  AUC=0.02 0.6                       AUC=0.04           a stage-wise processing hierarchy in VLMs. We build on
+                                                                     these approaches but focus specifically on where and how
+Accuracy  0.2  AUC=0.09 0.4                       AUC=0.15           localization information is extracted and transformed, using
+                                                                     causal mediation analysis at the attention-head level.
+          0.1  AUC=0.25 0.2                       AUC=0.41           A second thread of research documents systematic fail-
+                                                                     ure modes across a range of VLM capabilities, including
+          0.0                     0.0                                single-object classification [38], multi-object classification
+               0.0 0.1 0.2 0.3 0.4 0.0 0.1 0.2 0.3 0.4               [4], counting [26], visual search [4], and spatial reasoning
+               Percentage pruned                  Percentage pruned  [5]. These studies reveal significant gaps in how VLMs
+                                                                     ground semantic and spatial information, but they do not
+               Loc. Important     Cls. Important  Unimportant        examine object localization or identify where in the model
+                                                                     spatial representations emerge.
+Figure 5. Localization accuracy under cumulative head ablation.      In parallel, several recent works aim to improve ground-
+Attention heads are ranked by their mean MF and progressively        ing and localization capabilities in VLMs through architec-
+removed. Normalized AUC scores enable method comparison.             tural changes, additional training strategies, or specialized
+                                                                     datasets [1, 10, 23, 24, 37]. While these models demon-
+we progressively removed them in a cumulative ablation               strate enhanced performance on grounding benchmarks,
+study.                                                               their internal computational mechanisms remain largely un-
+                                                                     explored.
+Method. For each task, we rank all attention heads ac-
+cording to their mean MF score and divide them into two              5. Discussion and Limitations
+groups: task-critical heads (those with the highest MF
+scores) and low-importance heads (near zero MF heads).               Our findings shed light on the fundamental mechanisms
+We then perform cumulative ablations on both groups by               through which VLMs capture and encode spatial structure.
+successively removing a proportion of the total number of            Our experiments reveal that positional information is recon-
+heads and measuring the resulting localization accuracy.             structed in the LLM, rather than relying on positional infor-
+Ablation is implemented by setting the output of the se-             mation encoded in the visual backbone. Localization de-
+lected heads to zero during the forward pass. Three set-             pends on a containerization process in which object tokens
+tings are evaluated: ablation of localization-critical heads,        collectively define spatial boundaries, while the internal
+ablation of classification-critical heads and ablation of low-       spatial or semantic arrangement of these tokens plays only a
+importance heads as a control baseline.                              minor role. Moreover, causal mediation analysis shows that
+                                                                     only a very small number of attention heads are responsible
+Results. As shown in Figure 5, ablating task-critical                for both tasks, emerging in the early­mid layers for LLaVA
+heads leads to a substantially larger drop in localization ac-       and in the mid­late layers for InternVL, with classification
+curacy than removing an equal number of low-importance               and localization relying on largely distinct sets of special-
+heads. This confirms that the CMA ranking identifies com-            ized heads. Cumulative head ablation further reveals that lo-
+ponents that are causally necessary for the task rather than         calization causally depends on classification-critical heads,
+simply being correlated with performance. In contrast, re-           providing evidence consistent with a sequential processing
+moving unimportant heads results in only a slight decline            mechanism in which the model first identifies the object and
+in performance, even when a large fraction of them is re-            subsequently determines its spatial extent. These results re-
+moved, indicating that task-relevant information is concen-          fine our understanding of VLMs and open directions, in-
+trated in a small subset of attention heads. Despite the lim-        cluding targeted head fine-tuning or grounding-aware atten-
+ited overlap between classification-critical and localization-       tion supervision.
+critical heads, ablating classification-critical heads still         Our study uses a filtered COCO subset where images con-
+causes a strong degradation in localization accuracy. This           tain multiple objects but only one per queried category. This
+indicates that localization depends on intermediate object-          allows us to isolate foundational spatial mechanisms, and
+identification representations rather than operating inde-           the same approach can be naturally extended to more com-
+pendently. Together with the attention-knockout results              plex images and tasks. We apply CMA to attention heads
+(Sec. 9), these findings provide causal evidence for a se-           and analyze fixed models, leaving other components and
+quential processing mechanism in which the model first               training dynamics unexplored. Extending this framework
+identifies the object and subsequently determines its spatial        to segmentation, relational grounding, video, and additional
+extent using a smaller set of specialized heads.                     architectures is a promising direction for future work.
+
+4. Related Work
+
+Prior mechanistic interpretability studies of VLMs primar-
+ily examine high-level reasoning, VQA behavior, or halluci-
+nations [2, 15, 16, 22]. Li et al. [17] traces object representa-
+Acknowledgments                                                      [11] Jia Deng, Wei Dong, Richard Socher, et al. Imagenet: A
+                                                                           large-scale hierarchical image database. In 2009 IEEE con-
+This work was funded by the Deutsche Forschungsge-                         ference on computer vision and pattern recognition, pages
+meinschaft: DFG project 5368 ("Abstract REpresenta-                        248­255. Ieee, 2009. 3
+tions in Neural Architectures (ARENA)") and DFG project
+539642788, RO 6458/5-1 ("Learning from the Environ-                  [12] Mark Everingham, Luc Gool, Christopher K. Williams, John
+ment Through the Eyes of Children (LEECHI)"). We grate-                    Winn, and Andrew Zisserman. The pascal visual object
+fully acknowledge support from The Hessian Center For                      classes (voc) challenge. Int. J. Comput. Vision, 88(2):
+Artificial Intelligence and Goethe-University (NHR Cen-                    303­338, 2010. 3, 4
+ter NHR@SW) for providing the computing and data-
+processing resources needed for this work.                           [13] Mor Geva, Jasmijn Bastings, Katja Filippova, and Amir
+                                                                           Globerson. Dissecting recall of factual associations in auto-
+References                                                                 regressive language models. In Proceedings of the 2023 Con-
+                                                                           ference on Empirical Methods in Natural Language Process-
+ [1] Jinze Bai, Shuai Bai, Shusheng Yang, et al. Qwen-vl: A ver-           ing, pages 12216­12235, 2023. 5
+      satile vision-language model for understanding, localization,
+      text reading, and beyond, 2023. 1, 8                           [14] Dongsheng Jiang, Yuchen Liu, Songlin Liu, et al. From clip
+                                                                           to dino: Visual encoders shout in multi-modal large language
+ [2] Samyadeep Basu, Martin Grayson, Cecily Morrison, et al.               models. arXiv preprint arXiv:2310.08825, 2023. 5
+      Understanding information storage and transfer in multi-
+      modal large language models. Advances in Neural Informa-       [15] Nicholas Jiang, Anish Kachinthaya, Suzanne Petryk, and
+      tion Processing Systems, 37:7400­7426, 2024. 8                       Yossi Gandelsman. Interpreting and editing vision-language
+                                                                           representations to mitigate hallucinations. In The Thir-
+ [3] Walid Bousselham, Felix Petersen, Vittorio Ferrari, and               teenth International Conference on Learning Representa-
+      Hilde Kuehne. Grounding everything: Emerging localiza-               tions, 2025. 8
+      tion properties in vision-language transformers. In Proceed-
+      ings of the IEEE/CVF Conference on Computer Vision and         [16] Omri Kaduri, Shai Bagon, and Tali Dekel. What's in the im-
+      Pattern Recognition, pages 3828­3837, 2024. 1                        age? a deep-dive into the vision of vision language models.
+                                                                           In Proceedings of the Computer Vision and Pattern Recogni-
+ [4] Declan Iain Campbell, Sunayana Rane, and Tyler Giallanza.             tion Conference, pages 14549­14558, 2025. 8
+      Understanding the limits of vision language models through
+      the lens of the binding problem. In The Thirty-eighth An-      [17] Qiming Li, Zekai Ye, Xiaocheng Feng, Weihong Zhong,
+      nual Conference on Neural Information Processing Systems,            Weitao Ma, and Xiachong Feng. Causal tracing of object
+      2024. 8                                                              representations in large vision language models: Mechanis-
+                                                                           tic interpretability and hallucination mitigation. In Proceed-
+ [5] Shiqi Chen, Tongyao Zhu, and Ruochen Zhou. Why is spa-                ings of the AAAI Conference on Artificial Intelligence, pages
+      tial reasoning hard for VLMs? an attention mechanism per-            31645­31653, 2026. 8
+      spective on focus areas. In Forty-second International Con-
+      ference on Machine Learning, 2025. 8                           [18] Tsung-Yi Lin, Michael Maire, Serge Belongie, et al. Mi-
+                                                                           crosoft coco: Common objects in context. In European con-
+ [6] Zhe Chen, Jiannan Wu, Wenhai Wang, et al. Internvl: Scal-             ference on computer vision, pages 740­755. Springer, 2014.
+      ing up vision foundation models and aligning for generic             2, 1, 5
+      visual-linguistic tasks. In Proceedings of the IEEE/CVF
+      Conference on Computer Vision and Pattern Recognition,         [19] Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae Lee.
+      pages 24185­24198, 2024. 2                                           Visual instruction tuning. Advances in neural information
+                                                                           processing systems, 36:34892­34916, 2023. 1, 2
+ [7] Wei-Lin Chiang, Zhuohan Li, Zi Lin, et al. Vicuna: An open-
+      source chatbot impressing gpt-4 with 90%* chatgpt quality,     [20] Kevin Meng, David Bau, Alex Andonian, and Yonatan Be-
+      2023. 2                                                              linkov. Locating and editing factual associations in gpt. In
+                                                                           Proceedings of the 36th International Conference on Neural
+ [8] Wenliang Dai, Junnan Li, Dongxu Li, et al. Instructblip: To-          Information Processing Systems, Red Hook, NY, USA, 2022.
+      wards general-purpose vision-language models with instruc-           Curran Associates Inc. 6
+      tion tuning. Advances in neural information processing sys-
+      tems, 36:49250­49267, 2023. 1                                  [21] Clement Neo, Luke Ong, Philip Torr, et al. Towards in-
+                                                                           terpreting visual information processing in vision-language
+ [9] Timothe´e Darcet, Maxime Oquab, Julien Mairal, and Piotr              models. In The Thirteenth International Conference on
+      Bojanowski. Vision transformers need registers. In The               Learning Representations, 2025. 1, 5
+      Twelfth International Conference on Learning Representa-
+      tions, 2024. 3                                                 [22] Vedant Palit, Rohan Pandey, Aryaman Arora, and Paul Pu
+                                                                           Liang. Towards vision-language mechanistic interpretabil-
+[10] Matt Deitke, Christopher Clark, Sangho Lee, et al. Molmo              ity: A causal tracing tool for blip. In Proceedings of the
+      and pixmo: Open weights and open data for state-of-the-art           IEEE/CVF International Conference on Computer Vision,
+      vision-language models. In Proceedings of the Computer               pages 2856­2861, 2023. 8
+      Vision and Pattern Recognition Conference, pages 91­104,
+      2025. 1, 8                                                     [23] Georgios Pantazopoulos and Eda B O¨ zyigit. Towards under-
+                                                                           standing visual grounding in visual language models. arXiv
+                                                                           preprint arXiv:2509.10345, 2025. 8
+
+                                                                     [24] Zhiliang Peng, Wenhui Wang, Li Dong, et al. Grounding
+                                                                           multimodal large language models to the world. In The
+      Twelfth International Conference on Learning Representa-         [39] Yiwu Zhong, Jianwei Yang, Pengchuan Zhang, et al. Re-
+      tions, 2024. 8                                                         gionclip: Region-based language-image pretraining. In Pro-
+[25] Alec Radford, Jong Wook Kim, et al. Learning transferable               ceedings of the IEEE/CVF conference on computer vision
+      visual models from natural language supervision. In Inter-             and pattern recognition, pages 16793­16803, 2022. 1
+      national conference on machine learning, pages 8748­8763.
+      PmLR, 2021. 1, 2
+[26] Sunayana Rane, Alexander Ku, and Jason Michael
+      Baldridge. Can generative multimodal models count to
+      ten? In ICLR 2024 Workshop on Representational Align-
+      ment, 2024. 8
+[27] Tong Shao, Zhuotao Tian, Hang Zhao, and Jingyong Su. Ex-
+      plore the potential of clip for training-free open vocabulary
+      semantic segmentation. In European Conference on Com-
+      puter Vision, pages 139­156. Springer, 2024. 1
+[28] Shweta Singh, Aayan Yadav, Jitesh Jain, et al. Benchmark-
+      ing object detectors with coco: A new path forward. 2024.
+      2, 1
+[29] Mukund Sundararajan, Ankur Taly, and Qiqi Yan. Axiomatic
+      attribution for deep networks. In International conference on
+      machine learning, pages 3319­3328. PMLR, 2017. 3
+[30] Roman Suvorov, Elizaveta Logacheva, Anton Mashikhin,
+      et al. Resolution-robust large mask inpainting with fourier
+      convolutions. In 2022 IEEE/CVF Winter Conference on Ap-
+      plications of Computer Vision (WACV), pages 3172­3182,
+      2022. 2
+[31] Shengbang Tong, Zhuang Liu, Yuexiang Zhai, et al. Eyes
+      wide shut? exploring the visual shortcomings of multi-
+      modal llms. In Proceedings of the IEEE/CVF Conference
+      on Computer Vision and Pattern Recognition, pages 9568­
+      9578, 2024. 1
+[32] Kevin Ro Wang, Alexandre Variengien, Arthur Conmy, Buck
+      Shlegeris, and Jacob Steinhardt. Interpretability in the wild:
+      a circuit for indirect object identification in GPT-2 small. In
+      The Eleventh International Conference on Learning Repre-
+      sentations, 2023. 6
+[33] Weiyun Wang, Zhangwei Gao, Lixin Gu, et al. Internvl3.
+      5: Advancing open-source multimodal models in versatility,
+      reasoning, and efficiency. arXiv preprint arXiv:2508.18265,
+      2025. 2
+[34] An Yang, Anfeng Li, Baosong Yang, et al. Qwen3 technical
+      report, 2025. 2
+[35] Yukang Yang, Declan Campbell, Kaixuan Huang, Mengdi
+      Wang, Jonathan Cohen, and Taylor Webb. Emergent sym-
+      bolic mechanisms support abstract reasoning in large lan-
+      guage models. Proceedings of Machine Learning Research,
+      267:70515­70549, 2025. 6
+[36] Zhuoran Yu and Yong Jae Lee. How multimodal LLMs solve
+      image tasks: A lens on visual grounding, task reasoning, and
+      answer decoding. In Second Conference on Language Mod-
+      eling, 2025. 8
+[37] Hao Zhang, Hongyang Li, Feng Li, et al. Llava-grounding:
+      Grounded visual chat with large multimodal models. In
+      European Conference on Computer Vision, pages 19­35.
+      Springer, 2024. 8
+[38] Yuhui Zhang, Alyssa Unell, Xiaohan Wang, et al. Why are
+      visually-grounded language models bad at image classifica-
+      tion? In The Thirty-eighth Annual Conference on Neural
+      Information Processing Systems, 2024. 1, 8
+           Mechanisms of Object Localization in Vision­Language Models
+
+                                     Supplementary Material
+
+6. Dataset
+
+We provide additional details on dataset construction, task prompting, and representative examples.
+6.1. Dataset Filtering Details
+We evaluate on the COCO validation split [18] with label corrections from [28], and apply the following filtering steps to
+improve annotation quality and satisfy the requirements of our experimental setup.
+
+    1. Object size. We discard objects occupying less than 0.4% or more than 60% of the image area. Extremely small
+        objects provide insufficient visual detail, while very large objects dominate the field of view.
+
+    2. Resolution. Images with a minimum side length below 200 px are removed to ensure sufficient spatial resolution.
+    3. Uniqueness filtering. We retain only images that contain a single instance of the queried object category in order to
+
+        avoid multiple valid answers for the same query.
+6.2. Prompts and Input Template
+For each image­object pair, we query the model either to localize a target object or to classify the objects present in the
+image.
+
+Input template. All models receive inputs in the following format:
+
+                                                         \texttt {\{System\} \{Image\} \{Task\}} 
+
+where System is the model-specific system prompt prepended to every query, Image refers to the embedded visual tokens,
+and Task is the task-specific instruction described below. Given this combined input, the model generates its response
+autoregressively.
+
+Localization. For object localization, the model is prompted to predict the bounding box of a given target class:
+
+      Please provide the bounding box coordinates of the {class}.
+
+where {class} is the name of the target object.
+
+Classification. For object classification, we instruct the model to enumerate all objects present in the image while restricting
+the answer space to the predefined category set:
+
+      List all objects in the image. Choose only from {class1}, {class2}, ...
+This formulation avoids the need to handle a large variety of free-form answers, which is particularly problematic for COCO
+due to its broad and diverse category set.
+
+Alternative binary formulation for classification. A natural alternative is to pose a binary query per category:
+
+      Is there a {class} in the image?
+
+However, this formulation substantially increases the incidence of object hallucinations. To quantify this effect, we measure
+the false positive rate
+
+                                             \mathrm {FPR} = P(\mathrm {detected=True} \mid \mathrm {has\_object=False}) 
+on the manipulated dataset described in Section 2.2, where the queried object is absent. Across InternVL3-5 8B and LLaVA-
+1.5 7B/13B, the binary query yields consistently higher FPRs (0.56­0.70) than the list-based formulation (0.27­0.45). For
+this reason, all main experiments use the list-based prompt.
+6.3. Image Examples  sports ball  suitcase
+          bed        motorcycle   cell phone
+
+      tennis racket     cake        boat
+          bird          kite      umbrella
+
+       fire hydrant
+
+Figure 6. Dataset examples. Example images from the COCO validation set where exactly one object per image is removed (highlighted
+by its original bounding box) and the background is filled using an inpainting strategy [30]. This procedure allows us to filter the dataset
+for potential hallucinations: if the model can still detect the removed object purely from contextual cues, it undermines the validity of our
+grounding analysis.
+7. Ablation Study
+7.1. Visualization of Masking
+
+0 Image with ground-truth Mask 0    Resized Mask        0      Mask with Padding
+
+ 50                            5   5 10 15 20           5                         Padding Types
+100
+                                                                                     Padding = -2
+150                            10                       10                           Padding = -1
+                                                                                     Padding = 0
+200                            15                       15                           Padding = +1
+                                                                                     Padding = +2
+250
+                               20                       20
+300
+
+     0 100 200 300 0                                        0 5 10 15 20
+
+Figure 7. Visualization of object mask for the ablation experiment. Left: the original 336×336 input image in pixel space with an
+annotated object mask. This mask is mapped onto the 24×24 token grid of the vision transformer, where a token is selected if it has any
+pixel overlap with the original mask. Right: examples of padding applied to the token mask. Negative padding removes adjacent tokens
+and shrinks the ablated region, while positive padding adds neighboring tokens and expands it.
+
+7.2. Standard Deviations of Random Ablation Experiment
+
+Models:         LLaVa 7B                            LLaVa 13B         InterVL3.5 8B
+
+Ablation Token  Loc. (%)           Cls. (%)  Loc. (%)       Cls. (%)  Loc. (%)    Cls. (%)
+Strategy (%)
+
+Baseline   0    35.34              58.10     46.98             65.30  72.64       83.30
+
+Random      1 35.52 ± 0.21 0.2 57.98 ± 0.18 0.1 46.74 ± 0.08 0.2 64.86 ± 0.40 0.4 72.32 ± 0.23 0.3 83.44 ± 0.51 0.1
+(3 seeds)   4 35.57 ± 0.09 0.2 57.35 ± 0.18 0.8 45.99 ± 0.39 1.0 64.68 ± 0.23 0.6 72.30 ± 0.39 0.3 83.33 ± 0.09 0.0
+            8 35.09 ± 0.08 0.2 56.58 ± 0.29 1.5 45.25 ± 0.08 1.7 63.89 ± 0.14 1.4 71.71 ± 0.21 0.9 83.10 ± 0.35 0.2
+           16 33.71 ± 0.50 1.6 56.39 ± 0.65 1.7 43.76 ± 0.16 3.2 63.92 ± 0.24 1.4 70.46 ± 0.20 2.2 83.02 ± 0.39 0.3
+           24 31.92 ± 0.23 3.4 55.72 ± 0.52 2.4 41.95 ± 0.29 5.0 63.51 ± 0.29 1.8 68.81 ± 0.42 3.8 82.83 ± 0.47 0.5
+           32 30.43 ± 0.13 4.9 55.40 ± 0.34 2.7 39.88 ± 0.33 7.1 62.54 ± 0.52 2.8 66.88 ± 0.47 5.8 82.62 ± 0.56 0.7
+           48 25.65 ± 0.29 9.7 54.80 ± 0.83 3.3 34.44 ± 0.16 12.5 61.34 ± 0.66 4.0 59.03 ± 0.39 13.6 81.69 ± 0.33 1.6
+
+Table 4. Performance after token ablation. The baseline corresponds to the model without any token ablation and serves as a reference
+for randomly ablated tokens. This table additionally reports one standard deviations across three random seeds for the random ablation
+experiments. See Table 1 for the complete results.
+
+7.3. Additional Dataset
+
+We provide additional results on the Pascal VOC dataset [12]. We applied the same pre-processing pipeline as desribed in
+Section 2.2 , which results in 1.957 objects across 1.585 images. We observe consisent results as describes in Section 3.1.
+                                                    Models: LLaVA 7B LLaVA 13B InternVL 8B
+                                                    Task: Loc. Cls. Loc. Cls. Loc. Cls.
+                                                    Baseline 52.41 73.41 63.68 82.97 85.78 97.06
+                                                    Object 9.52 31.37 18.63 54.78 26.35 52.94
+                                                    Gradients 22.63 57.23 20.83 74.39 27.00 89.34
+                                                    Random 50.41 72.96 61.08 84.52 83.76 97.30
+
+Table 5. Token ablation results on the PascalVOC dataset [12]. We compare object-token ablation with ablation of an equal number of
+high-gradient and randomly selected tokens (3 seeds average).
+
+7.4. Object Extension Experiment
+
+                                     LLaVa-13b                  60
+
+                                  0 47.0±0.0 18.1±0.0 5.9±0.0   50
+
+Extended Padding
+                                                Accuracy (%)
+                                                                                 40
+                                  +1 25.4±0.3 55.7±0.4 28.4±0.3
+
+                                                                                 30
+
+                                  +2 9.9±0.1 48.9±0.3 60.3±0.3  20
+
+                                  0  +1                   +2    10
+                                     Scaled Ground Truth
+
+Figure 8. Object extension additional Results. Alignment between predicted and scaled ground-truth bounding boxes under object
+padding. Each cell shows the mean accuracy between predictions obtained with a given padding level and ground-truth boxes scaled by
+different amounts. Diagonal entries correspond to matching padding and scaling levels, indicating how well the predicted box size adapts
+to the artificially enlarged object. Standard deviations are annotated.
+Figure 9. Examples of the object extension experiment. Each image shows the input with its mask in pixel space. The yellow region
+indicates the original mask, while the green region denotes the padding p added by sampling tokens from the object. The top row corre-
+sponds to p = 1 and the bottom row to p = 2. We display both the predicted and ground-truth bounding boxes for the original and the
+extended object. The predicted boxes expand consistently with the mask, suggesting that the model containerizes object tokens to define
+spatial boundaries.
+
+7.5. Ablation Results for Global and Local Views
+                                         Impact of Global vs. Local View Removal
+
+                   60
+
+Accuracy Drop (%)                                                                 Mode
+
+                   40                                                             global
+                                                                                  local
+
+                                                                                  global+local
+
+                   20                                                             Task
+                                                                                  classification
+
+                                                                                  localization
+
+                   0
+
+                       small  medium                large
+                              Object Size Category
+
+Figure 10. Performance drop for classification and detection when ablating global, local, or both image views across object sizes. We
+follow the COCO [18] convention and group targets according to their bounding-box area: small (< 322), medium (322  area  962),
+and large (> 962).
+8. Positional Information
+
+          0Projection (LLaVA-7B/13B) 0 Layer 13 (LLaVA-7B) 0 Layer 12 (LLaVA-13B)    1.0
+
+Position  8                8               8
+
+                                                                                     0.8
+
+          16               16              16
+
+          23               23              23                                        0.6
+                                                                                     Accuracy
+              0 8 16 23 0 8 16 23 0 8 16 23
+
+          Projection (InternVL3.5-ViT) Layer 7 (InternVL3.5) Layer 26 (InternVL3.5)
+          0                0               0
+                                                                                     0.4
+
+Position  8                8               8                                         0.2
+
+          15               15              15                                        0.0
+             0
+                8          15 0  8         15 0  8         15
+                Position         Position        Position
+
+Figure 11. Heatmap visualizations of positional decoding accuracy at selected stages of LLaVA. Each heatmap shows the probability
+of correctly predicting the position of a visual token in the 24 × 24 grid. The multimodal projection retains positional information mainly
+at the four corners, effectively marking the image boundaries needed to infer its dimensions. Accuracy then increases within the LLM,
+becoming highest in the early-mid-layers (layer 13 in LLaVA-7B, layer 12 in LLaVA-13B and layer 7 for InternVL3.5). Corners and
+boundary regions remain the most reliably recovered, indicating that they serve as anchors for reconstructing the global spatial layout.
+9. Attention Blocking
+
+          0.6         LLaVA-7b | six layer-wise                      LLaVA-7b | single layer-wise
+
+Accuracy  0.4
+
+          0.2
+
+          0.0 0-5     6-11 12-17 18-23 24-29 30-31 0 2 4 6 8 10 12 14 16 18 20 22 24 26 28 30
+          0.6                         Layer                                       Layer
+
+                      LLaVA-13b | six layer-wise                     LLaVA-13b | single layer-wise
+
+Accuracy  0.4
+
+          0.2
+
+          0.0         6-11 12-17 18-23 24-29 30-35 36-39             0 2 4 6 8 10 12 14 16 18 20 22 24 26 28 30 32 34 36 38
+                0-5                   Layer                                                     Layer
+
+          0.8            InternVL3.5-8B | six layer-wise                        InternVL3.5-8B | single layer-wise
+          0.7
+Accuracy  0.6
+          0.5
+          0.4         6-11 12-17 18-23 24-29               30-35 0 2 4 6 8 10 12 14 16 18 20 22 24 26 28 30 32 34
+          0.3                       Layer                                                       Layer
+
+                 0-5
+
+                      Classification         Localization  Baseline  Padding = 0  Padding = 1
+
+Figure 12. Attention blocking across layers. We measure classification and localization accuracy when blocking attention from post-
+image tokens to object tokens, either in groups of six layers (left) or one layer at a time (right). Localization accuracy drops sharply in
+early­mid layers for LLaVA models and in mid­late layers for InternVL, while classification remains largely stable across the network.
+Blocking attention to padding tokens causes an additional decrease in localization performance.
+10. Causal Mediation Analysis
+10.1. Visualization of CMA Method
+
+1. Source Run                                    Activation Transfer
+2. Base Run
+                   ViT P                         3. Patched Run
+
+                 Is there a   LLM       Yes No
+               motorcycle in
+                                         Logits
+                 the image?
+                                                                              ViT P
+                                                                                           LLM       Yes No
+                                                                               Is there a
+                                                                            motorcycle in             Logits
+
+                   ViT P                         Legend:                       the image?
+
+                 Is there a   LLM       Yes No                        Transformer Layer
+               motorcycle in                                          Attention Head
+                                         Logits                       Forward Pass
+                 the image?                                           Patching
+
+Figure 13. Causal mediation via activation patching. We compare three model runs: (1) the source run, where the object is present and
+the model produces the correct answer; (2) the base run, where the object is removed and the model fails; and (3) the patched run, where
+we transfer hidden activations from a selected attention head in the source run into the base run. Improvements in the patched prediction
+indicate that the transferred head carries task-relevant information. This procedure is repeated head-wise to quantify each head's causal
+contribution.
+
+10.2. Additional Results for LLaVa-13b
+
+                                                                                                0.6
+
+0 LLaVa-13b - Localization              0 LLaVa-13b - Classification
+
+4                                       4                                                       0.4
+
+8                                       8
+Layer
+12                                    Layer12                                                   0.2
+                                                                                        Mediation Fraction
+16                                      16
+
+20                                      20
+
+24                                      24                                                      0.0
+
+28                                      28
+
+32                                      32
+
+36                                      36                                                      0.2
+
+    0 6 12 18 24 30 36                           0 6 12 18 24 30 36
+               Head                                              Head
+                                                                                                0.4
+
+Figure 14. Causal Mediation Analysis for LLava13b. Mediation Fraction scores for every attention head across all layers, shown
+separately for the detection and classification tasks.
+                LLaVA 13b
+
+          0.4   AUC=0.01
+
+Accuracy  0.3   AUC=0.09
+
+          0.2   AUC=0.30
+
+          0.1
+
+          0.0
+             0.0 0.1 0.2 0.3 0.4
+
+                    Percentage pruned
+
+Loc. Important  Cls. Important         Unimportant
+
+Figure 15. Localization accuracy under cumulative head ablation. Attention heads are ranked by their mean MF and progressively removed.
+Normalized AUC scores enable method comparison.
+

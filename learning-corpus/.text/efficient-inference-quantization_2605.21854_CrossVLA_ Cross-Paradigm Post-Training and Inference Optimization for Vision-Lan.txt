@@ -1,0 +1,35 @@
+arXiv:2605.21854v2 [cs.CV] 6 Jun 2026
+
+CrossVLA: Cross-Paradigm Post-Training and Inference Optimization
+for Vision-Language-Action Models
+Zhi Liu Tianjin University 2022201433@tju.edu.cn
+Abstract
+Vision-Language-Action (VLA) models have rapidly converged on a small set of architectural patterns: discrete-token autoregression (e.g. OpenVLA) and continuousaction flow-matching (e.g. 0.5). Yet preference alignment via Direct Preference Optimisation (DPO)--the de-facto post-training step in language models--has been studied almost exclusively on autoregressive VLAs. We present CrossVLA, an empirical study of cross-paradigm VLA post-training. Three contributions: (i) a surrogate flow-matching log-probability estimator that lets DPO operate on continuous-action backbones without probability-flow ODE integration, validated on 0.5 across LIBERO 4-suite with mean +1.15 pp over the openpi paper SFT baseline (Long-horizon +1.6, Goal +2.0, Spatial +1.2 pp); (ii) a head-to-head comparison of LoRA and DoRA as the parameter-efficient layer for VLA DPO, finding DoRA improves over OpenVLA SFT by a mean +10.4 pp across LIBERO 4-suite (600 trials, 3 seeds)--per-suite +20.0 Object, +11.0 Long-horizon, +8.0 Goal, +2.7 Spatial--with zero seed variance on Object (38/50 on each of 3 seeds); (iii) an inference-time anatomy showing the denoise loop dominates 78.6% of sample_actions latency and prefix-K/V caching à la VLA-Cache caps at a 21% acceleration ceiling--both chunk-level and token-level cache strategies degrade success rate to 0­80% in our benchmarks. We further pretrain a multi-view + temporal projection head on 6000 LIBERO frames, achieving 99.5% k-NN recall@1 for same-task retrieval (36× over random), available as a downstream initialisation. All code, ckpts, training logs, and reproduction scripts are open at https://github.com/lz-googlefycy/vla-lab.
+1 Introduction
+Vision-Language-Action (VLA) models--large multimodal policies that map (image, language instruction, proprioceptive state)  robot action--have established a small set of architectural lineages. OpenVLA [1] treats actions as 7 × 256-bin discretised tokens and predicts them autoregressively atop a Llama-2 7B language model with a fused DINO-SigLIP vision tower. 0 [2] and 0.5 [3] instead emit continuous 7-DoF action chunks via flow-matching, with a PaliGemma vision-language encoder and a 10-step ordinary differential equation (ODE) action expert. RT-2 [4], RDT [5], OpenVLAOFT [6], TinyVLA [7], SpatialVLA [8], RoboMamba [9], and CoT-VLA [10] span the design space between these poles.
+While supervised fine-tuning (SFT) on demonstrations yields VLA policies that solve held-out manipulation tasks at the 80­98% range on LIBERO [11], post-training--the analogue of RLHF/DPO/GRPO in language models--remains nascent for VLAs. The concurrent work GRAPE [12] addresses prefer-
+ORCID: 0009-0006-4808-9202
+Preprint. Under review.
+
+ence alignment on autoregressive VLAs but does not consider flow-matching backbones, which lack a clean DPO formulation because their chunk-level log-probability requires probability-flow ODE integration with prohibitive Jacobian costs.
+This work asks: does post-training generalise across architectural paradigms in VLA? Specifically:
+1. Can DPO be made to work on flow-matching VLAs via a tractable surrogate log-probability? 2. Does the choice of parameter-efficient adapter (LoRA vs DoRA) interact with the back-
+bone architecture or the task family? 3. Do inference-time acceleration techniques developed for autoregressive VLAs (specifically
+VLA-Cache style prefix-K/V reuse [13]) transfer to flow-matching VLAs?
+We answer all three empirically on LIBERO 4-suite, with public OpenVLA and 0.5 checkpoints. Headline findings:
+· DPO with our negative-MSE flow-matching surrogate (§3.2) trains stably on 0.5 with the same protocol as on OpenVLA, and across LIBERO 4-suite improves over the openpi paper SFT baseline by a mean +1.15 pp (Long-horizon +1.6, Goal +2.0, Spatial +1.2 pp; Object within 50-trial noise; §4.4).
+· DoRA [14], originally proposed for LLM instruction-tuning, generalises to VLA DPO and improves OpenVLA SFT by a mean +10.4 pp across 4 LIBERO suites (600 trials, 3 seeds); per-suite gains Object +20.0, Long-horizon +11.0, Goal +8.0, Spatial +2.7 pp. The Object cell exhibits zero seed variance (38/50 on each of seeds 42, 1337, 2026), ruling out lucky-seed concerns.
+· VLA-Cache style prefix caching does not transfer to 0.5. A latency anatomy reveals 78.6% of per-call cost is the flow-matching denoise loop--not the prefix forward that VLA-Cache targets--leaving a hard 21% acceleration ceiling. Both chunk-level (§4.5) and token-level (§4.5) cache strategies degrade success rate while producing little or no speedup. Concurrent SnapFlow [15] arrives at the same prescription via progressive self-distillation of the denoise loop.
+Contributions.
+1. Surrogate flow-matching log-probability for DPO on continuous-action VLAs (§3.2), validated cross-paradigm on 0.5 across LIBERO 4-suite with mean +1.15 pp over the openpi paper SFT baseline.
+2. First reported DoRA-on-VLA empirical study (3-seed pool, 600 trials), with a per-suite breakdown identifying when magnitude/direction decoupling helps.
+3. Negative result on prefix-K/V caching for flow-matching VLAs, accompanied by a structural latency anatomy and a positive prescription (denoise-loop-targeting acceleration is the productive direction; concurrently validated by [15]).
+4. Multi-view + temporal contrastive pretraining framework (§3.5) with a publicly released projection-head checkpoint achieving 99.5% k-NN recall@1 for same-task retrieval on 6000 LIBERO frames.
+5. Open implementation: all four contributions are reproducible from a single repository (https://github.com/lz-googlefycy/vla-lab), including ckpts, training logs, and end-to-end runnable scripts.
+2 Background and Related Work
+2.1 Vision-Language-Action Models
+The VLA paradigm has rapidly diversified since RT-2 [4]. Two open-source families with public LIBERO-finetuned checkpoints are the focus of this paper.
+Autoregressive (token-AR) VLAs discretise each action dimension into a vocabulary (typically 256 bins per DoF) and predict the joint action vector autoregressively under a language model head.
+2
+
+

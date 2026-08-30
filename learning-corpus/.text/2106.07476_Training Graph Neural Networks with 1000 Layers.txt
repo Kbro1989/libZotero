@@ -1,0 +1,991 @@
+Training Graph Neural Networks with 1000 Layers
+
+Guohao Li 1 2 Matthias Mu¨ ller 1 Bernard Ghanem 2 Vladlen Koltun 1
+
+                        Abstract                                                                     RevGNN-Wide                                                                                                                     ResGNN-224
+
+      Deep graph neural networks (GNNs) have                       88
+      achieved excellent results on various tasks on in-
+      creasingly large graph datasets with millions of                                RevGNN-Deep
+      nodes and edges. However, memory complex-                                                   RevGNN-224
+      ity has become a major obstacle when training
+      deep GNNs for practical applications due to the              87
+      immense number of nodes, edges, and interme-arXiv:2106.07476v3 [cs.LG] 11 Apr 2022
+      diate activations. To improve the scalability of                                                                                           Score (ROC-AUC)                                                                          Out of Memory
+      GNNs, prior works propose smart graph sampling                                                                                                                              11GB
+      or partitioning strategies to train GNNs with a                                                                                                                                                                          32GB86RevGNN-80ResGNN-64
+      smaller set of nodes or sub-graphs. In this work,                                DEQ-GNN-224
+      we study reversible connections, group convolu-
+      tions, weight tying, and equilibrium models to                      RevGNN-64                                                                                                                                                  WT-ResGNN-224
+      advance the memory and parameter efficiency of                               WT-RevGNN-224                                                                                                                                                     Out of Memory
+      GNNs. We find that reversible connections in
+      combination with deep network architectures en-              85
+      able the training of overparameterized GNNs that
+      significantly outperform existing methods on mul-            84
+      tiple datasets. Our models RevGNN-Deep (1001
+      layers with 80 channels each) and RevGNN-Wide                       WT-RevGNN-80                                    WT-ResGNN-64
+      (448 layers with 224 channels each) were both
+      trained on a single commodity GPU and achieve                83      DEQ-GNN-64
+      an ROC-AUC of 87.74 ± 0.13 and 88.24 ± 0.15                         WT-RevGNN-64
+      on the ogbn-proteins dataset. To the best of our
+      knowledge, RevGNN-Deep is the deepest GNN                        0  5     10      15                        20  25  30                                                                                                       35 90         95 100
+      in the literature by one order of magnitude.
+                                                                                                     GPU Memory (GB)
+1. Introduction
+                                                                   Figure 1. ROC-AUC score vs. GPU memory consumption on
+Graphs are all around us. Whether we watch a show on
+Netflix, browse through friends' feeds on Facebook, buy            the ogbn-proteins dataset. We find that deep reversible GNNs
+something on Amazon, or look up a researcher on Google,
+chances are that our actions trigger queries on a large graph.     are very powerful and outperform existing models by a margin;
+Movie and book databases are often encoded as knowledge
+graphs for efficient recommendation systems. Social media          our best models are RevGNN-Deep and RevGNN-Wide. We also
+services rely on social graphs. Shopping platforms leverage
+product co-purchasing networks to boost sales. Citation            compare reversible connections (RevGNN-x), weight-tying (WT-
+indices like Web of Science, Scopus, and Google Scholar
+                                                                   x), and equilibrium models (DEQ-x) for 112-layer deep GNNs
+    1Intel Labs 2King Abdullah University of Science and Technol-
+ogy. Correspondence to: Guohao Li <guohao.li@kaust.edu.sa>.        (x denotes the number of channels per layer). Reversible models
+
+Proceedings of the 38 th International Conference on Machine       consistently achieve the same or better performance as the baseline
+Learning, PMLR 139, 2021. Copyright 2021 by the author(s).
+                                                                   using only a fraction of the memory. Weight-tied and equilibrium
+
+                                                                   Dmaotdaeplos ionftfesrizaegiosopdropperofrotriomnaanlcteotoppa,rawmheetreer                                                                                       efficiency trade-off.
+                                                                                                                                                                                                                                     p is the number of
+
+                                                                   parameters.
+
+                                                                   construct large citation graphs. Even the Internet itself is
+                                                                   in essence a vast graph with billions of nodes and edges.
+                                                                   Graphs are also powerful tools for representing 3D data
+                                                                   such as point clouds and meshes or biological data such as
+                                                                   molecular structures and protein interactions.
+
+                                                                   One prominent and powerful approach to process such
+                                                                   graphs are graph neural networks (GNNs). GNNs have
+                                                                   achieved impressive performance on relatively small graph
+                                                                   datasets (Yang et al., 2016; Zitnik & Leskovec, 2017; Shchur
+                                                                   et al., 2018). Unfortunately, the most interesting and impact-
+                                                                   ful real-world problems rely on very large graphs where lim-
+                                                                   ited GPU memory quickly becomes a bottleneck. In order
+                                                                   to train GNN models on large graphs, the common practice
+                                                                   is to reduce the number of model parameters. This is coun-
+                                                                   terproductive, since processing larger graphs would likely
+                                                                   benefit from more parameters. While there is evidence that
+                                                                   over-parameterized models generalize better (Neyshabur
+                                                                   et al., 2019; Belkin et al., 2019), the relationship between
+                                                                   performance and parameters is best illustrated in the context
+Training Graph Neural Networks with 1000 Layers
+
+of language modelling. Recent progress in natural language       this infinite-layer network using a root-finding method. We
+processing (NLP) has been enabled by a massive increase          backpropagate through the equilibrium point using implicit
+in parameter counts: GPT (110M) (Radford et al.), BERT           differentiation. Hence, we do not need to store intermediate
+(340M) (Devlin et al., 2019), GPT-3 (175B) (Brown et al.,        states and get an infinite-depth network at the memory and
+2020), Gshard-M4 (600B) (Lepikhin et al., 2021), and Deep-       parameter cost of a single layer.
+Speed (1T) (Rasley et al., 2020). More parameters mean
+deeper or wider networks that consume more memory.               Our analysis of these methods shows that deep reversible
+                                                                 architectures are the most powerful in terms of achieving
+GNNs have shown a lot of promise on recent large-scale           state-of-the-art performance on benchmark datasets. This
+graph datasets such as Benchmarking GNNs (Dwivedi et al.,        is due to their very large capacity at low memory cost and
+2020), Open Graph Benchmark (OGB) (Hu et al., 2020;              only slightly increased training time. Weight-tied models
+2021) and Microsoft Academic Graph (MAG) (Wang et al.,           offer constant parameter size regardless of depth. How-
+2020). Recent works (Li et al., 2019; 2020; Chen et al.,         ever, due to the smaller number of parameters, performance
+2020) have successfully trained deep models with a large         on large datasets suffers and has to be compensated by in-
+number of parameters and achieved state-of-the-art perfor-       creasing the width. Finally, graph equilibrium models have
+mance. However, these models have large memory foot-             the same memory efficiency as reversible models and the
+prints and operate at the physical limits of current hardware.   same parameter efficiency as weight-tied models. They per-
+In order to apply deeper and wider GNNs with more param-         form similarly to weight-tied models, and the training time
+eters, we need either different hardware or more efficient       vs. performance tradeoff can be further adjusted by tuning
+architectures that consume less memory.                          the number of iterations in each optimization step.
+
+Existing works try to overcome the memory bottleneck by          Our methods can be applied to different GNN operators. In
+mini-batch training, i.e. sampling a smaller set of nodes        our experiments, we successfully apply them to GCN (Kipf
+(Hamilton et al., 2017; Chen et al., 2018b;a) or partition-      & Welling, 2017), GraphSAGE (Hamilton et al., 2017), GAT
+ing large graphs (Chiang et al., 2019; Zeng et al., 2020)        (Velickovic´ et al., 2018), and DeepGCN (Li et al., 2019). We
+into smaller subgraphs and sampling from those. These ap-        can also combine the proposed techniques with sampling-
+proaches have proven successful, but they introduce further      based methods to further reduce memory and boost perfor-
+hyperparameters that need to be tuned. For instance, if the      mance on some datasets. To the best of our knowledge, we
+sampled size of nodes or subgraphs is too small, it may break    are the first to train a GNN with more than 1000 layers. Our
+important structures in the graph. While these methods are a     model RevGNN-Deep, outperforms all state-of-the-art ap-
+step in the right direction, they do not scale well as the mod-  proaches on the ogbn-proteins dataset (Hu et al., 2020) with
+els become deeper or wider, since memory consumption is          an ROC-AUC of 87.74%, while only consuming 2.86 GB
+still dependent on the number of layers. Another approach        of GPU memory during training, one order of magnitude
+is efficient propagation via K-power adjacency matrices or       less than the current top performer. We can also trade our
+graph diffusion matrices (Wu et al., 2019; Klicpera et al.,      memory savings for larger width, pushing performance to
+2019; Bojchevski et al., 2020; Liu et al., 2020; Frasca et al.,  new heights. Our RevGNN-Wide achieves an ROC-AUC
+2020). However, the propagation schemes of these methods         of 88.24% on the ogbn-proteins dataset, ranking first on the
+are non-trainable, which may lead to sub-optimality.             leaderboard by a large margin.
+
+Inspired by efficient architectures from computer vision and     In summary, we investigate several techniques to increase
+natural language processing (Gomez et al., 2017; Xie et al.,     the memory efficiency of GNNs and perform an extensive
+2017; Bai et al., 2018; 2019), here we investigate several       analysis. We significantly outperform current state-of-the-
+methods to obtain more efficient GNNs that use less memory       art methods on several datasets by employing reversible
+than conventional architectures while achieving state-of-the-    connections to train deeper and wider models. Further, we
+art results (see Figure 1). We explore grouped reversible        demonstrate the generality of these techniques by applying
+graph connections in order to reduce the memory complexity       them to multiple GNN operators. We release our implemen-
+with respect to the number of layers from O(L) to O(1). In       tation, which supports PyTorch Geometric (Fey & Lenssen,
+other words, the memory consumption is independent of the        2019) and the Deep Graph Library (Wang et al., 2019a).
+depth. This allows us to train very deep, over-parameterized
+models with constant memory consumption.                         2. Related Work
+
+We also investigate parameter-efficient architectures. We        GNNs were introduced by Gori et al. (2005) and Scarselli
+study deep weight-tied GNNs that have the parameter cost         et al. (2008) for learning a graph representation by find-
+of only a single layer. We also develop a deep graph equilib-    ing stable states through fixed-point iterations. Bruna et al.
+rium GNN, which is essentially a weight-tied network with        (2014) generalized Convolutional Neural Networks (CNNs)
+infinite depth. We directly solve for the equilibrium point of
+Training Graph Neural Networks with 1000 Layers
+
+to graphs using the Fourier basis by computing the eigen-        D hidden channels on a graph G with N nodes and M edges,
+decomposition of the graph Laplacian. Follow-up works            the memory complexity of storing activations is O(LN D).
+(Henaff et al., 2015; Defferrard et al., 2016; Kipf & Welling,   GraphSAGE (Hamilton et al., 2017) incorporates a recur-
+2017; Levie et al., 2018; Li et al., 2018) propose different     sive node-wise sampling scheme to improve the scalability
+ways to improve and extend spectral GNNs. For instance,          of GNNs. Instead of training on the whole graph, Graph-
+Kipf & Welling (2017) simplify spectral graph convolutions       SAGE uniformly samples a fixed number of neighbors for
+by limiting the filters to operate on 1-hop neighborhoods.       a batch of nodes. However, the recursive neighborhood
+Instead of defining GNNs from the spectral view, Gilmer          leads to exponential memory complexity as the number of
+et al. (2017) introduce a general framework termed Mes-          GNN layers increases. If B is the batch size of nodes and
+sage Passing Neural Networks (MPNNs) to unify GNNs.              R is the number of sampled neighbors per node, the mem-
+MPNNs define convolutions on the graph by propagating            ory complexity of GraphSAGE is O(RLBD). VR-GCN
+messages from spatial neighbors. Many subsequent works           (Chen et al., 2018b) enhances GraphSAGE by reducing the
+(Hamilton et al., 2017; Monti et al., 2017; Niepert et al.,      variance of mini-batch training to increase the convergence
+2016; Gao et al., 2018; Xu et al., 2019; Velickovic´ et al.,     rate. However, to reduce the estimation variance, historical
+2018; Wang et al., 2019b) fall into this framework.              activations need to be stored in memory (O(LN D)).
+
+Most prior state-of-the-art (SOTA) works are limited to shal-    To avoid recursive neighborhood expansion, FastGCN
+low depths due to the over-smoothing (Li et al., 2018) and       (Chen et al., 2018a) performs layer-wise sampling to sub-
+vanishing gradient problems (Li et al., 2019; 2021) present      sample nodes for each layer independently with a degree-
+in GNNs. Current works have explored different approaches        based distribution. While this further reduces the memory
+to resolve these difficulties in training deep GNNs. The first   complexity to O(LRBD), it leads to sparse connections.
+line of research employs skip connections across layers. Xu      To better maintain the graph structure, Cluster-GCN (Chiang
+et al. (2018) propose jump connections to adaptively se-         et al., 2019) and GraphSAINT (Zeng et al., 2020) propose
+lect intermediate representations to the last layer. Li et al.   subgraph-wise sampling methods for mini-batch training
+(2019) adapt residual and dense connections (He et al., 2016;    with memory complexity O(LBD). However, even with
+Huang et al., 2017) and dilated convolutions (Yu & Koltun,       smart sampling methods, GNNs still do not scale as the
+2016) from CNNs to GNNs; they successfully train GNNs            number of layers increases (i.e. the L dimension). We tackle
+with up to 56 layers on 3D point clouds and achieve SOTA         this issue and study orthogonal approaches that eliminate
+results. Li et al. (2020) train a 112-layer residual GNN and     the L dimension from the memory complexity. Our tech-
+achieve SOTA performance on the large-scale ogbn-proteins        niques enable unlimited network depth at no memory cost
+dataset (Hu et al., 2020). Other works also demonstrate that     and can be combined with existing sampling methods.
+residual connections aid in training deeper GNNs (Gong
+et al., 2020; Chen et al., 2020; Xu et al., 2021). We push       3. Building Deep GNNs
+further along the path of deep residual GNNs and train a
+SOTA model with more than 1000 layers by addressing the          3.1. Preliminaries
+memory bottleneck of current approaches.
+                                                                 A graph G is represented by a tuple G = V, E , where
+Researchers have also studied different normalization and        V = { v1, v2, ..., vN } is an unordered set of vertices and
+regularization techniques such as DropEdge (Rong et al.,         E  V × V is a set of edges. Let N and M denote
+2020), DropConnect (Hasanzadeh et al., 2020), PairNorm
+(Zhao & Akoglu, 2019), weight normalization (Oono &              the number of vertices and edges, respectively. For con-
+Suzuki, 2019), differentiable group normalization (Zhou
+et al., 2020), and GraphNorm (Cai et al., 2020). Another line    venience, a graph can be equivalently defined as an ad-
+of work (Wu et al., 2019; Klicpera et al., 2019; Bojchevski      jacency matrix A  A  RN×N , where ai,j denotes the
+et al., 2020; Liu et al., 2020; Frasca et al., 2020) proposes    link relation between vertex vi and vj. In some scenar-
+an efficient propagation scheme to avoid stacking layers         ios, vertices and edges are associated with a vertex fea-
+by incorporating multi-hop information into a single GNN         ture matrix X  X  RN×D and an edge feature matrix
+layer via K-th power adjacency matrices or personalized          U  U  RM×F , respectively. We use GNN operators that
+PageRank diffusion matrices. However, the propagation            map the vertex feature matrix X, the adjacency matrix A,
+scheme of these methods is non-trainable, thus making it         and the edge feature matrix U (optional) to a transformed
+difficult to learn hierarchical features and limiting capacity.  vertex feature matrix X :
+
+Many applications yield huge graphs with millions of nodes       fw : X × A × U  X ,    (1)
+and edges. Memory limitations preclude full-batch training
+in such settings. Specifically, to train an L-layer GNN with     where fw(X, A, U ) is parameterized by learnable param-
+                                                                 eters w. For simplicity, we assume that the transformed
+                                                                 vertex feature matrix X has the same dimension as the
+                                                                 input vertex feature matrix X. We also assume that the
+                                        Training Graph Neural Networks with 1000 Layers
+
+adjacency matrix A is the same for all GNN layers. When            Owing to the group processing, the number of parameters
+                                                                   reduces as the group size increases. Note that in the special
+the edge feature matrix U is present, it is fed into each layer    case where the group size C = 2, we obtain a similar form
+with its initial values U (0).                                     to the reversible residual connections proposed for CNNs
+                                                                   (Gomez et al., 2017). The definition above is independent of
+3.2. Over-parameterized GNNs                                       the choice of fw. However, we find that normalization lay-
+                                                                   ers and dropout layers are essential for training deep GNNs.
+Deep GNNs. Recent works (Li et al., 2019; 2020) show               To avoid extra memory usage, normalization layers and
+how adding residual connections (He et al., 2016) to ver-          dropout layers are embedded into the reversible GNN block.
+tex features (X = fw(X, A, U ) + X) enables training of            The GNN block fwi is designed similar to the pre-activation
+deep GNNs that achieve promising results on graph datasets.        residual GNN block proposed by Li et al. (2020):
+However, the memory complexity of the activations remains
+O(LN D), where L is the number of GNN layers, N is                 Xi = Dropout(ReLU(Norm(Xi-1)))  (7)
+the number of vertices, and D is the size of vertex features.
+Hence, the memory consumption of deep GNNs scales lin-             Xi = GraphConv(Xi, A, U ).      (8)
+early with the number of layers. Since the memory footprint
+of the network parameters is usually negligible, we focus          The stochasticity of vanilla dropout layers causes recon-
+on memory consumption induced by the activations.                  struction errors in the reverse pass. A naive solution would
+                                                                   be to store the dropout pattern for all layers. However, the
+Grouped Reversible GNNs. Inspired by reversible net-               dropout patterns have the same dimension as the activations,
+                                                                   which would lead to O(LN D) memory consumption. As
+works (Gomez et al., 2017; Liu et al., 2019; Kitaev et al.,        an alternative, we adopt a modified dropout layer in which
+                                                                   the dropout pattern is shared across layers. Therefore, we
+2019) and grouped convolutions (Krizhevsky et al., 2012;           only need to store one dropout pattern in every SGD iter-
+                                                                   ation; its memory complexity is independent of the depth:
+Xie et al., 2017), we generalize reversible residual connec-       O(N D). During the reverse pass, the saved dropout pattern
+                                                                   is reactivated to reconstruct the input vertex features.
+tions to grouped reversible residual connections for GNNs.
+
+Specifically, the input vertex feature matrix X is uniformly
+
+partitioned into C groups X1, X2, ..., XC across the chan-
+
+nel  dimension,  where  Xi    RN  ×  D  .  A  grouped  reversible
+                                     C
+
+GNN block operates on a group of inputs and produces a
+
+group of outputs: X1, X2, ..., XC  X1, X2, ..., XC .               3.3. Parameter-Efficient GNNs
+The forward pass is defined as follows:
+
+     C                                                             Weight-tied GNNs. Weight-tying is a powerful tool for im-
+                                                                   proving the parameter efficiency of language models (Press
+     X0 = Xi                                           (2)         & Wolf, 2017; Inan et al., 2017; Bai et al., 2018). We
+                                                                   take these works as inspiration to study how weight-tying
+     i=2                                                           can improve the parameter efficiency of GNNs. Instead
+                                                                   of having different weights for different GNN blocks, the
+     Xi = fwi (Xi-1, A, U ) + Xi, i  {1, · · · , C}, (3)           weight-tied GNN shares weights across layers. The GNN
+                                                                   model proposed by Scarselli et al. (2008) can be consid-
+where X0 is designed for exchanging information across             ered the first weight-tied GNN, in which a learned transition
+groups. Unlike conventional GNNs, grouped reversible               function is used to find stable node states by Banach's fixed
+GNNs only need to save the output vertex features of               point theorem (Khamsi & Kirk, 2001). Here we experiment
+the last GNN block in GPU memory for backpropagation.              with weight-tied residual GNNs and weight-tied reversible
+Therefore, the memory complexity of activations becomes            GNNs. For weight-tied residual GNNs, we define:
+O(N D), which is independent of the depth of the network.
+Note that the adjacency matrix A and the edge feature matrix       fw(1) := fw(2) . . . := fw(L),  (9)
+U are not updated during message passing. During the back-
+ward pass, only the input vertex features are reconstructed,
+on the fly, from the output vertex features X1, X2, ..., XC
+for backpropagation:
+
+     Xi = Xi - fwi (Xi-1, A, U ), i  {2, · · · , C} (4)            where L is the number of layers. For weight-tied reversible
+                                                                   GNNs, weights are shared in a group-wise manner:
+        C
+
+     X0 = Xi                                           (5)         fw(1i) := fw(2i) . . . := fw(Li ), i  {1, · · · , C} (10)
+
+     i=2
+
+     X1 = X1 - fw1 (X0, A, U ).                        (6)         Note that we use the same pre-activation GNN block de-
+                                                                   scribed in Section 3.2 instead of a contraction map used by
+In practice, Xi for i  {2, · · · , C} can be computed in           Scarselli et al. (2008). Both weight-tied GNNs have explicit
+parallel. To reconstruct X1, X0 needs to be computed in            layers and are trained with backpropagation. But the weight-
+advance. After reconstructing the original input vertex fea-       tied reversible GNN reconstructs input vertex features on the
+
+tures, gradients can be derived through backpropagation.
+                           Training Graph Neural Networks with 1000 Layers
+
+fly during backpropagration. Therefore, the memory com-                             32                                                        85.94  Out of Memory
+plexities of the weight-tied residual GNN and weight-tied                                          ResGNN-64 (Baseline)
+reversible GNN are O(LN D) and O(N D), respectively.                                               RevGNN-80 (Ours)
+                                                                                                   RevGNN-224 (Ours)
+
+                                                                                    24
+
+Deep Equilibrium GNNs. An alternative way to train                 GPU Memory (GB)  16                                          86.05
+weight-tied GNNs with O(N D) memory consumption is to
+use implicit differentiation (Scarselli et al., 2008; Bai et al.,                                                                                    87.33  87.41 11GB
+2019), which assumes that the network can reach an equi-
+librium state. We construct a GNN model that is assumed                             8 85.09    85.68    86.62 85.26             86.9          87.02
+to converge to a fixed point Z for any given input:
+                                                                                                        85.16     86.68                                             87.06
+                                                                                               84.65
+                                                                                        83.32
+
+Z = fwDEQ(Z, X, A, U ),    (11)                                                     0   83.47    84.71     84.96         85.31         85.96  85.97  86.23  86.83
+
+                                                                                          3    7        14        28            56            112 224 448 1001
+
+                                                                                                                  Number of Layers
+
+where the state Z represents the transformed node features.        Figure 2. GPU memory consumption vs. number of layers for
+To construct a stable or contractive GNN block, we mimic
+the design of MDEQ (Bai et al., 2020). We build a GNN              ResGNN (Li et al., 2020) and RevGNN, our adaptation with
+block as follows:
+                                                                   reversible connections. RevGNN uses constant memory for
+
+                                                                   deeper networks with more parameters and better performance. We
+
+Z = GraphConv(Zin, A, U )  (12)                                    use width 64 and 80 for ResGNN and RevGNN, respectively, to en-
+
+Z = Norm(Z + X)            (13)                                    sure a similar number of parameters per network depth. Datapoints
+
+                                                                   iasrepraonpnoorttaitoendawl tioththpe,      ROC-AUC          score of the         model and their  size
+                                                                                                               where p is       the number           of parameters.
+Z = GraphConv(Dropout(ReLU(Z )), A, U ) (14)
+
+Zo = Norm(ReLU(Z + Z )),   (15)
+
+where Zin is the input node state, Zo is the output node state,    ResGNN with 112 layers and a channel size of 64 achieves
+X serves as the injected input, and Z forms an internal            85.94% ROC-AUC on ogbn-proteins. However, the mem-
+residual signal to the output Zo. In practice, X represents        ory consumption of ResGNN-64 increases linearly with the
+the initial node features and Zin is initialized to zeros for      number of layers. ResGNN-64 runs out of memory be-
+the first iteration. Similar to DEQ (Bai et al., 2019), the for-   yond 112 layers, making it impossible to investigate deeper
+ward pass of DEQ-GNN is implemented with a root-finding            models with current commodity hardware.
+algorithm (e.g. Broyden's method) and the gradients are ob-
+tained by implicitly differentiating through the equilibrium       Reversible GNN. Our reversible GNN enables training of
+node state for the backward pass.                                  very deep networks with constant memory footprint, as
+                                                                   illustrated in Figure 2 (RevGNN). We use a group size of 2;
+3.4. Analysis of Different Deep GNN Architectures                  since grouping reduces the number of parameters, RevGNN-
+                                                                   80 has roughly the same number of parameters as ResGNN-
+In the following, we compare the different techniques for          64 for the same number of layers. While the baseline model
+building deep GNNs with respect to their performance,              ResGNN-64 cannot go beyond 112 layers due to memory
+memory efficiency and parameter efficiency on the ogbn-            limitations, RevGNN-80 can go to more than 1000 layers
+proteins dataset from the Open Graph Benchmark (OGB)               without additional memory cost and achieves much better
+(Hu et al., 2020). We use the same GNN operator (Li et al.,        accuracy (87.06% ROC-AUC). We can invest the saved
+2020), hyper-parameters (e.g. learning rate, dropout rate,         GPU memory to increase the network width and train a
+training epoch, etc.), and optimizers to make the compar-          higher-capacity model. This model is not only deep (448
+ison as fair as possible. We use mini-batch training with          layers) but also wide (224 channels) and further improves
+random partitioning where graphs are split into 10 parts           performance (87.41% ROC-AUC).
+during training and 5 parts during testing (Li et al., 2020).
+One subgraph is sampled to form a mini-batch at each step.         Weight-tied GNN. We compare the weight-tied ResGNN
+The reported GPU memory corresponds to the peak GPU                (WT-ResGNN) and its reversible counterpart RevGNN (WT-
+memory usage during the first training epoch.                      RevGNN) in Figure 3. Both models have approximately the
+                                                                   same number of parameters and achieve a similar accuracy
+Baseline GNN. We use a recent pre-activation residual              while the reversible model uses significantly less GPU mem-
+GNN (Li et al., 2020), which achieves state-of-the-art per-        ory. Since the parameters are shared across GNN layers, the
+formance across several OGB datasets, as our baseline. For         number of parameters stays constant as the number of layers
+simplicity, we use the max aggregation function for all the        increases. For example, with 112 layers, WT-RevGNN-224
+ablated models on the ogbn-proteins dataset. We refer to           has only 337k parameters, while RevGNN-224 has 17.1M
+the baseline model as ResGNN. As shown in Figure 2, the            parameters. However, training time and GPU memory con-
+                                                                   sumption are similar while the performance of the weight-
+                                                             Training Graph Neural Networks with 1000 Layers
+
+tied model is worse (85.28% vs. 87.41%) due to diminishing                                                terminate when the norm of the objective is smaller than a
+returns after more than 7 layers. Similar to the results in                                               tolerance or amaximum iteration threshold is reached.
+Figure 2, this is evidence of a clear correlation between the                                             is set to 10-6 · BD and 2 × 10-10 · BD for the forward
+number of parameters and performance.                                                                     pass and the backward pass respectively, where B is the
+                                                                                                          number of nodes in the sampled subgraph and D is the chan-
+                 32                                                                                       nel size. The iteration thresholds in the forward pass and
+                                                                                                          the backward pass are set to the same value. We examine
+                            WT-ResGNN-64 (Baseline)                                             83.3      different iteration thresholds for DEQ-GNN with a channel
+                                                                                                          size of 64 (DEQ-GNN-64) and a channel size of 224 (DEQ-
+                            WT-RevGNN-80 (Ours)                                                           GNN-224) in Figure 4. It can be seen that the iteration
+                                                                                                          threshold is crucial for good performance, since it affects
+                                WT-RevGNN-224 (Ours)                                                      the convergence to the equilibrium. We find that DEQ-GNN-
+                 24                                                                                       64 performs similarly to WT-RevGNN-80 with nearly the
+                                                                                                          same number of parameters and memory consumption. The
+GPU Memory (GB)  16                                                    82.91                              wider DEQ-GNN-224 model reaches 85.84% ROC-AUC,
+                                                                                                          which is comparable to the 112-layer ResGNN-64, with
+                                                                              11GB                        only around 28% memory footprint and 23% parameters
+                                                                                                          (Mem: 7.60GB vs. 27.1GB, Params: 537k vs. 2.37M). DEQ-
+                 8 84.95                                83.35                                             GNN-224 slightly outperforms WT-RevGNN-224 with only
+                                                                                                          about 60% of the training time.
+                            85.49              85.33                   85.37                    85.28
+                                                                                                          Discussion. Reversible networks emerge as the most
+                     82.55  83.41              83.67    85.21          83.07                    83.46     promising approach for building deep GNNs that achieve
+                                                                                                          state-of-the-art performance. They consume much less
+                 0   82.76  83.28              83.53    83.1            56                      112       memory than the baseline while achieving comparable per-
+                                                                                                          formance with the same number of parameters (see Figure
+                       3      7                     14       28                                           1). However, in contrast to the baseline method, we are able
+                                                                                                          to train very deep networks with more parameters and much
+                                               Number of Layers                                           better performance without running out of memory. While
+                                                                                                          it is possible to go to arbitrary depths with constant memory
+Figure 3. GPU memory consumption vs. number of layers for                                                 consumption, the training time increases. In order to reduce
+                                                                                                          the number of parameters and inference time, it is possible
+WT-ResGNN and WT-RevGNN. For a given filter size, the num-                                                to increase the group size. However, we find that group
+                                                                                                          sizes larger than 2 do not lead to a performance increase
+ber of parameters is constant regardless of network depth. Our                                            in practice and may even degrade model performance. We
+                                                                                                          conjecture that this is due to the increased receptive field
+reversible architecture has a constant memory footprint regardless                                        of early layers and the smaller number of parameters per
+                                                                                                          memory. We provide an ablation study in the appendix.
+of network depth, while yielding similar accuracy. Datapoints are
+                                                                                                          The weight-tied network limits the number of parameters to
+annotated with              thep,RwOhCe-rAeUpCisstchoerenuomf tbheer  model and their           size  is  a single layer regardless of the effective depth. We find that
+proportional to                                                       of parameters.                      going deeper with tied weights boosts performance, but re-
+                                                                                                          turns eventually diminish (see Figure 3). While parameters
+                 32                                                                                       stay constant, going deeper still increases memory consump-
+                                                                                                          tion, unless the reversible GNN block is used. An extension
+                            WT-ResGNN-64 (Baseline)                                             83.3      of the weight-tied network is the graph equilibrium model.
+                                                                                                          It represents an infinite-depth weight-tied network and uses
+                            DEQ-GNN-64 (Ours)                                                             fixed-point iterations to solve for the optimal weights. This
+                                                                                                          allows for much wider channel size with the same amount
+                                DEQ-GNN-224 (Ours)                                                        of memory. DEQ-GNNs are faster to train, but have more
+                 24                                                                                       hyper-parameters to tune. Please refer to the appendix for
+                                                                                                          a training time ablation. We find that pretraining is not
+GPU Memory (GB)  16                                                    82.91                              necessary, but can further improve the results. The results
+                                                                                                          reported in this paper are without pretraining for fair com-
+                 8 81.67    85.06              85.6     83.35          85.84  11GB                        parison. While weight-tied GNNs and equilibrium GNNs
+
+                            83.41                       85.32          83.17          85.55
+                            82.82
+                     79.04                     83.67                    56            83.38
+                              7
+                 0   82.76                     82.88    83.66                        112
+
+                       3                            14       28
+
+                                          Number of Layers/Iterations
+
+Figure 4. GPU memory vs. number of layers/iterations for Res-
+
+GNN and                     DEQ-GNN.      Datapoints are     parnonpootrattieodnawl tioththpe,  ROC-
+AUC score                   of the model  and their size is                                     where
+
+p is the number of parameters.
+
+Equilibrium GNN. Equilibrium networks implicitly model
+a weight-tied network with infinite depth. As a result, they
+only have the parameter and memory footprint of a single
+layer, but the expressiveness of a very deep network. The
+initial node features X are used as input injection and the
+initial node states Z are set to zero. We implement our
+DEQ-GNN based on the original DEQ implementation for
+CNNs (Bai et al., 2019). Broyden's root-finding method
+is used (Broyden, 1965) in both the forward pass and the
+backward pass to find the equilibrium node states and ap-
+proximate the inverse Jacobian. The Broyden iterations
+Training Graph Neural Networks with 1000 Layers
+
+are not able to achieve state-of-the-art performance, they       Table 1. Results on the ogbn-proteins dataset compared to
+are very parameter-efficient, which may be relevant for ap-      SOTA. RevGNN-Deep has 1001 layers with 80 channels each.
+plications on embedded devices where model size matters.         It achieves SOTA performance with minimal GPU memory for
+                                                                 training. RevGNN-Wide has 448 layers with 224 channels each. It
+4. Over-parameterized Deep GNNs                                  achieves the best accuracy while consuming a moderate amount of
+                                                                 GPU memory.
+We conduct experiments on several datasets from the Open
+Graph Benchmark (OGB) (Hu et al., 2020). We first show           Model               ROC-AUC  Mem  Params
+state-of-the art results on several datasets with the proposed
+deep reversible GNN. We then apply the reversible GNN            GCN (Kipf & Welling) 72.51 ± 0.35 4.68 96.9k
+framework to different GNN operators on the ogbn-arxiv
+dataset. To show how mini-batch sampling can further aid         GraphSAGE (Hamilton et al.) 77.68 ± 0.20 3.12 193k
+the training of deep GNNs, we compare full-batch and mini-
+batch training of reversible GNNs on the ogbn-products           DeeperGCN (Li et al.) 86.16 ± 0.16 27.1 2.37M
+dataset. The data splits and evaluation metrics on all datasets
+follow the OGB evaluation protocol. Mean and standard de-        UniMP (Shi et al.)  86.42 ± 0.08 27.2 1.91M
+viation are obtained across 10 trials. All the ablated models
+use the same hyper-parameters (e.g. learning rate, dropout       GAT (Velickovic´ et al.) 86.82 ± 0.21 6.74 2.48M
+rate, training epoch, etc.) and optimizers as the baseline
+models. The implementation of all the reversible models is       UniMP+CEF (Shi et al.) 86.91 ± 0.18 27.2 1.96M
+based on PyTorch (Paszke et al., 2019) and supports both
+PyTorch Geometric (PyG) (Fey & Lenssen, 2019) and Deep           Ours (RevGNN-Deep) 87.74 ± 0.13 2.86 20.03M
+Graph Libray (DGL) (Wang et al., 2019a) frameworks.              Ours (RevGNN-Wide) 88.24 ± 0.15 7.91 68.47M
+
+4.1. State-of-the-art Results                                    an important step forward in developing over-parameterized
+                                                                 GNNs for graphs.
+We briefly describe two variants of our RevGNN with re-
+versible connections, which reach new SOTA results on the        Our RevGNNs also achieve new SOTA results on the ogbn-
+ogbn-proteins dataset of the OGB leaderboard (Hu et al.,         arxiv dataset (see Table 2). RevGCN-Deep uses 28 GCN
+2020) (Table 1) at the time of submission. RevGNN-Deep           (Kipf & Welling, 2017) layers with 128 channels each and
+has 1001 layers and a channel size of 80. It outperforms the     achieves an accuracy of 73.01%, while only using 1.84GB
+previous SOTA method UniMP+CEF by 0.83% ROC-AUC,                 of GPU memory. RevGAT-Wide uses 5 attention layers
+while using only 10.5% of the GPU memory for training.           with 3 heads and 356 channels for each head and out-
+RevGNN-Wide uses 448 GNN layers and 224 hidden chan-             performs the current top performer UniMP v2 (Shi et al.,
+nels and significantly outperforms UniMP+CEF by 1.33%            2020) (74.05% vs. 73.97%) while using about a third of the
+ROC-AUC with about 29% of the GPU memory. RevGNN-                memory (8.49GB vs. 25.0GB). RevGAT-SelfKD uses self-
+Deep uses the same training setting as mentioned in Section      knowledge distillation (Zhang et al., 2019) with 5 attention
+3.4. The RevGNN-Wide uses a larger dropout rate of 0.2           layers, 3 heads, and 256 channels each. The teacher models
+to prevent overfitting. To boost the performance, the results    achieve an accuracy of 74.02%. After training with distilla-
+of RevGNN-Deep and RevGNN-Wide are obtained using                tion, the student models set a new SOTA with 74.26% test
+multi-view inferences with 10 views on larger subgraphs          accuracy. Please refer to the appendix for more details.
+with a partition size of 3. We perform the inferences on a
+NVIDIA RTX A6000 (48GB). Please refer to the appendix            4.2. Application to Different GNN Operators
+for the details of multi-view inference. Larger and deeper
+models incur a cost in terms of training and inference time.     The proposed techniques are generic and can in principle
+RevGNN-Deep and RevGNN-Wide take 13.5 days and 17.1              be applied to any SOTA GNN to further boost the perfor-
+days, respectively, to train for 2000 epochs on a single         mance with deeper and wider architectures while saving
+NVIDIA V100. Nonetheless, it is affordable for accuracy-         GPU memory. We show this for the example of reversible
+critical applications in scientific research such as predicting  GNNs and build RevGNNs with different SOTA GNN oper-
+protein structures (Senior et al., 2020). We demonstrate         ators: GAT (Velickovic´ et al., 2018), GCN (Kipf & Welling,
+that it is possible to train huge over-parameterized GNN         2017), GraphSAGE (Hamilton et al., 2017), and ResGEN
+models on a single GPU. The RevGNN-Wide model has                (Li et al., 2020). We compare them to their non-reversible
+68.47 million parameters, which is about half the size of the    residual counterparts on the ogbn-arxiv in Table 3. Since
+GPT language model (Radford et al.). We believe that this is     ogbn-arxiv is much smaller than the ogbn-proteins, we are
+                                                                 able to run all experiments with full-batch training and re-
+                                                                 port statistics across 10 training runs. We observe that all of
+                                                                 the RevGNNs consistently outperform their vanilla residual
+                                                                 counterparts with the same channel size. The RevGNNs
+                                                                 use less memory due to reversible connections and fewer
+                                                                 parameters due to grouping. We increase the channel size of
+                                                                 RevGNNs to roughly match the number of parameters of the
+                                             Training Graph Neural Networks with 1000 Layers
+
+Table 2. Results on the ogbn-arxiv dataset compared to SOTA.                                                                   Table 3. Results with different GNN operators on the ogbn-
+RevGCN-Deep has 28 layers with 128 channels each. It achieves                                                                  arxiv. All GAT models use label propagation. #L and #Ch denote
+SOTA performance with minimal GPU memory. RevGAT-Wide                                                                          the number of layers and channels respectively. Baselines are in
+has 5 layers with 1068 channels each. RevGAT-SelfKD denotes                                                                    italic.
+the student models with 5 layers and 768 channels. It achieves
+the best accuracy while consuming a moderate amount of GPU                                                                     Model #L #Ch ACC  Mem  Params
+memory.
+                                                                                                                               ResGCN 28 128 72.46 ± 0.29 11.15  491k
+                               Model         ACC  Mem  Params                                                                  RevGCN 28 128 73.01 ± 0.31 1.84   262k
+                                                                                                                               RevGCN 28 180 73.22 ± 0.19 2.73   500k
+
+GraphSAGE (Hamilton et al.) 71.49 ± 0.27 1.99 219k                                                                             ResSAGE 28 128 72.46 ± 0.29 8.93  950k
+    GCN (Kipf & Welling) 71.74 ± 0.29 1.90 143k                                                                                RevSAGE 28 128 72.69 ± 0.23 1.17  491k
+     DAGNN (Liu et al.) 72.09 ± 0.25 2.40 43.9k                                                                                RevSAGE 28 180 72.73 ± 0.10 1.57  953k
+    DeeperGCN (Li et al.) 72.32 ± 0.27 21.6 491k
+      GCNII (Chen et al.) 72.74 ± 0.16 17.0 2.15M                                                                              ResGEN 28 128 72.32 ± 0.27 21.63  491k
+    GAT (Velickovic´ et al.) 73.91 ± 0.12 5.52 1.44M                                                                           RevGEN 28 128 72.34 ± 0.18 4.08   262k
+    UniMP v2 (Shi et al.) 73.97 ± 0.15 25.0 687k                                                                               RevGEN 28 180 72.93 ± 0.10 5.67   500k
+
+                  Ours (RevGCN-Deep) 73.01 ± 0.31 1.84 262k                                                                    ResGAT 5 768 73.76 ± 0.13 9.96 3.87M
+                  Ours (RevGAT-Wide) 74.05 ± 0.11 8.49 3.88M                                                                   RevGAT 5 768 74.02 ± 0.18 6.30 2.10M
+                 Ours (RevGAT-SelfKD) 74.26 ± 0.17 6.60 2.10M                                                                  RevGAT 5 1068 74.05 ± 0.11 8.49 3.88M
+
+GPU Memory (GB)  32 32GB       76.43  Out of Memory MFuilnl-ib-baatctchh++RReessGGNNNNO-1-u12t288o(fB(BMaasesemelilnionere)y)  we can use our techniques in conjunction with mini-batch
+                               78.42                       Full-Batch+RevGNN-160 (Ours)                                        training to further optimize memory. We conduct an ablation
+                 24                                        Mini-batch+RevGNN-160 (Ours)                                        study on the ogbn-products dataset (Hu et al., 2020) with
+                               77.08                                                                                           full-batch training and a simple random-clustering mini-
+                        73.25  79.16                                                        81.31                              batch training for ResGNNs and RevGNNs. The test results
+                                                                                                                               are reported in Figure 5 with full-batch inference. Com-
+                 16 66.96             78.77  78.77      78.71  78.03                                                           pared to full-batch training, we find that mini-batch training
+                                      81.05  81.81                                                                             further reduces the memory consumption of RevGNN to
+                        67.89                                                                                                  44% and improves its accuracy from 78.77% to 82.16%.
+                                                               11GB
+                  8 72.98                                                                                                      4.4. Analysis of Complexities
+                                      80.79  81.27      81.45  82.16
+                                                                                                                               We have discussed the memory complexity of full-batch
+                 01            3      7      14         28           56                                                        GNNs, GraphSAGE (Hamilton et al., 2017), VR-GCN
+                                                                                                                               (Chen et al., 2018b), FastGCN (Chen et al., 2018a), Cluster-
+                                      Number of Layers                                                                         GCN (Chiang et al., 2019) and GraphSAINT (Zeng et al.,
+                                                                                                                               2020) in the related work section, and the memory complex-
+Figure 5. GPU memory consumption vs. number of layers for                                                                      ity of our Reversible GNN, Weight-tied GNN and DEQ-
+ResGNN (Li et al., 2020) and RevGNN with full-batch and                                                                        GNN in the methodology section. We summarize the theo-
+mini-batch training on the ogbn-products. RevGNN uses con-                                                                     retical memory complexity in Table 4, where L is the num-
+stant memory for deeper networks with more parameters and better                                                               ber of layers of the GNN, D is the size of hidden channels,
+performance. We use a width of 128 and 160 for ResGNN and                                                                      N is of the number of nodes in the graph, B is the batch size
+RevGNN, respectively, to ensure a similar number of parameters                                                                 of nodes and R is the number of sampled neighbors of each
+opef rthneetmwoodrkeldaenpdthth. eDirastiazpeoiisntpsroarpeoratnionnoatal tteodwpi,thwthheereacpcuisrathcye                    node. K is the maximum Broyden iterations for equilibrium
+number of parameters.                                                                                                          GNNs. We only discuss the memory complexity for storing
+                                                                                                                               intermediate node features in each layer since the memory
+corresponding ResGNNs, thus increasing the performance                                                                         footprint of the network parameters is negligible. All prior
+gap further. For instance, the RevGCN with 28 layers and                                                                       works suffer from memory consumption with respect to the
+180 channels reduces the memory footprint by more than                                                                         number of layers, while the memory consumption of our
+75% while improving the accurracy by 0.76%, as compared                                                                        methods is independent of the depth. Our methods can also
+to the ResGCN with 28 layers and 128 channels. Utilizing                                                                       be combined with mini-batch sampling methods to further
+label propagation, the RevGAT with 5 layers and 1068 chan-                                                                     reduce the memory complexity with respect to the num-
+nels (3 attention heads with 356 channels for each head)                                                                       ber of nodes. We also include the parameter complexity
+achieves SOTA results on ogbn-arxiv.                                                                                           and time complexity in Table 4. Note that although the
+
+4.3. Full-batch vs. Mini-batch Training
+
+Our method is orthogonal to existing sampling-based ap-
+proaches, which also reduce memory consumption. Hence,
+        Training Graph Neural Networks with 1000 Layers
+
+Table 4. Comparison of complexities. L is the number of layers, D is the number of hidden channels, N is of the number of nodes, B is
+the batch size of nodes and R is the number of sampled neighbors of each node. K is the maximum Broyden iterations.
+
+Method                         Memory Params                           Time
+
+            Full-batch GNN      O(LN D)                        O(LD2)         O(L A 0 D + LN D2)
+              GraphSAGE        O(RLBD)                         O(LD2)                O(RLN D2)
+                VR-GCN          O(LN D)                        O(LD2)
+                FastGCN        O(LRBD)                         O(LD2)  O(L A 0 D + LN D2 + RLN D2)
+             Cluster-GCN        O(LBD)                         O(LD2)                O(RLN D2)
+             GraphSAINT         O(LBD)                         O(LD2)
+                                O(LN D)                         O(D2)         O(L A 0 D + LN D2)
+           Weight-tied GNN                                                    O(L A 0 D + LN D2)
+                                 O(N D)                        O(LD2)         O(L A 0 D + LN D2)
+                RevGNN           O(N D)                         O(D2)
+             WT-RevGNN           O(N D)                         O(D2)         O(L A 0 D + LN D2)
+               DEQ-GNN                                                        O(L A 0 D + LN D2)
+                                 O(BD)                         O(LD2)        O(K A 0 D + KN D2)
+  RevGNN + Subgraph Sampling     O(BD)                          O(D2)
+WT-RevGNN + Subgraph Sampling    O(BD)                          O(D2)         O(L A 0 D + LN D2)
+ DEQ-GNN + Subgraph Sampling                                                  O(L A 0 D + LN D2)
+                                                                             O(K A 0 D + KN D2)
+
+time complexity of RevGNN is the same as for the vanilla       5. Conclusion and Discussion
+GNNs, it has a larger constant term. This is due to the input
+that needs to be reconstructed during the backward pass.       This work addresses a fundamental bottleneck of current
+Both the memory complexity and parameter complexity of         deep GNNs: their high GPU memory consumption. We
+WT-RevGNN and DEQ-GNN is independent of L.                     investigate several techniques to reduce the memory com-
+                                                               plexity with respect to network depth (L) from O(L) to
+4.5. More Ablation Studies                                     O(1). In particular, reversible GNNs enable networks that
+                                                               are an order of magnitude deeper than current SOTA models.
+Comparison with SGC & SIGN on Ogbn-products. We                Since there is no memory cost associated with depth, the
+compare RevGNN with SGC (Wu et al., 2019) and SIGN             width can be increased for additional representational power.
+(Frasca et al., 2020) on ogbn-products. The test accuracies    As a result, we can train over-parameterized networks that
+(%) of SGC, SIGN and RevGNN on ogbn-products are:              significantly outperform current models on standard bench-
+74.87 ± 0.25 (SGC), 77.60 ± 0.13 (SIGN) and 82.16 ± 0.15       marks while consuming less memory.
+(RevGNN) respectively. The results of SGC and SIGN are
+obtained from the SIGN paper (Frasca et al., 2020). We train   However, this comes at an additional cost in training time.
+the RevGNN with 56 layers and 160 hidden channels in a         While this cost is less than 40%, it can extend the training
+random-clustering mini-batch training fashion. We find that    time by several days on very large datasets. In addition,
+RevGNN outperforms SGC and SIGN by a large margin.             current GNNs are usually trained for thousands of epochs
+                                                               to achieve SOTA performance. Reducing the training time
+Results of RevGNN on Ogbg-ppa. We trained ResGNN               of GNNs is an interesting avenue for future research. Please
+and RevGNN with 28 layers and similar number of parame-        refer to the appendix for more details about the opportunities
+ters ( 2.3M) on the ogbg-ppa dataset. Both achieve around      for future work and further discussion on topics like gradient
+77% test accuracy, but RevGNN uses only 16% GPU mem-           checkpointing, model parallelism, etc. In the appendix, we
+ory compared to ResGNN.                                        also provide all the experimental details and further ablation
+                                                               studies.
+Comparison of Normalizations on Ogbg-molhiv. We
+conduct an ablation study on ogbg-molhiv for comparing         Acknowledgments
+using BatchNorm (Ioffe & Szegedy, 2015) or GraphNorm
+(Cai et al., 2020) for RevGNN on graph property prediction.    The authors thank Shaojie Bai, researchers at Intel ISL, the
+We train RevGNN with 14 layers and 256 hidden chan-            reviewers, and area chairs for their helpful suggestions. This
+nels. Dropout layers with a rate of 0.3 are used. Learnable    project is partially funded by the King Abdullah University
+SoftMax aggregation functions (Li et al., 2020) are used       of Science and Technology (KAUST) Office of Sponsored
+for message aggregation. The RevGNN with GraphNorm             Research under Award No. OSR-CRG2019-4033.
+achieves 78.62 ROC-AUC which outperforms the RevGNN
+with BatchNorm (77.82 ROC-AUC) slightly.
+Training Graph Neural Networks with 1000 Layers
+
+References                                                       Chen, J., Zhu, J., and Song, L. Stochastic training of graph
+                                                                    convolutional networks with variance reduction. In Inter-
+Bai, S., Kolter, J. Z., and Koltun, V. Trellis networks for se-     national Conference on Machine Learning, pp. 941­949,
+   quence modeling. In International Conference on Learn-           2018b.
+   ing Representations, 2018.
+                                                                 Chen, M., Wei, Z., Huang, Z., Ding, B., and Li, Y. Simple
+Bai, S., Kolter, J. Z., and Koltun, V. Deep equilibrium             and deep graph convolutional networks. In Proceedings of
+   models. In Advances in Neural Information Processing             the 37th International Conference on Machine Learning,
+  Systems, 2019.                                                   volume 119, pp. 1725­1735, 2020.
+
+Bai, S., Koltun, V., and Kolter, J. Z. Multiscale deep equi-     Chiang, W.-L., Liu, X., Si, S., Li, Y., Bengio, S., and Hsieh,
+   librium models. In Advances in Neural Information Pro-           C.-J. Cluster-gcn: An efficient algorithm for training
+   cessing Systems, 2020.                                           deep and large graph convolutional networks. In Proceed-
+                                                                    ings of the 25th ACM SIGKDD International Conference
+Belkin, M., Hsu, D., Ma, S., and Mandal, S. Reconcil-               on Knowledge Discovery & Data Mining, pp. 257­266,
+   ing modern machine-learning practice and the classical           2019.
+   bias­variance trade-off. Proceedings of the National
+  Academy of Sciences, 116(32), 2019.                            Defferrard, M., Bresson, X., and Vandergheynst, P. Con-
+                                                                   volutional neural networks on graphs with fast localized
+Bojchevski, A., Klicpera, J., Perozzi, B., Kapoor, A., Blais,       spectral filtering. In Advances in neural information pro-
+   M., Ro´zemberczki, B., Lukasik, M., and Gu¨nnemann, S.           cessing systems, pp. 3844­3852, 2016.
+   Scaling graph neural networks with approximate pager-
+   ank. In Proceedings of the 26th ACM SIGKDD Inter-             Devlin, J., Chang, M.-W., Lee, K., and Toutanova, K. Bert:
+   national Conference on Knowledge Discovery & Data                Pre-training of deep bidirectional transformers for lan-
+  Mining, pp. 2464­2473, 2020.                                      guage understanding. In Proceedings of the 2019 Confer-
+                                                                    ence of the North American Chapter of the Association
+Brown, T., Mann, B., Ryder, N., Subbiah, M., Kaplan, J. D.,         for Computational Linguistics: Human Language Tech-
+   Dhariwal, P., Neelakantan, A., Shyam, P., Sastry, G.,            nologies, volume 1, pp. 4171­4186, 2019.
+  Askell, A., Agarwal, S., Herbert-Voss, A., Krueger, G.,
+   Henighan, T., Child, R., Ramesh, A., Ziegler, D., Wu, J.,     Dwivedi, V. P., Joshi, C. K., Laurent, T., Bengio, Y., and
+  Winter, C., Hesse, C., Chen, M., Sigler, E., Litwin, M.,          Bresson, X. Benchmarking graph neural networks. arXiv
+   Gray, S., Chess, B., Clark, J., Berner, C., McCandlish,          preprint arXiv:2003.00982, 2020.
+   S., Radford, A., Sutskever, I., and Amodei, D. Language
+   models are few-shot learners. In Larochelle, H., Ran-         Fey, M. and Lenssen, J. E. Fast graph representation learning
+   zato, M., Hadsell, R., Balcan, M. F., and Lin, H. (eds.),       with PyTorch Geometric. In ICLR Workshop on Repre-
+  Advances in Neural Information Processing Systems, vol-           sentation Learning on Graphs and Manifolds, 2019.
+   ume 33, pp. 1877­1901, 2020.
+                                                                 Frasca, F., Rossi, E., Eynard, D., Chamberlain, B., Bron-
+Broyden, C. G. A class of methods for solving nonlinear             stein, M., and Monti, F. Sign: Scalable inception graph
+   simultaneous equations. Mathematics of computation, 19           neural networks. In ICML 2020 Workshop on Graph
+  (92):577­593, 1965.                                              Representation Learning and Beyond, 2020.
+
+Bruna, J., Zaremba, W., Szlam, A., and Lecun, Y. Spectral        Gao, H., Wang, Z., and Ji, S. Large-scale learnable graph
+   networks and locally connected networks on graphs. In            convolutional networks. In Proceedings of the 24th ACM
+  International Conference on Learning Representations,            SIGKDD International Conference on Knowledge Dis-
+   2014.                                                            covery & Data Mining, pp. 1416­1424, 2018.
+
+Cai, T., Luo, S., Xu, K., He, D., Liu, T.-y., and Wang,          Gilmer, J., Schoenholz, S. S., Riley, P. F., Vinyals, O., and
+   L. Graphnorm: A principled approach to acceler-                  Dahl, G. E. Neural message passing for quantum chem-
+   ating graph neural network training. arXiv preprint              istry. In Proceedings of the 34th International Conference
+   arXiv:2009.03294, 2020.                                          on Machine Learning, 2017.
+
+Chen, J., Ma, T., and Xiao, C. Fastgcn: Fast learning with       Gomez, A. N., Ren, M., Urtasun, R., and Grosse, R. B. The
+   graph convolutional networks via importance sampling.            reversible residual network: Backpropagation without
+   In International Conference on Learning Representations,         storing activations. In Advances in Neural Information
+   2018a.                                                          Processing Systems, 2017.
+Training Graph Neural Networks with 1000 Layers
+
+Gong, S., Bahri, M., Bronstein, M. M., and Zafeiriou, S.        Kipf, T. N. and Welling, M. Semi-supervised classifica-
+   Geometrically principled connections in graph neural            tion with graph convolutional networks. In International
+   networks. In Proceedings of the IEEE/CVF Conference            Conference on Learning Representations, 2017.
+   on Computer Vision and Pattern Recognition, pp. 11415­
+  11424, 2020.                                                  Kitaev, N., Kaiser, L., and Levskaya, A. Reformer: The
+                                                                   efficient transformer. In International Conference on
+Gori, M., Monfardini, G., and Scarselli, F. A new model           Learning Representations, 2019.
+   for learning in graph domains. In Proceedings. 2005
+  IEEE International Joint Conference on Neural Networks,       Klicpera, J., Bojchevski, A., and Gu¨nnemann, S. Predict
+  2005., volume 2, pp. 729­734. IEEE, 2005.                        then propagate: Graph neural networks meet personal-
+                                                                   ized pagerank. In International Conference on Learning
+Hamilton, W., Ying, Z., and Leskovec, J. Inductive repre-         Representations, 2019.
+   sentation learning on large graphs. In Advances in neural
+   information processing systems, pp. 1024­1034, 2017.         Krizhevsky, A., Sutskever, I., and Hinton, G. E. Imagenet
+                                                                   classification with deep convolutional neural networks.
+Hasanzadeh, A., Hajiramezanali, E., Boluki, S., Zhou, M.,         Advances in neural information processing systems, 25:
+   Duffield, N., Narayanan, K., and Qian, X. Bayesian graph       1097­1105, 2012.
+   neural networks with adaptive connection sampling. In
+  International Conference on Machine Learning, pp. 4094­       Leemput, S. C. v., Teuwen, J., Ginneken, B. v., and Man-
+  4104. PMLR, 2020.                                                niesing, R. Memcnn: A python/pytorch package for creat-
+                                                                   ing memory-efficient invertible neural networks. Journal
+He, K., Zhang, X., Ren, S., and Sun, J. Deep residual learn-       of Open Source Software, 4(39):1576, 7 2019. ISSN
+   ing for image recognition. In Proceedings of the IEEE           2475-9066.
+   conference on computer vision and pattern recognition,
+   pp. 770­778, 2016.                                           Lepikhin, D., Lee, H., Xu, Y., Chen, D., Firat, O., Huang, Y.,
+                                                                   Krikun, M., Shazeer, N., and Chen, Z. Gshard: Scaling
+Henaff, M., Bruna, J., and LeCun, Y. Deep convolu-                 giant models with conditional computation and automatic
+   tional networks on graph-structured data. arXiv preprint        sharding. In International Conference on Learning Rep-
+   arXiv:1506.05163, 2015.                                         resentations, 2021.
+
+Hu, W., Fey, M., Zitnik, M., Dong, Y., Ren, H., Liu, B.,        Levie, R., Monti, F., Bresson, X., and Bronstein, M. M.
+   Catasta, M., and Leskovec, J. Open graph benchmark:             Cayleynets: Graph convolutional neural networks with
+   Datasets for machine learning on graphs. In Advances in         complex rational spectral filters. IEEE Transactions on
+  Neural Information Processing Systems, volume 33, pp.           Signal Processing, 67(1):97­109, 2018.
+   22118­22133, 2020.
+                                                                Li, G., Mu¨ller, M., Thabet, A., and Ghanem, B. Deepgcns:
+Hu, W., Fey, M., Ren, H., Nakata, M., Dong, Y.,                    Can gcns go as deep as cnns? In The IEEE International
+   and Leskovec, J. Ogb-lsc: A large-scale challenge              Conference on Computer Vision, 2019.
+   for machine learning on graphs. arXiv preprint
+   arXiv:2103.09430, 2021.                                      Li, G., Xiong, C., Thabet, A., and Ghanem, B. Deep-
+                                                                   ergcn: All you need to train deeper gcns. arXiv preprint
+Huang, G., Liu, Z., Van Der Maaten, L., and Weinberger,            arXiv:2006.07739, 2020.
+   K. Q. Densely connected convolutional networks. In
+  Proceedings of the IEEE conference on computer vision         Li, G., Mu¨ller, M., Qian, G., Perez, I. C. D., Abualshour,
+   and pattern recognition, pp. 4700­4708, 2017.                  A., Thabet, A. K., and Ghanem, B. Deepgcns: Making
+                                                                   gcns go as deep as cnns. IEEE Transactions on Pattern
+Inan, H., Khosravi, K., and Socher, R. Tying word vectors         Analysis and Machine Intelligence, 2021.
+   and word classifiers: A loss framework for language mod-
+   eling. In Proceedings of the 5th International Conference    Li, Q., Han, Z., and Wu, X. Deeper Insights into Graph
+   on Learning Representations, 2017.                              Convolutional Networks for Semi-Supervised Learning.
+                                                                   In The Thirty-Second AAAI Conference on Artificial In-
+Ioffe, S. and Szegedy, C. Batch normalization: Accelerating        telligence, 2018.
+   deep network training by reducing internal covariate shift.
+   arXiv preprint arXiv:1502.03167, 2015.                       Li, R., Wang, S., Zhu, F., and Huang, J. Adaptive graph
+                                                                   convolutional neural networks. In Thirty-second AAAI
+Khamsi, M. A. and Kirk, W. A. An introduction to metric            conference on artificial intelligence, 2018.
+   spaces and fixed point theory, volume 53. John Wiley &
+   Sons, 2001.
+Training Graph Neural Networks with 1000 Layers
+
+Liu, J., Kumar, A., Ba, J., Kiros, J., and Swersky, K. Graph    Rong, Y., Huang, W., Xu, T., and Huang, J. Dropedge:
+   normalizing flows. Advances in Neural Information Pro-         Towards deep graph convolutional networks on node clas-
+   cessing Systems, 2019.                                          sification. In International Conference on Learning Rep-
+                                                                   resentations, 2020.
+Liu, M., Gao, H., and Ji, S. Towards deeper graph neural
+   networks. In Proceedings of the 26th ACM SIGKDD              Scarselli, F., Gori, M., Tsoi, A. C., Hagenbuchner, M., and
+  International Conference on Knowledge Discovery &                Monfardini, G. The graph neural network model. IEEE
+  Data Mining, pp. 338­348, 2020.                                  transactions on neural networks, 20(1):61­80, 2008.
+
+Monti, F., Boscaini, D., Masci, J., Rodola, E., Svoboda, J.,    Senior, A. W., Evans, R., Jumper, J., Kirkpatrick, J., Sifre,
+   and Bronstein, M. M. Geometric deep learning on graphs          L., Green, T., Qin, C., Z ´idek, A., Nelson, A. W., Bridg-
+   and manifolds using mixture model cnns. In Proceedings          land, A., et al. Improved protein structure prediction
+   of the IEEE Conference on Computer Vision and Pattern           using potentials from deep learning. Nature, 577(7792):
+  Recognition, pp. 5115­5124, 2017.                               706­710, 2020.
+
+Neyshabur, B., Li, Z., Bhojanapalli, S., LeCun, Y., and         Shchur, O., Mumme, M., Bojchevski, A., and Gu¨nnemann,
+   Srebro, N. The role of over-parametrization in general-         S. Pitfalls of graph neural network evaluation. Relational
+   ization of neural networks. In International Conference        Representation Learning Workshop, NeurIPS, 2018.
+   on Learning Representations, 2019.
+                                                                Shi, Y., Huang, Z., Wang, W., Zhong, H., Feng, S., and Sun,
+Niepert, M., Ahmed, M., and Kutzkov, K. Learning con-             Y. Masked label prediction: Unified message passing
+  volutional neural networks for graphs. In International          model for semi-supervised classification. arXiv preprint
+   conference on machine learning, pp. 2014­2023, 2016.            arXiv:2009.03509, 2020.
+
+Oono, K. and Suzuki, T. Graph neural networks exponen-          Velickovic´, P., Cucurull, G., Casanova, A., Romero, A.,
+   tially lose expressive power for node classification. In        Lio`, P., and Bengio, Y. Graph attention networks. In
+  International Conference on Learning Representations,           International Conference on Learning Representations,
+   2019.                                                           2018.
+
+Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J.,      Wang, K., Shen, I., Huang, C., Wu, C.-H., Dong, Y., and
+   Chanan, G., Killeen, T., Lin, Z., Gimelshein, N., Antiga,       Kanakia, A. Microsoft academic graph: when experts are
+   L., Desmaison, A., Kopf, A., Yang, E., DeVito, Z., Rai-         not enough. Quantitative Science Studies, 1(1):396­413,
+   son, M., Tejani, A., Chilamkurthy, S., Steiner, B., Fang,       February 2020.
+   L., Bai, J., and Chintala, S. Pytorch: An imperative
+   style, high-performance deep learning library. In Wal-       Wang, M., Zheng, D., Ye, Z., Gan, Q., Li, M., Song, X.,
+   lach, H., Larochelle, H., Beygelzimer, A., d'Alche´-Buc,        Zhou, J., Ma, C., Yu, L., Gai, Y., Xiao, T., He, T., Karypis,
+   F., Fox, E., and Garnett, R. (eds.), Advances in Neural In-     G., Li, J., and Zhang, Z. Deep graph library: A graph-
+   formation Processing Systems 32, pp. 8024­8035. Curran          centric, highly-performant package for graph neural net-
+  Associates, Inc., 2019.                                         works. arXiv preprint arXiv:1909.01315, 2019a.
+
+Press, O. and Wolf, L. Using the output embedding to            Wang, Y., Sun, Y., Liu, Z., Sarma, S. E., Bronstein, M. M.,
+   improve language models. In Proceedings of the 15th             and Solomon, J. M. Dynamic graph cnn for learning on
+  Conference of the European Chapter of the Association            point clouds. ACM Transactions on Graphics (TOG), 38
+   for Computational Linguistics: Volume 2, Short Papers,         (5):1­12, 2019b.
+   pp. 157­163, 2017.
+                                                                Wang, Y., Jin, J., Zhang, W., Yu, Y., Zhang, Z., and Wipf,
+Radford, A., Narasimhan, K., Salimans, T., and Sutskever,          D. Bag of tricks for node classification with graph neural
+   I. Improving language understanding by generative pre-          networks. arXiv preprint arXiv:2103.13355, 2021.
+   training.
+                                                                Wu, F., Souza, A., Zhang, T., Fifty, C., Yu, T., and Wein-
+Rasley, J., Rajbhandari, S., Ruwase, O., and He, Y. Deep-          berger, K. Simplifying graph convolutional networks. In
+   speed: System optimizations enable training deep learn-        International conference on machine learning, pp. 6861­
+   ing models with over 100 billion parameters. In Proceed-        6871. PMLR, 2019.
+   ings of the 26th ACM SIGKDD International Conference
+   on Knowledge Discovery & Data Mining, pp. 3505­3506,         Xie, S., Girshick, R., Dolla´r, P., Tu, Z., and He, K. Aggre-
+   2020.                                                           gated residual transformations for deep neural networks.
+                                                                   In Proceedings of the IEEE conference on computer vi-
+                                                                   sion and pattern recognition, pp. 1492­1500, 2017.
+                                                Training Graph Neural Networks with 1000 Layers
+
+Xu, K., Li, C., Tian, Y., Sonobe, T., Kawarabayashi, K.,
+   and Jegelka, S. Representation learning on graphs with
+   jumping knowledge networks. In Proceedings of the 35th
+  International Conference on Machine Learning, 2018.
+
+Xu, K., Hu, W., Leskovec, J., and Jegelka, S. How powerful
+   are graph neural networks? In International Conference
+   on Learning Representations, 2019.
+
+Xu, K., Zhang, M., Jegelka, S., and Kawaguchi, K. Opti-
+   mization of graph neural networks: Implicit acceleration
+   by skip connections and more depth. arXiv preprint
+   arXiv:2105.04550, 2021.
+
+Yang, Z., Cohen, W., and Salakhudinov, R. Revisiting
+   semi-supervised learning with graph embeddings. In
+  International conference on machine learning, pp. 40­48.
+   PMLR, 2016.
+
+Yu, F. and Koltun, V. Multi-scale context aggregation by
+   dilated convolutions. In International Conference on
+  Learning Representations, 2016.
+
+Zeng, H., Zhou, H., Srivastava, A., Kannan, R., and
+   Prasanna, V. GraphSAINT: Graph sampling based in-
+   ductive learning method. In International Conference on
+  Learning Representations, 2020.
+
+Zhang, L., Song, J., Gao, A., Chen, J., Bao, C., and Ma,
+   K. Be your own teacher: Improve the performance of
+   convolutional neural networks via self distillation. In
+  Proceedings of the IEEE/CVF International Conference
+   on Computer Vision, October 2019.
+
+Zhao, L. and Akoglu, L. Pairnorm: Tackling oversmooth-
+   ing in gnns. In International Conference on Learning
+  Representations, 2019.
+
+Zhou, K., Huang, X., Li, Y., Zha, D., Chen, R., and Hu, X.
+  Towards deeper graph neural networks with differentiable
+   group normalization. Advances in Neural Information
+  Processing Systems, 33, 2020.
+
+Zitnik, M. and Leskovec, J. Predicting multicellular function
+   through multi-layer tissue networks. Bioinformatics, 33
+  (14):i190­i198, 2017.
+                  Training Graph Neural Networks with 1000 Layers
+
+A. Grouping of RevGNN                                           Table 6. Results on the ogbn-proteins dataset for various 112-
+                                                                layer networks. Note that DEQ-GNN always has only a single
+Grouped convolution is an effective way to reduce the pa-       layer that approximates an infinitely deep network. Each network
+rameter complexity in CNNs. We provide an ablation study        is trained on one V100 GPU with 32GB of memory. The column
+to show how grouping reduces the number of parameters of        Mem reports the GPU memory in GB, Params reports the number
+RevGNNs. We conduct experiments on the ogbn-proteins            of model parameters, and Time reports the training time in days.
+dataset with different group sizes and report the results in    Baselines are in italic.
+Table 5. The number of hidden channels for all of these
+models is set to 224. We find that a larger group size reduces  Model #Ch ROC-AUC  Mem  Params Time 
+the number of parameters. As the group size increases from
+2 to 4, the number of parameters reduces by more than 30%.      ResGNN 64      85.94  27.1 2.37M 1.3
+The performance of models with 3 to 56 layers decreases         ResGNN 224       -    OOM 28.4M -
+slightly. The 112-layer networks achieve the same perfor-
+mance while the model with group size 4 uses only around        WT-ResGNN 64   83.30  27.4 51.2k 1.2
+67% parameters compared to the model with group size 2.         WT-ResGNN 224    -    OOM 537k -
+However, we observe that the GPU memory usage increases
+from 7.30 GB to 11.05 GB as the group size increases from       DEQ-GNN 64 83.17      2.22 51.3k 1.3
+2 to 4 with our current implementation. We conjecture that      DEQ-GNN 224 85.84     7.60 537k 2.9
+this is due to our inefficient implementation. Optimizing our
+code for larger group sizes and conducting a more rigorous      RevGNN 64      85.48  2.09 1.46M 1.8
+analysis is an interesting avenue for future investigation.     RevGNN 80      85.97  2.56 2.25M 2.2
+                                                                RevGNN 224     87.02  7.30 17.1M 4.9
+
+                                                                WT-RevGNN 64   82.89  1.60 35.0k 1.7
+                                                                WT-RevGNN 80   83.46  2.08 51.4k 2.0
+                                                                WT-RevGNN 224  85.28  5.55 337k 4.8
+
+Table 5. Ablation of the group size of group reversible GNNs    B.2. Hyperparameters and Experimental Settings
+on the ogbn-protein dataset. L is the number of layers. The
+number of hidden channels is 224 for all the models.            We describe all important hyperparameters and training
+                                                                settings that were not mentioned in the main paper for re-
+Group=2           Group=4                                       producibility. The settings are slightly different for each
+                                                                dataset.
+#L Params ROC-AUC  Params ROC-AUC 
+                                                                Ogbn-proteins. The node features are initialized through
+ 3 490k    85.09  339k   84.86                                  aggregating connected edge features by a sum aggregation
+ 7 1.1M    85.68  750k   85.25                                  at the first layer. We use random partitioning for mini-batch
+14 2.2M    86.62  1.5M   85.79                                  training. The number of partitions is set to 10 for training
+28 4.3M    86.68  2.9M   86.30                                  and 5 for validation for all the ablated models. One subgraph
+56 8.6M    86.90  5.8M   86.76                                  is sampled at each SGD step. One layer normalization is
+112 17.2M  87.02  11.5M  87.09                                  used in the GNN block. Dropout with a rate of 0.1 is used
+                                                                for each layer. We use max as the message aggregator. Each
+B. Experimental Details and More Ablations                      model is trained for 2000 epochs using the Adam optimizer
+                                                                with a learning rate of 0.001.
+B.1. Datasets and Frameworks
+                                                                Ablations on Ogbn-proteins. A detailed comparison of
+We conduct experiments on three OGB datasets (Hu                ResGNN, Weight-tied ResGNN, DEQ-GNN, RevGNN and
+et al., 2020) including ogbn-proteins, ogbn-arxiv and ogbn-     Weight-tied RevGNN is shown in Table 6. Except for the
+products. We follow the standard data splits and evaluation     DEQ-GNN, all the other models have an explicit depth of
+protocol of OGB 1.2.4. Please refer to the OGB website1         112 layers. The reversible connections reduce the mem-
+for more details. Our code implementation relies on the         ory consumption significantly and enable training of wider
+deep learning framework Pytorch 1.6.0. We use Pytorch           RevGNNs. A 112-layer RevGNN achieves the best per-
+Geometric 1.6.1 (Fey & Lenssen, 2019) for all experiments       formance (87.02 ROC-AUC) among the compared models.
+except for the experiments with GATs where we use DGL           DEQ-GNN with 64 channels and WT-RevGNN with 80
+0.5.3 (Wang et al., 2019a). The reversible module is imple-     channels have a similar number of parameters and memory
+mented based on MemCNN (Leemput et al., 2019). The              consumption and also perform similarly. However, training
+deep equilibrium module is implemented based on DEQ             DEQ-GNN is significantly faster than training WT-RevGNN
+(Bai et al., 2019).                                             (1.3 days vs. 2 days).
+
+    1https://ogb.stanford.edu/
+                        Training Graph Neural Networks with 1000 Layers
+
+Table 7. Ablations for multi-view inference with RevGNN-            models have the same architecture. A knowledge distil-
+Deep and RevGNN-Wide on the ogbn-proteins dataset. L, Ch,           lation loss is added to the student model to minimize the
+Views and Parts denote the numbers of layers, channels, views and   Kullback­Leibler divergence between the teacher's predic-
+parts respectively. Doing inference with more views and less parts  tions and the student's predictions during training. Please
+is favorable.                                                       refer to the Github repositories for more details about the
+                                                                    implementation.
+Model  #L #Ch #Views #Parts ROC-AUC 
+                                                                    Ogbn-products. Self-loops are added to the graph. We
+RevGNN-Deep 1001 80 1   3 87.29 ± 0.16                              compare RevGNNs with full-batch training and mini-batch
+RevGNN-Deep 1001 80 5   3 87.68 ± 0.13                              training. For mini-batch training, the graph is randomly par-
+RevGNN-Deep 1001 80 10  3 87.74 ± 0.13                              titioned into 10 subgraphs and one subgraph is sampled at
+                                                                    each SGD step. We use full-batch testing in both scenarios.
+RevGNN-Wide 448 224 1   3 87.84 ± 0.21                              Batch normalization and dropout with a rate of 0.5 are used
+RevGNN-Wide 448 224 5   3 88.20 ± 0.16                              for each GNN block. The model is trained using the Adam
+RevGNN-Wide 448 224 10  3 88.24 ± 0.15                              optimizer with a learning rate of 0.001 for 1000 epochs.
+
+RevGNN-Wide 448 224 1   3 87.84 ± 0.21                              B.3. GPU Memory Measurement
+RevGNN-Wide 448 224 1   5 87.62 ± 0.18
+RevGNN-Wide 448 224 1   10 87.23 ± 0.22                             In all the experiments, the GPU memory usage is measured
+                                                                    as the peak GPU memory during the first training epoch.
+Multi-view Inference on Ogbn-proteins. To further im-               Note that the measured GPU memory is larger than the GPU
+prove the evaluation results, we propose multi-view infer-          memory for storing node features due to the intermediate
+ence which reduces the negative effects of random partition-        computation and network parameters. We consider the peak
+ing and noisy neighbors. During different inference passes,         GPU memory usage as a practical metric since it is the bot-
+each vertex will see a different set of neighbors. We refer         tleneck for training neural networks. As is common practice,
+to this as multi-view inference and implement it by parti-          we use torch.cuda.max memory allocated()
+tioning the graphs into different subgraphs in each inference       for the memory measurement. However, note that
+pass. In Table 7, we find that performing inference with            the measured peak GPU memory obtained using
+more views yields better results. We observe a substantial          torch.cuda.max memory allocated() is usually
+improvement with increasing number of views for both the            smaller than the actual peak GPU memory obtained with
+RevGNN-Deep and RevGNN-Wide models. The results                     NVIDIA-SMI.
+increase by about 0.4% in terms of ROC-AUC going from
+1 view to 10 views. We also observe that a smaller number           B.4. Correlation of Model Predictions
+of partitions is favorable for evaluation. To reduce memory
+cost, automatic mixed precision2 by NVIDIA is used for              We perform a correlation analysis on model predictions
+inference.                                                          of RevGNN, Weight-tied RevGNN and DEQ-GNN. The
+                                                                    pearson correlations of RevGNN with 1000 layers, WT-
+Ogbn-arxiv. The directed graph is converted into an undi-           RevGNN-224 with 7 layers and DEQ-GNN-224 with 56
+rected graph and self-loops are added. We use the full-batch        iterations are: 0.8571 (RevGNN vs. WT-RevGNN), 0.8565
+setting for both training and testing. For the GCN (Kipf            (RevGNN vs. DEQ-GNN) and 0.8948 (WT-RevGNN
+& Welling, 2017), SAGE (Hamilton et al., 2017) and GEN              vs. DEQ-GNN).
+(Li et al., 2020) models, batch normalization and dropout
+with a rate of 0.5 is applied to each layer and the Adam            C. More Discussion
+optimizer with a learning rate of 0.001 is used to train the
+models for 2000 epochs. The GAT-based (Velickovic´ et al.,          C.1. Gradient Checkpointing and Model Parallelism
+2018) models are implemented based on the OGB leader-                                                     
+board submission GAT + norm. adj. + label reuse3 (Wang
+et al., 2021). The RevGAT models with self-knowledge                By saving checkpoints every L steps, gradient check-
+distillation are implemented based on the submission GAT            pointing can achieve a memory complexity of O( LN D),
++ label reuse + self KD4. The teacher models and student            which is still higher than the memory complexity O(N D)
+                                                                    of RevGNN. For 112-layer models with 64 hidden channels,
+    2https://developer.nvidia.com/automatic-mixed-precision         ResGNN with gradient checkpointing consumes 2.5X the
+    3https://github.com/Espylapiza/dgl/tree/master/examples         memory compared to RevGNN (5.22 G vs. 2.09 G) while
+/pytorch/ogb/ogbn-arxiv                                             reaching similar performance on ogbn-proteins with sim-
+    4https://github.com/ShunliRen/dgl/tree/master/examples          ilar training time. Model parallelism is orthogonal to our
+/pytorch/ogb/ogbn-arxiv                                             approach. It would be interesting to investigate model paral-
+                                                 Training Graph Neural Networks with 1000 Layers
+
+lelism to make RevGNN even wider with multiple GPUs.
+
+C.2. Going Deeper and Datasets
+
+In our experiments, we find that going deeper is very effec-
+tive on ogbn-proteins. It would probably be beneficial to
+pre-train overparameterized GNNs on larger-scale protein
+datasets and then apply the pre-trained models to scientific
+applications such as drug discovery, protein structure pre-
+diction and gene-disease associations. For the other datasets
+such as ogbn-products and ogbn-arxiv, we observe less im-
+provement when going very deep. It is still unclear what
+kind of datasets benefit more from depth and overparameter-
+ization. Investigating the relationship between overparame-
+terization and factors such as dataset size, graph modality
+and graph learning task is an important direction of future
+work to better understand when overparameterized models
+are beneficial. We also anticipate that overparameterized
+GNNs will be a promising solution to even larger datasets
+such as OGB-LSC (Hu et al., 2021).
+

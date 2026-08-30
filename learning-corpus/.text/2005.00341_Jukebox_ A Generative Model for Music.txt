@@ -1,0 +1,1127 @@
+                                          Jukebox: A Generative Model for Music
+
+                                          Prafulla Dhariwal * 1 Heewoo Jun * 1 Christine Payne * 1 Jong Wook Kim 1 Alec Radford 1 Ilya Sutskever 1
+
+arXiv:2005.00341v1 [eess.AS] 30 Apr 2020                          Abstract                                oped advances in text generation (Radford et al.), speech
+                                                                                                          generation (Xie et al., 2017) and image generation (Brock
+                                                We introduce Jukebox, a model that generates              et al., 2019; Razavi et al., 2019). The rate of progress in
+                                                music with singing in the raw audio domain. We            this field has been rapid, where only a few years ago we
+                                                tackle the long context of raw audio using a multi-       had algorithms producing blurry faces (Kingma & Welling,
+                                                scale VQ-VAE to compress it to discrete codes,            2014; Goodfellow et al., 2014) but now we now can gener-
+                                                and modeling those using autoregressive Trans-            ate high-resolution faces indistinguishable from real ones
+                                                formers. We show that the combined model at               (Zhang et al., 2019b).
+                                                scale can generate high-fidelity and diverse songs        Generative models have been applied to the music genera-
+                                                with coherence up to multiple minutes. We can             tion task too. Earlier models generated music symbolically
+                                                condition on artist and genre to steer the musical        in the form of a pianoroll, which specifies the timing, pitch,
+                                                and vocal style, and on unaligned lyrics to make          velocity, and instrument of each note to be played. (Yang
+                                                the singing more controllable. We are releasing           et al., 2017; Dong et al., 2018; Huang et al., 2019a; Payne,
+                                                thousands of non cherry-picked samples, along             2019; Roberts et al., 2018; Wu et al., 2019). The symbolic
+                                                with model weights and code.                              approach makes the modeling problem easier by working
+                                                                                                          on the problem in the lower-dimensional space. However, it
+                                          1. Introduction                                                 constrains the music that can be generated to being a specific
+                                                                                                          sequence of notes and a fixed set of instruments to render
+                                          Music is an integral part of human culture, existing from the   with. In parallel, researchers have been pursuing the non-
+                                          earliest periods of human civilization and evolving into a      symbolic approach, where they try to produce music directly
+                                          wide diversity of forms. It evokes a unique human spirit in     as a piece of audio. This makes the problem more challeng-
+                                          its creation, and the question of whether computers can ever    ing, as the space of raw audio is extremely high dimensional
+                                          capture this creative process has fascinated computer scien-    with a high amount of information content to model. There
+                                          tists for decades. We have had algorithms generating piano      has been some success, with models producing piano pieces
+                                          sheet music (Hiller Jr & Isaacson, 1957; Moorer, 1972;          either in the raw audio domain (Oord et al., 2016; Mehri
+                                          Hadjeres et al., 2017; Huang et al., 2017), digital vocoders    et al., 2017; Yamamoto et al., 2020) or in the spectrogram
+                                          generating a singer's voice (Bonada & Serra, 2007; Saino        domain (Vasquez & Lewis, 2019). The key bottleneck is
+                                          et al., 2006; Blaauw & Bonada, 2017) and also synthesizers      that modeling the raw audio directly introduces extremely
+                                          producing timbres for various musical instruments (Engel        long-range dependencies, making it computationally chal-
+                                          et al., 2017; 2019). Each captures a specific aspect of music   lenging to learn the high-level semantics of music. A way to
+                                          generation: melody, composition, timbre, and the human          reduce the difficulty is to learn a lower-dimensional encod-
+                                          voice singing. However, a single system to do it all remains    ing of the audio with the goal of losing the less important
+                                          elusive.                                                        information but retaining most of the musical information.
+                                          The field of generative models has made tremendous              This approach has demonstrated some success in generat-
+                                          progress in the last few years. One of the aims of gen-         ing short instrumental pieces restricted to a set of a few
+                                          erative modeling is to capture the salient aspects of the data  instruments (Oord et al., 2017; Dieleman et al., 2018).
+                                          and to generate new instances indistinguishable from the        In this work, we show that we can use state-of-the-art deep
+                                          true data The hypothesis is that by learning to produce the     generative models to produce a single system capable of gen-
+                                          data we can learn the best features of the data1. We are        erating diverse high-fidelity music in the raw audio domain,
+                                          surrounded by highly complex distributions in the visual,       with long-range coherence spanning multiple minutes. Our
+                                          audio, and text domain, and in recent years we have devel-      approach uses a hierarchical VQ-VAE architecture (Razavi
+
+                                             *Equal contribution 1OpenAI, San Francisco. Correspondence         1Richard Feynmann famously said, "What I cannot create, I
+                                          to: <jukebox@openai.com>.                                       do not understand"
+             Jukebox: A Generative Model for Music
+
+et al., 2019) to compress audio into a discrete space, with     back to the input space. It is thus an auto-encoder with a
+a loss function designed to retain the maximum amount of        discretization bottleneck. The VQ-VAE is trained using the
+musical information, while doing so at increasing levels        following objective:
+of compression. We use an autoregressive Sparse Trans-
+former (Child et al., 2019; Vaswani et al., 2017) trained with  L = Lrecons + Lcodebook + Lcommit      (1)
+maximum-likelihood estimation over this compressed space,
+and also train autoregressive upsamplers to recreate the lost   Lrecons    =  1     xt - D(ezt )    2  (2)
+information at each level of compression.                                     T                     2
+We show that our models can produce songs from highly                            t
+diverse genres of music like rock, hip-hop, and jazz. They
+can capture melody, rhythm, long-range composition, and         Lcodebook  =  1     sg [hs] - ezs   2  (3)
+timbres for a wide variety of instruments, as well as the                     S                     2
+styles and voices of singers to be produced with the mu-                         s
+sic. We can also generate novel completions of existing
+songs. Our approach allows the option to influence the          Lcommit    =  1     hs - sg [ezs ]  2  (4)
+generation process: by swapping the top prior with a con-                     S                     2
+ditional prior, we can condition on lyrics to tell the singer                    s
+what to sing, or on midi to control the composition. We
+release our model weights and training and sampling code        where sg denotes the stop-gradient operation, which passes
+at https://github.com/openai/jukebox.                           zero gradient during backpropagation. The reconstruction
+                                                                loss Lrecons penalizes for the distance between the input x
+2. Background                                                   and the reconstructed output x = D(ez), and Lcodebook pe-
+                                                                nalizes the codebook for the distance between the encodings
+We consider music in the raw audio domain represented as        h and their nearest neighbors ez from the codebook. To
+a continuous waveform x  [-1, 1]T , where the number            stabilize the encoder, we also add Lcommit to prevent the
+of samples T is the product of the audio duration and the       encodings from fluctuating too much, where the weight 
+sampling rate typically ranging from 16 kHz to 48 kHz. For      controls the amount of contribution of this loss. To speed up
+music, CD quality audio, 44.1 kHz samples stored in 16          training, the codebook loss Lcodebook instead uses EMA up-
+bit precision, is typically enough to capture the range of      dates over the codebook variables. Razavi et al. (2019)
+frequencies perceptible to humans. As an example, a four-       extends this to a hierarchical model where they train a sin-
+minute-long audio segment will have an input length of 10       gle encoder and decoder but break up the latent sequence
+million, where each position can have 16 bits of information.   h into a multi-level representation [h(1), · · · , h(L)] with de-
+In comparison, a high-resolution RGB image with 1024 ×          creasing sequence lengths, each learning its own codebook
+1024 pixels has an input length of 3 million, and each          C(l). They use non-autoregressive encoder-decoders and
+position has 24 bits of information. This makes learning        jointly train all levels with a simple mean-squared loss.
+a generative model for music extremely computationally
+demanding with increasingly longer durations; we have to        3. Music VQ-VAE
+capture a wide range of musical structures from timbre to
+global coherence while simultaneously modeling a large          Inspired by the results from the hierarchical VQ-VAE model
+amount of diversity.                                            (Razavi et al., 2019) for images, we consider applying the
+                                                                same technique to model raw audio using three different
+2.1. VQ-VAE                                                     levels of abstraction, as illustrated in Figure 1. At each level,
+                                                                we use residual networks consisting of WaveNet-style non-
+To make this task feasible, we use the VQ-VAE (Oord et al.,     causal 1-D dilated convolutions, interleaved with downsam-
+2017; Dieleman et al., 2018; Razavi et al., 2019) to compress   pling and upsampling 1-D convolutions to match different
+raw audio to a lower-dimensional space. A one-dimensional       hop lengths. A detailed description of the architecture is
+VQ-VAE learns to encode an input sequence x =                   provided in Appendix B.1. We make a number of modifica-
+using a sequence of discrete tokens z =          xt    T    ,   tions to our VQ-VAE compared to the ones in (Oord et al.,
+                                                       t=1      2017; Razavi et al., 2019), as described in the following
+                                                       S        subsections.
+                                         zs      [K ]  s=1
+                                                                3.1. Random restarts for embeddings
+where K denotes the vocabulary size and we call the ratio       VQ-VAEs are known to suffer from codebook collapse,
+T /S the hop length. It consists of an encoder E(x) which       wherein all encodings get mapped to a single or few em-
+encodes x into a sequence of latent vectors h =             ,   bedding vectors while the other embedding vectors in the
+                                                 hs    S        codebook are not used, reducing the information capacity
+                                                       s=1      of the bottleneck. To prevent this, we use random restarts:
+a bottleneck that quantizes hs  ezs by mapping each hs          when the mean usage of a codebook vector falls below a
+to its nearest vector ezs from a codebook C = {ek}kK=1,         threshold, we randomly reset it to one of the encoder out-
+and a decoder D(e) that decodes the embedding vectors           puts from the current batch. This ensures all vectors in the
+                        Jukebox: A Generative Model for Music
+                                           Codebook ek
+
+    Encode                  Vector                              Codebook                          Decode
+                        Quantization                             Lookup
+
+    Encode                  Vector                              Codebook                          Decode
+                        Quantization                             Lookup
+
+    Encode                  Vector                              Codebook                          Decode
+                        Quantization                             Lookup
+
+xt          ht = E(xt)  zt = argmink  ht ­ ek                             ezt                             x t = D(ezt)
+
+Figure 1. We first train three separate VQ-VAE models with different temporal resolutions. At each level, the input audio is segmented
+and encoded into latent vectors ht, which are then quantized to the closest codebook vectors ezt . The code zt is a discrete representation
+of the audio that we later train our prior on. The decoder takes the sequence of codebook vectors and reconstructs the audio. The top
+level learns the highest degree of abstraction, since it is encoding longer audio per token while keeping the codebook size the same.
+Audio can be reconstructed using the codes at any one of the abstraction levels, where the least abstract bottom-level codes result in the
+highest-quality audio, as shown in Figure 4. For the detailed structure of each component, see Figure 7.
+
+codebook are being used and thus have a gradient to learn       we use the sum of the spectral losses Lspec calculated over
+from, mitigating codebook collapse.                             multiple STFT parameters that trade-off time and frequency
+                                                                resolutions (Yamamoto et al., 2020).
+3.2. Separated Autoencoders
+When using the hierarchical VQ-VAE from (Razavi et al.,         4. Music Priors and Upsamplers
+2019) for raw audio, we observed that the bottlenecked top
+level is utilized very little and sometimes experiences a com-  After training the VQ-VAE, we need to learn a prior p(z)
+plete collapse, as the model decides to pass all information    over the compressed space to generate samples. We break
+through the less bottlenecked lower levels. To maximize         up the prior model as
+the amount of information stored at each level, we simply
+train separate autoencoders with varying hop lengths. Dis-      p(z) = p(ztop, zmiddle, zbottom)          (5)
+crete codes from each level can be treated as independent
+encodings of the input at different levels of compression.      = p(ztop)p(zmiddle|ztop)p(zbottom|zmiddle, ztop) (6)
+
+3.3. Spectral Loss                                              and train separate models for the top-level prior p(ztop), and
+When using only the sample-level reconstruction loss, the       upsamplers p(zmiddle|ztop) and p(zbottom|zmiddle, ztop). Each
+model learns to reconstruct low frequencies only. To capture    of these is an autoregressive modeling problem in the dis-
+mid-to-high frequencies, we add a spectral loss which is        crete token space produced by the VQ-VAE. We use Trans-
+defined as                                                      formers with sparse attention (Vaswani et al., 2017; Child
+                                                                et al., 2019) as they are currently the SOTA in autoregressive
+             Lspec = |STFT(x)| - |STFT(x)| 2                    modeling. We propose a simplified version which we call
+It encourages the model to match the spectral components        the Scalable Transformer, that is easier to implement and
+without paying attention to phase which is more difficult       scale (see Appendix A for details).
+to learn. This is similar to the use of power loss (Oord        For the upsamplers, we need to provide the autoregres-
+et al., 2018) and spectral convergence (Arik et al., 2018b)     sive Transformers with conditioning information from the
+when training parallel decoders for raw audio. One differ-      codes of the upper levels. To do so, we use a deep resid-
+ence between the latter approach and ours is that we are no     ual WaveNet (Xie et al., 2017) followed by an upsampling
+longer optimizing the spectral signal-to-noise ratio; dividing  strided convolution and a layer norm (Ba et al., 2016), and
+by the magnitude of the signal results in numerical insta-      add the output as extra positional information to the embed-
+bility for mostly silent inputs. To prevent the model from      dings of the current level. We condition the lower levels
+overfitting to a particular choice of the STFT parameters,      only on the chunk of upper level codes that correspond to
+                                                                the same segment of raw audio.
+Jukebox: A Generative Model for Music
+
+At each level, we use Transformers over the same context        Conditioning
+length of discrete codes, which correspond to increasing        Information
+the raw audio length with larger hop lengths, and modeling
+longer temporal dependencies at the higher levels while                       Top-Level Prior
+keeping the same computational footprint for training each                                    Middle Upsampler
+level. As our VQ-VAE is convolutional, we can use the
+same VQ-VAE to produce codes for arbitrary lengths of
+audio.
+
+4.1. Artist, Genre, and Timing Conditioning                                                                         Bottom Upsampler
+Our generative model can be made more controllable by                                                      VQ-VAE Decoder
+providing additional conditioning signals while training. For
+our first models, we provide artist and genre labels for the    (a) Ancestral sampling: Priors for the VQ-VAE codes are trained
+songs. This has two advantages: first, it reduces the entropy   using a cascade of Transformer models, shown in blue. Each model
+of the audio prediction, so the model is able to achieve        takes conditioning information such as genre, artist, timing, and
+better quality in any particular style. Second, at generation   lyrics, and the upsampler models are also conditioned on the codes
+time, we are able to steer the model to generate in a style     from the upper levels. To generate music, the VQ-VAE codes are
+of our choosing. Additionally, we attach a timing signal        sampled from top to bottom using the conditioning information
+for each segment at training time. This signal includes the     for control, after which the VQ-VAE decoder can convert the
+total duration of the piece, the start time of that particular  bottom-level codes to audio.
+sample and how much fraction of the song that has elapsed.
+This allows the model to learn audio patterns that depend
+on the overall structure, such as spoken or instrumental
+introductions and applause at the end of a piece.
+
+4.2. Lyrics Conditioning                                                                                                                         time
+While the conditioned models above are able to generate
+songs of diverse genres and artistic styles, singing voices                                                                                 new samples
+generated by those models, while often sung in a compelling
+melody, are mostly composed of babbling, rarely producing       (b) Windowed sampling: To generate music longer than the
+recognizable English words. In order to be able to control      model's context length (12 in this figure), we repeatedly sample
+the generative model with lyrics, we provide more context       continuations at each level, using overlapping windows of previous
+at training time by conditioning the model on the lyrics        codes as the context. The overlap amount is a hyperparameter, and
+corresponding to each audio segment, allowing the model         the figure shows an example of 75% overlap with hop length 3.
+to produce singing simultaneosly with the music.
+Lyrics-to-singing (LTS) task: The conditioning signal                                                Generate
+only includes the text of the lyrics, without timing or vocal-
+isation information. We thus have to model the temporal         Encode                                                   Decode
+alignment of lyrics and singing, the artists voice and also
+the diversity of ways one can sing a phrase depending on the            Primed Audio  Generated Audio
+pitch, melody, rhythm and even genre of the song. The con-
+ditioning data isn't precise as the lyrics data often contains  (c) Primed sampling: The model can generate continuations of
+textual references to repeated sections like "chorus" or mis-   an existing audio signal by converting it into the VQ-VAE codes
+matching portions of lyrics with the corresponding music.       and sampling the subsequent codes in each level.
+There is also no separation between lead vocals, accompa-
+nying vocals and the background music in target audio. This             Figure 2. Sampling methods for generating music
+makes the Lyrics-to-singing (LTS) task significantly more
+challenging than the corresponding Text-to-speech (TTS)
+task.
+Providing lyrics for chunks of audio: Our dataset includes
+song-level lyrics, but to make the task easier we train on
+shorter (24 sec) chunks of audio. To provide the lyrics cor-
+Jukebox: A Generative Model for Music
+
+responding to the audio during training, we began with a                                 500                                            1.0
+simple heuristics of aligning the characters of the lyrics to
+linearly span the duration of each song, and pass a fixed-side    Lyrics token position  400                                            0.8
+window of characters centered around the current segment
+during training. While this simple strategy of linear align-                             300                                            0.6
+ment worked surprisingly well, we found that it fails for
+certain genres such as hip-hop with fast lyrics. To address                              200                                            0.4
+this, we use Spleeter (Hennequin et al., 2019) to extract vo-
+cals from each song and run NUS AutoLyricsAlign (Gupta                                   100                                            0.2
+et al., 2020) on the extracted vocals to obtain a word-level
+alignments of the lyrics, allowing us to more accurately                                 00   1600  3M2u0s0ic token po4s8it0i0on  6400  8000 0.0
+provide the lyrics for a given chunk of audio. We choose a
+large enough window so that the actual lyrics have a high         Figure 3. Lyrics-singing alignment learned by one of the encoder-
+probability of being inside the window.                           decoder attention layers. The x-axis is the position of music
+Encoder-decoder model: We use an encoder-decoder style            queries, and the y-axis is the position of lyric keys. The positions
+model to condition on the characters of the lyrics, with          attended to by the decoder correspond to the characters being sung.
+the encoder producing features from the lyrics which are
+attended to by the decoder which produces the top level           previously generated tokens into the model as inputs and
+music tokens. The lyrics encoder is a Transformer with an         outputting the next token conditioned on all previous tokens.
+autoregressive modeling loss for lyrics, and its last level is    We then run our conditioning wavenet on the top level codes
+used as features of the lyrics. In the music decoder, we inter-   to produce the conditioning information for the middle level
+leave a few additional layers with encoder-decoder attention      and sample ancestrally from it too, and do the same for the
+where the queries from the music tokens are only allowed          bottom level.
+to attend to keys and values from the lyrics tokens. These        Windowed sampling: To sample segments longer than the
+layers attend on the activation from the last layer of the        context length, we use windowed sampling, where we move
+lyrics encoder (see Figure 8c). In Figure 3, we see that the      ahead our sampling window by half our context and con-
+attention pattern learned by one of these layers corresponds      tinue sampling conditioned on this half context (See Figure
+to the alignment between the lyrics and the singing.              2b). We can trade off speed for quality by using a smaller
+                                                                  hop length here.
+4.3. Decoder Pretraining                                          Primed sampling: Instead of sampling the entire token
+To reduce computation required to train the lyrics condi-         sequence from the model, we can also run a forward pass
+tional model, we use a pretrained unconditional top-level         of the VQ-VAE to obtain the top, middle, and bottom level
+prior as our decoder and introduce the lyrics encoder using       codes corresponding to a segment from an actual song, as
+model surgery (Berner et al., 2019). We initialize the output     shown in Figure 2c. We can use these as the initial tokens in
+projection weights in the MLP and the attention layers of         our ancestral sampling process and continue sampling from
+these residual blocks to zeros (Zhang et al., 2019a), so that     these to produce novel completions of the song.
+the added layers perform the identity function at initializa-
+tion. Thus, at initialization the model behaves identically       5. Experiments
+as the pretrained decoder, but there is still a gradient with
+respect to the encoder state and parameters2, allowing the        5.1. Dataset
+model to learn to use the encoder.                                We scraped a new dataset of 1.2 million songs (600k of
+                                                                  which in English), paired with the lyrics and metadata from
+4.4. Sampling                                                     LyricWiki (LyricWiki). The metadata includes artist, album,
+After we have trained our VQ-VAE, upsamplers, and top             genre, and year of the release, along with common moods or
+level priors, we can then use them to sample novel songs.         playlist keywords associated with each song. We train on 32
+Ancestral sampling: We first generate the top level codes         bit, 44.1 kHz raw audio and perform data augmentation by
+one token at a time by the usual ancestral sampling process       randomly downmixing the right and left channels to produce
+(see Figure 2a): generating the first token, then passing all     mono channel audio.
+
+    2The gradient also needs to break symmetry with the encoder   5.2. Training Details
+output features, which is the case here since the weights of the  For the music VQ-VAE, we use 3 levels of bottlenecks com-
+input projections in the attention are not zero.                  pressing 44 kHz audio in dimensionality by 8x, 32x, and
+Jukebox: A Generative Model for Music
+
+128x respectively, with a codebook size of 2048 for each       sity, and novelty of generated samples. The links to curated
+level. The VQ-VAE has 2 million parameters and is trained      examples are embedded in text.
+on 9-second audio clips on 256 V100 for 3 days. We used        Coherence: We find the samples stay very coherent musi-
+exponential moving average to update the codebook fol-         cally through the context length of the top-level prior (ap-
+lowing Razavi et al. (2019). For our prior and upsampler       proximately 24 seconds), and they maintain similar har-
+models, we use a context of 8192 tokens of VQ-VAE codes,       monies and textures as we slide the window to generate
+which corresponds to approximately 24, 6, and 1.5 seconds      longer samples. However, because the top-level does not
+of raw audio at the top, middle, and bottom level, respec-     have the context of the entire song, we do not hear long
+tively. The upsamplers have one billion parameters and are     term musical patterns, and we would never hear choruses or
+trained on 128 V100s for 2 weeks, and the top-level prior      melodies that repeat.
+has 5 billion parameters and is trained on 512 V100s for 4     The generations progress through beginnings of songs (for
+weeks. We use Adam with learning rate 0.00015 and weight       example applause or slow instrumental warm-ups), through
+decay of 0.002. For lyrics conditioning, we reuse the prior    sections that sound chorus-like, through instrumental inter-
+and add a small encoder, after which we train the model on     ludes, and then fading or otherwise wrapping up at the end.
+512 V100s for 2 weeks. The detailed hyperparameters for        The top-level prior always knows what fraction of the song
+our models and training are provided in Appendix B.3.          is complete time-wise, so it is able to imitate appropriate
+                                                               beginnings, middles and ends.
+5.3. Samples                                                   Musicality: The samples frequently imitate familiar mu-
+We trained a sequence of models with increasing sample         sical harmonies and the lyrics are usually set in ways that
+quality. Our first model was trained on the MAESTRO            are very natural. Frequently the highest or longest notes of
+dataset using 22 kHz VQ-VAE codes and relatively small         the melody match words that a human singer would choose
+prior models. We observed that this could generate high        to emphasize, and the lyrics are almost always rendered
+fidelity classical music samples with piano and occasional     in ways that capture the prosody of the phrases. This is
+violin. We then collected a larger and more diverse dataset    noticeable in hip hop generations, where the model reliably
+of songs with genre and artist labels. The same model when     captures the rhythm of spoken text. We do find that the
+trained on this new dataset was able to produce diverse sam-   generated melodies are usually less interesting than human
+ples other than classical music, and demonstrated musicality   composed melodies. In particular, we do not hear the an-
+and coherence over more than a minute.                         tecedent and consequent pattern familiar to many human
+Despite the novelty of being able to generate generally high   melodies, and we rarely hear choruses that are melodically
+fidelity and coherent songs, sample quality was still limited  memorable.
+by a number of factors. First, the use of 22 kHz sampling      Diversity: Likelihood training encourages covering of all
+rate along with small upsamplers introduced noise both in      modes, so we expect the model to produce diverse samples.
+the upsampling and decoding steps, which we hear as grainy     ­ Re-renditions: We generate multiple samples conditioned
+texture. We improved fidelity by using 44 kHz VQ-VAE           on artist and lyrics combinations that exist in our training
+and 1B parameter upsamplers in all subsequent experiments      data. While occasionally drum and bass lines or melodic
+at the expense of longer rendering time.                       intervals echo the original versions, we find that none of
+Second, the 1B top-level prior was not big enough to pro-      the generated samples is noticeably similar to the original
+duce singing and diverse musical timbres. We first explored    songs.
+increasing the model size to 5 billion parameters. Larger      We also generate multiple songs conditioned on the same
+capacity allowed better modeling of the broader distribu-      artist and lyrics as Sample 1 to obtain Samples 9­12. All five
+tion of songs, resulting in samples with better musicality,    sound interesting in their own ways with different moods
+longer coherence and initial singing. While there is an over-  and melodies with Sample 10 playing a harmonic at 00:14
+all qualitative improvement, the unconditional model still     as part of a blues riff, showing that the model has learned a
+struggled to sing recognizable words. Training a seq2seq       wide range of singing and playing styles.
+model with lyric conditioning and limiting the dataset only    ­ Completions: We prime the model with 12 seconds of
+to songs primarily in English made singing both intelligible   existing songs and ask it to complete them in the same
+and controllable.                                              styles. When the priming samples include singing, the con-
+The final model, which we call Jukebox, uses all these         tinuations are more likely to imitate the original tunes and
+improvements. Because everyone experiences music dif-          rhythms. Songs primed with more generic or common intros
+ferently, it is generally tricky and not very meaningful to    tend to be more diverse. Even generated samples that are
+evaluate samples by the mean opinion score or FID-like
+metrics. We manually evaluate coherence, musicality, diver-
+Jukebox: A Generative Model for Music
+
+close to the originals early on deviate completely into new       ­ Novel lyrics: We ask Jukebox to sing poems and novel
+musical material after about 30 seconds.                          verses generated by GPT-2 (Radford et al.) to demonstrate
+Re-renditions and completions are interesting and diverse,        that it can indeed sing new lyrics. While the training data
+but overall, there is still room for improvement in music         consists of song lyrics with limited vocabulary and con-
+quality compared to the original songs.                           strained structure, the model has learned to follow along
+­ Full tree: To understand diversity in a more systematic         most prompts and sing even new words that are reasonably
+way, we generate multiple continuations from the same seg-        pronounceable (including technical terms from the deep
+ment. We start with a one-minute sample and independently         learning literature). To get the best results, however, we find
+sample four times per one-minute extension. By the three          that it is useful to spell out difficult words or acronyms as
+minute mark, there are 16 completions. We can think of this       they are spoken. The generations are noticeably higher qual-
+branching tree as exploring different possibilities obtained      ity if the text matches the distribution of lyrics for the given
+by ancestral sampling. In the generated songs in the link,        artist, both in terms of length, and of rhyming or rhythmic
+we hear diversity in singing and development even when the        qualities. For example, hip hop lyrics tend to be longer than
+same initial segment is used. We note that this particular        most other genres, and the commonly emphasized syllables
+sample follows the lyrics more successfully than many. For        easily form clear rhythms.
+certain genres like hip hop and rap, where linearly moving        ­ Novel riffs: Another useful application of Jukebox is the
+the window does not yield good lyrics alignment, the chance       ability to record an incomplete idea and explore various
+of obtaining plausible singing is lower.                          continuations without ever needing to tabulate in symbolic
+Novelty: With the ability to condition on various styles,         representations, which would lose details of timbre and
+lyrics, and raw audio, we would like Jukebox to be a useful       mood. We curate recordings of novel riffs by our in-house
+tool for both professional musicians and music enthusiasts        musicians and prime the model during sampling. Sample 6
+alike. In this section, we are interested in exploring capabil-   starts with a musical style not widely used in Elton John's
+ities and applications of Jukebox.                                songs. The model still carries out the tune and develops
+­ Novel styles: We generate songs in an unusual genre typi-       it further. Similarly, the beginning of Sample 1 is a pro-
+cally not associated with an artist. In general, we find that     gressive jazz piece with a 5/4 polymeter, which has never
+it is fairly difficult to generalize to a novel style of singing  been used in hip hop. Despite this novelty, the rhythm per-
+while using the same voice as the artist embedding overpow-       sists throughout the song and is incorporated naturally with
+ers other information. In Joe Bonamassa and Frank Sinatra         rapping.
+samples, we hear a modest variation in instrumentation,
+energy, and ambience depending on the genre embedding.            5.4. VQ-VAE Ablations
+However, our attempts to mix country singer Alan Jackson
+with unusual genres like hip hop and punk did not seem to          Level  Hop length   Spectral convergence (dB)
+move the samples away from a country style in meaningful          Bottom        8     Without restart With restart
+ways.                                                             Middle       32
+­ Novel voices: We pick artists whose voices are reproduced                           -21.1  -23.0
+reasonably well by the model, and interpolate their style           Top       128     -12.4  -12.4
+embeddings to synthesize new voices. Some blending, for                               -8.3   -8.3
+instance, between Frank Sinatra and Alan Jackson in Sample
+4, still sounds similar to Frank Sinatra. In most cases, the      Table 1. Reconstruction fidelity degrades with higher compression.
+model renders in a vaguely recognizable but distinct voice        Restarting dead codes near random encoder outputs mitigates learn-
+that preserves different vocal attributes. Samples 1 and          ing suboptimal codes.
+2 conditioned on the Céline Dion embeddings divided by
+two have slightly different timbre and tone but capture her       Codebook size       Spectral convergence (dB)
+unique vibrato.                                                          256
+We also experiment with changing the style embedding in                 2048                      -15.9
+the middle of a song to create a duet (Sample 7). This is                                         -23.0
+another way of guiding generation during sampling. Con-           No quantization                 -40.5
+tinuing in another voice works best when the segment ends
+in an interlude; otherwise, the model blends voices in the        Table 2. Bottom-level VQ-VAE reconstruction results with differ-
+middle of a word or a sentence.                                   ent codebook sizes. Using larger codebooks helps reconstruction
+                                                                  because it allows more information to be encoded at the bottleneck
+                                                                  layers. Removing the bottleneck entirely yields almost perfect
+                                                                  reconstruction.
+                         Jukebox: A Generative Model for Music
+
+16k                      16k
+
+8k                       8k
+
+4k                       4k
+
+2k                       2k
+
+1k                       1k
+500                      500
+
+16k
+ 8k
+ 4k
+ 2k
+ 1k
+
+500
+
+16k
+ 8k
+ 4k
+ 2k
+ 1k
+
+500
+
+16k
+ 8k
+ 4k
+ 2k
+ 1k
+
+500
+
+16k
+ 8k
+ 4k
+ 2k
+ 1k
+
+500
+
+Figure 4. Comparison of reconstructions from different VQ-VAEs, x-axis is time and y-axis is frequency. The columns from left to
+right are bottom-, middle-, and top-level reconstructions at hop lengths 8, 32, and 128 respectively, visualized as Mel spectrograms.
+The first row is the ground-truth, and the second row shows the spectrograms of audio outputs from our VQ-VAE. In the third row, we
+remove the spectral loss, and see that the middle and top level lose high-frequency information. In the fourth row, we use a hierarchical
+VQ-VAE (Razavi et al., 2019) instead of separate auto-encoders (Figure 1), and we see the middle and top levels are not used for encoding
+pertinent information. Finally, the fifth row shows a baseline with the Opus codec that encodes audio at constant bitrates comparable to
+our VQ-VAE. It also fails to capture higher frequencies and adds noticeable artifacts at the highest level of compression.
+
+Ablation                 Spectral convergence (dB)                      & Daudet, 2011), which measures the amount of spectral
+None                                                                    error relative to signal, as test error and proxy for reconstruc-
+Without spectral loss                -8.3                               tion fidelity. We evaluate on 5000 held-out 3-second audio
+With single autoencoder              -6.3                               segments and report the average in decibels. All models in
+                                                                        this section are trained with a batch size of 32, 3-second
+                                        2.9                             audio clips sampled at 44 kHz. As before, we use hop
+                                                                        lengths of 8, 32, and 128 for the bottom, middle and top
+Table 3. Top-level codes are generally difficult to train well without  level respectively.
+spectral loss or with a single hierarchical autoencoder. Resulting      In Table 1, we see that increasing the hop size results in
+reconstructions may lose some to most of information.                   higher reconstruction error. Figure 4 indeed shows that a
+                                                                        significant amount of information, especially higher frequen-
+We compare raw audio VQ-VAEs when trained with varying                  cies, is missing at middle and top levels across all ablations
+compression ratios, objectives, and architectures. As we                we ran. This is expected as audio is compressed more with
+use nonautoregressive decoders with continuous represen-
+tation for output, we report spectral convergence (Sturmel
+                                  Jukebox: A Generative Model for Music
+
+Codebook entropy (bits)  10                                             6. Related Work
+
+                         9        with restart                          Generative modeling in deep learning: Generative mod-
+                                  without restart                       els aim to learn the distribution of data by either explicitly
+                         8                                              by modeling the distribution or implicitly by constructing
+                               0  100k 200k 300k 400k             500k  means to sample from it (Goodfellow, 2016). Modeling
+                                        Number of training steps        the interdependency within high-dimensional data was tra-
+                                                                        ditionally considered extremely difficult, but starting with
+Figure 5. Entropy of codebook with 2048 codes, i.e 11 bits, over        Deep Boltzmann Machines (Salakhutdinov & Hinton, 2009),
+training. Reviving dead codes near random encoder outputs en-           various kinds of deep generative models have been intro-
+sures good codebook utilization from the start of training.             duced. Generative Adversarial Networks (GANs) (Good-
+                                                                        fellow et al., 2014) use generator and discriminator net-
+larger hop sizes. To mitigate codebook collapse, we restart             works that contest each other to make the generated samples
+dead codes near random encoder embeddings. In Figure 5,                 as indistinguishable as possible from the data, and they
+we see that this yields higher codebook usage even from                 are renowned for their ability to generate high-quality pic-
+early on in training. Models trained without random restarts            tures (Zhang et al., 2019b; Brock et al., 2019). Autoregres-
+can converge to the same test error and codebook usage but              sive generative models such as NADE (Uria et al., 2016),
+require more training steps. With poor initialization, these            PixelCNN (Van den Oord et al., 2016), and Transformers
+models sometimes end up with suboptimal codes hurting                   (Vaswani et al., 2017) use the chain rule of probability to
+reconstruction fidelity.                                                factorize the joint distribution of data into a product of
+Codebook size also matters, as it sets a limit on channel ca-           simpler distributions, and flow-based models (Dinh et al.,
+pacity through the bottleneck layers. In Table 2, we find that          2015; 2017; Rezende & Mohamed, 2015; Kingma & Dhari-
+reconstruction error increases considerably when the code-              wal, 2018) learn a series of invertible transformations that
+book size is reduced from 2048 to 256. We also compare                  maps the data distribution with a simpler one such as a
+with a model that uses continuous representations without               Gaussian distribution. Autoregressive flows (Papamakarios
+vector quantization. We can think of this model as using a              et al., 2017; Kingma et al., 2016) combine the two ideas to
+vastly large codebook with all encoder embeddings. This                 achieve faster density estimation or data generation. Varia-
+achieves almost perfect reconstruction with negligible spec-            tional autoencoders (VAEs) (Rezende et al., 2014; Kingma
+tral error.                                                             & Welling, 2014) impose a Gaussian prior on the latent
+When the model is trained with L2 loss only, reconstruc-                code in an encoder-decoder setup from which data can be
+tions tend to sound muddy from missing high frequencies,                sampled.
+and this problem is exacerbated as hop size is increased. In            Generative models for music: Generative modeling of
+Figure 4, we see that top-level codes trained without spec-             symbolic music dates back to more than half a century, when
+tral loss do not capture much information beyond 2 kHz,                 Hiller Jr & Isaacson (1957) introduced the first computer-
+and obtain worse reconstructions (Table 3). However, we                 generated music based on Markov chains. There exists
+observe that while spectral loss helps encode more infor-               a variety of earlier approaches using rule-based systems
+mation, it also adds distortion artifacts which we hear as              (Moorer, 1972), chaos and self-similarity (Pressing, 1988),
+scratchy noise.                                                         cellular automata (Beyls, 1989), concatenative synthesis
+Lastly, we train a raw audio hierarchical VQ-VAE (Razavi                (Jehan, 2005), and constraint programming (Anders & Mi-
+et al., 2019) and find that it is generally difficult to push           randa, 2011). More recent data-driven approaches include
+information to higher levels. This model is trained twice as            DeepBach (Hadjeres et al., 2017) and Coconet (Huang et al.,
+long as the previous models, but middle and top-level recon-            2017) which use Gibbs sampling to produce notes in the
+structions as shown in Figure 4 are not capturing much. It is           style of Bach chorals, MidiNet (Yang et al., 2017) and
+possible that higher level codes may have collapsed before              MuseGAN (Dong et al., 2018) which use generative ad-
+bottom level starts to reconstruct the audio well. Making               versarial networks, MusicVAE (Roberts et al., 2018) and
+the bottom layers explicitly model residuals pushed more                HRNN (Wu et al., 2019) which use hierarchical recurrent
+information to the top. But, we found separate autoencoders             networks, and Music Transformer (Huang et al., 2019a)
+to be cleaner and more effective.                                       and MuseNet (Payne, 2019) which use Transformers to au-
+                                                                        toregressively predict MIDI note events. There also have
+                                                                        been a number of approaches for synthesizing music con-
+                                                                        ditioned on symbolic music information, such as NSynth
+                                                                        (Engel et al., 2017) which uses WaveNet-style autoen-
+                                                                        coder, Mel2Mel (Kim et al., 2019) and Wave2Midi2Wave
+                                                                        (Hawthorne et al., 2019) which synthesize music using
+Jukebox: A Generative Model for Music
+
+WaveNet conditioned on a piano roll representation, and         trograms, after which a simple gradient-based optimization
+GanSynth (Engel et al., 2019) which uses generative adver-      can produce high-fidelity audio.
+sarial networks to produce magnitude spectrograms together      VQ-VAE: Oord et al. (2017) introduced VQ-VAE, an ap-
+with instananeous frequencies for easier spectrogram inver-     proach of downsampling extremely long context inputs to a
+sion. Generative models for music can also be used for          shorter-length discrete latent encoding using a vector quan-
+music style transfer, as seen in Midi-VAE (Brunner et al.,      tization, and they showed that it can generate both high-
+2018) which uses a variational autoencoder to transfer styles   quality images and audio, as well as learn unsupervized
+between classical and jazz music, LakhNES (Donahue et al.,      representations of phonemes. Razavi et al. (2019) extended
+2019) which uses a Transformer architecture to generate         the above model by introducing a hierarchy of discrete rep-
+chiptune music, and Universal Music Translator Network          resentations for images and showed that the resulting model
+(Mor et al., 2019) which uses a denoising autoencoder that      can learn to separate high-level semantics into the highest
+can disentangle musical style and content.                      level of discrete codes which have the largest receptive field,
+Sample-level generation of audio: In recent years, a vari-      while capturing local features like textures in the lower lev-
+ety of generative models for raw audio have been introduced.    els with smaller receptive fields. They used the hierarchical
+WaveNet (Oord et al., 2016) performs autoregressive sample-     model to generate high-diversity and high-fidelity images
+by-sample probabilistic modeling of raw waveform using a        for the conditional ImageNet and FFHQ datasets. Dieleman
+series of dilated convolutions to exponentially increase the    et al. (2018) tried variants of this approach where instead
+context length. It can produce realistic audio either uncon-    of a single encoder there are successive encoders that each
+ditionally or by conditioning on acoustic features or spec-     further compress the lossy discrete encodings from the previ-
+trograms. The autoregressive nature of WaveNet makes the        ous levels. A downside of this approach is that information
+sampling notoriously slow, and it uses a categorical distribu-  is lost at each step and requires separate training for each
+tion for audio samples which introduces quantization noise.     VQ-VAE level, and it leads to a hierarchy collapse problem.
+Parallel WaveNet (Oord et al., 2018) improves upon this         De Fauw et al. (2019) used AR decoders which are known to
+by instead using a mixture of logistics distribution, a con-    cause the problem of ignoring the latent variables, and they
+tinuous probability distribution, and performing probabil-      suggested ways to mitigate it. The feed-forward decoders
+ity density distillation which learns a parallel feed-forward   from (Razavi et al., 2019) do not suffer from this issue, and
+network from a pre-trained autoregressive model, allow-         thus we use their approach.
+ing faster sampling of high fidelity audio. ClariNet (Ping      Speech synthesis: Producing natural human voice entails
+et al., 2019) achieves similar audio quality using a simple     an understanding of linguistic features, mapping of sounds,
+Gaussian distribution instead and thus having a closed-form     and steerability of expression. Many text-to-speech (TTS)
+loss function, eliminating the need for Monte-Carlo sam-        systems rely on highly engineered features (Klatt, 1980),
+pling. SampleRNN (Mehri et al., 2017) uses a multi-scale,       carefully curated sound segments (Hunt & Black, 1996),
+hierarchical recurrent neural network with convolutional        statistical parametric modeling (Zen et al., 2009), and of-
+upsampling to model long-range complex structures. Wa-          ten complex pipelines as described in (Arik et al., 2017).
+veRNN (Kalchbrenner et al., 2018) uses recurrent neural         These approaches are fairly involved and produce unnatural
+networks that operate separately on the most significant and    or inarticulate voices. More recent works like Deep Voice
+the least significant bytes, which can be efficiently deployed  3 (Ping et al., 2018), Tacotron 2 (Shen et al., 2018), and
+in mobile devices while having comparable audio quality to      Char2Wav (Sotelo et al., 2017) learn speech synthesis end-
+WaveNet. WaveGlow (Prenger et al., 2019) is a flow-based        to-end using sequence-to-sequence architecture (Sutskever
+model for parallel sample-level audio synthesis, which can      et al., 2014). The design space is vast, but in general, typical
+be trained with a straightforward maximum-likelihood esti-      approaches comprise of a bidirectional encoder, a decoder,
+mation and thus is advantageous to the two-stage training       and a vocoder to build text representations, audio features,
+process needed for distillation. Parallel WaveGAN (Ya-          and the final raw waveforms. To generate multiple voices,
+mamoto et al., 2020) and MelGAN (Kumar et al., 2019)            text-to-speech models can also condition on the speaker
+are GAN-based approaches directly modeling audio wave-          identity (Oord et al., 2016; Gibiansky et al., 2017; Jia et al.,
+forms, achieving similar quality as WaveNet and WaveGlow        2018) as well as text prompt. By learning and manipulat-
+models with significantly fewer parameters. While the ap-       ing auxiliary embeddings, models can mimic a new voice
+proaches above serve as sophisticated generative models for     (Arik et al., 2018a; Taigman et al., 2018) at test time. These
+raw audio to be conditioned on a compact and controllable       methods, however, require labeled data. Ideas like clus-
+representation of audio such as Mel spectrograms, Mel-          tering (Dehak et al., 2011), priming (Wang et al., 2018),
+Net (Vasquez & Lewis, 2019) takes a different approach of       and variational autoencoders (Hsu et al., 2019; Akuzawa
+hierarchically generating accurate high-resolution Mel spec-    et al., 2018) have been used to learn broader styles of speech
+                                                                and control expressivity in an unsupervised way. There are
+Jukebox: A Generative Model for Music
+
+also works on synthesizing singing by additionally con-         The current model takes around an hour to generate 1 minute
+trolling pitch and timbre. Similar to TTS literature, early     of top level tokens. The upsampling process is very slow,
+works use concatenative methods (Bonada & Serra, 2007)          as it proceeds sequentially through the sample. Currently it
+that join short segments of curated singing, and statistical    takes around 8 hours to upsample one minute of top level
+parametric methods (Saino et al., 2006; Oura et al., 2010)      tokens. We can create a human-in-the-loop co-composition
+which allow modeling of timbre from training data. Both         process at the top level only, using the VQ-VAE decoders
+approaches impose fairly strong assumptions resulting in        to get a fast upsampling of the top level tokens to hear a
+noticeable artifacts. (Blaauw & Bonada, 2017) train a neural    very rough sense of what the model generates. The top-level
+TTS model with a parametric vocoder to separate pitch and       model generates multiple samples, the person picks a fa-
+timbre which can be controlled at generation time.              vorite (listening to the rough VQ-VAE decoding), and then
+                                                                the model continues generating multiple samples continuing
+7. Future work                                                  the favorite. This process would be significantly improved
+                                                                with faster generation and Transformer upsampling steps.
+While our approach represents a step forward in the ability     Our models have fast parallel evaluation of likelihood but
+to generate coherent long raw audio music samples, we rec-      slow autoregressive sampling. We can instead use a model
+ognize several directions for future work. Great music gen-     with fast parallel sampling but slow autoregressive likeli-
+eration should be high quality over all time scales: it should  hood evaluation (Kingma et al., 2016), and distill the infor-
+have a developing musical and emotional structure across        mation from our current model into it (Oord et al., 2018).
+the entire piece, local notes and harmonies that always make    The distillation works by generating samples from the paral-
+sense, nuanced and appropriate small timbral and textural       lel sampler and evaluating it likelihood and entropy using
+details, and audio recording quality that balances and blends   the parallel likelihood evaluator, and then optimising the
+the multiple voices well, and without unwanted noise. We        sampler by minimising the KL divergence of it from our
+view our current model as stronger on the mid-range time        current model.
+scales: often the model generates samples that locally sound
+very good, with interesting and diverse harmonies, rhythms,     8. Conclusion
+instruments, and voices. We have frequently been very
+impressed how the melody and rhythm generated suits a           We have introduced Jukebox, a model that generates raw
+particular lyric extremely well. However, while the samples     audio music imitating many different styles and artists. We
+stay consistent over longer time scales, we notice they don't   can condition this music on specific artists and genres, and
+have traditional larger music structures (such as choruses      can optionally specify the lyrics for the sample. We laid
+that repeat, or melodies that have a question and answer        out the details necessary to train a Hierarchical VQ-VAE to
+form). Additionally, on the smallest scale, we sometimes        compress the music effectively into tokens. While previous
+hear audio noise or scratchiness.                               work has generated raw audio music in the 20­30 second
+Beyond the quality of the samples, we also would look           range, our model is capable of generating pieces that are
+to diversify the languages and styles the model is able to      multiple minutes long, and with recognizable singing in
+generate. Our current model has been trained only on songs      natural-sounding voices.
+whose primary language as detected by (Sites, 2013) is
+English. In the future, we would look to include other          9. Acknowledgement
+languages and artists. We believe this will be of interest
+both for generating strictly in those styles, and because       We would like to thank John Schulman and Will Guss for
+historically we have seen much creativity and development       producing and performing novel riffs for our sampling ex-
+coming from unusual blends of existing musical styles.          periments, and Rewon Child, Aditya Ramesh, Ryan Lowe
+Finally, we consider it very important that computer music      and Jack Clark for providing feedback for initial drafts of
+generation also serves as a tool for human musicians, and       this paper.
+increasingly those interested in music but without formal
+training. While we are able to steer our current model some-    References
+what through lyric and midi conditioning, we can imagine
+many other possible ways for humans to influence the gener-     Akuzawa, K., Iwasawa, Y., and Matsuo, Y. Expressive
+ations, including indicating the mood or dynamic at various        speech synthesis via modeling expressions with varia-
+sections, or controlling when drums, singers, or other instru-     tional autoencoder. In INTERSPEECH, 2018.
+ments should play.
+                                                                Anders, T. and Miranda, E. R. Constraint programming
+                                                                   systems for modeling music theories and composition.
+                                                                  ACM Computing Surveys (CSUR), 43(4):1­38, 2011.
+Jukebox: A Generative Model for Music
+
+Arik, S. Ö., Chrzanowski, M., Coates, A., Diamos, G., Gib-       Dieleman, S., van den Oord, A., and Simonyan, K. The chal-
+   iansky, A., Kang, Y., Li, X., Miller, J., Ng, A., Raiman,        lenge of realistic music generation: modelling raw audio
+  J., Sengupta, S., and Shoeybi, M. Deep Voice: Real-time           at scale. In Advances in Neural Information Processing
+   neural text-to-speech. In International Conference on           Systems, pp. 7989­7999, 2018.
+  Machine Learning, pp. 195­204, 2017.
+                                                                 Dinh, L., Krueger, D., and Bengio, Y. NICE: Non-linear in-
+Arik, S. Ö., Chen, J., Peng, K., Ping, W., and Zhou, Y.             dependent components estimation. In International Con-
+   Neural voice cloning with a few samples. In Advances             ference in Learning Representations, Workshop, 2015.
+   in Neural Information Processing Systems, pp. 10019­
+  10029. 2018a.                                                  Dinh, L., Sohl-Dickstein, J., and Bengio, S. Density esti-
+                                                                    mation using Real NVP. In International Conference in
+Arik, S. Ö., Jun, H., and Diamos, G. Fast spectrogram              Learning Representations, 2017.
+   inversion using multi-head convolutional neural networks.
+  IEEE Signal Processing Letters, 26(1):94­98, 2018b.            Donahue, C., Mao, H. H., Li, Y. E., Cottrell, G. W., and
+                                                                    McAuley, J. J. LakhNES: Improving multi-instrumental
+Ba, J. L., Kiros, J. R., and Hinton, G. E. Layer normalization.     music generation with cross-domain pre-training. In In-
+   arXiv preprint arXiv:1607.06450, 2016.                           ternational Society for Music Information Retrieval Con-
+                                                                    ference, pp. 685­692, 2019.
+Berner, C., Brockman, G., Chan, B., Cheung, V., Debiak, P.,
+   Dennison, C., Farhi, D., Fischer, Q., Hashme, S., Hesse,      Dong, H.-W., Hsiao, W.-Y., Yang, L.-C., and Yang, Y.-H.
+   C., et al. Dota 2 with large scale deep reinforcement            MuseGAN: Multi-track sequential generative adversarial
+   learning. arXiv preprint arXiv:1912.06680, 2019.                 networks for symbolic music generation and accompani-
+                                                                    ment. In Thirty-Second AAAI Conference on Artificial
+Beyls, P. The musical universe of cellular automata. In            Intelligence, 2018.
+  International Computer Music Conference, pp. 34­41,
+  1989.                                                          Engel, J., Resnick, C., Roberts, A., Dieleman, S., Norouzi,
+                                                                    M., Eck, D., and Simonyan, K. Neural audio synthesis
+Blaauw, M. and Bonada, J. A neural parametric singing               of musical notes with wavenet autoencoders. In Interna-
+   synthesizer. In INTERSPEECH, 2017.                               tional Conference on Machine Learning, pp. 1068­1077,
+                                                                    2017.
+Bonada, J. and Serra, X. Synthesis of the singing voice by
+   performance sampling and spectral models. IEEE signal         Engel, J., Agrawal, K. K., Chen, S., Gulrajani, I., Donahue,
+   processing magazine, 24(2):67­79, 2007.                          C., and Roberts, A. GANSynth: Adversarial neural au-
+                                                                    dio synthesis. In International Conference on Learning
+Brock, A., Donahue, J., and Simonyan, K. Large scale               Representations, 2019.
+   GAN training for high fidelity natural image synthesis. In
+  International Conference on Learning Representations,          Gibiansky, A., Arik, S. Ö., Diamos, G., Miller, J., Peng, K.,
+   2019.                                                            Ping, W., Raiman, J., and Zhou, Y. Deep Voice 2: Multi-
+                                                                    speaker neural text-to-speech. In Advances in neural
+Brunner, G., Konrad, A., Wang, Y., and Wattenhofer, R.              information processing systems, pp. 2962­2970, 2017.
+   MIDI-VAE: modeling dynamics and instrumentation of
+   music with applications to style transfer. In International   Goodfellow, I. NIPS 2016 tutorial: Generative adversarial
+  Society for Music Information Retrieval Conference, pp.           networks. In Neural Information Processing Systems,
+  747­754, 2018.                                                   Tutorial, 2016.
+
+Child, R., Gray, S., Radford, A., and Sutskever, I. Gen-         Goodfellow, I., Pouget-Abadie, J., Mirza, M., Xu, B.,
+   erating long sequences with sparse transformers. arXiv          Warde-Farley, D., Ozair, S., Courville, A., and Bengio,
+   preprint arXiv:1904.10509, 2019.                                Y. Generative adversarial nets. In Advances in neural
+                                                                    information processing systems, pp. 2672­2680, 2014.
+De Fauw, J., Dieleman, S., and Simonyan, K. Hierarchi-
+   cal autoregressive image models with auxiliary decoders.      Gupta, C., Yilmaz, E., and Li, H. Automatic lyrics tran-
+   arXiv preprint arXiv:1903.04933, 2019.                           scription in polyphonic music: Does background music
+                                                                    help? In International Conference on Acoustics, Speech,
+Dehak, N., Kenny, P. J., Dehak, R., Dumouchel, P., and              and Signal Processing, 2020.
+   Ouellet, P. Front-end factor analysis for speaker verifica-
+   tion. IEEE Transactions on Audio, Speech, and Language        Hadjeres, G., Pachet, F., and Nielsen, F. Deepbach: a steer-
+  Processing, 19(4):788­798, 2011.                                  able model for bach chorales generation. In International
+                                                                   Conference on Machine Learning, pp. 1362­1371. JMLR.
+                                                                    org, 2017.
+Jukebox: A Generative Model for Music
+
+Hawthorne, C., Stasyuk, A., Roberts, A., Simon, I., Huang,     Kalchbrenner, N., Elsen, E., Simonyan, K., Noury, S.,
+   C.-Z. A., Dieleman, S., Elsen, E., Engel, J., and Eck, D.      Casagrande, N., Lockhart, E., Stimberg, F., Oord, A.,
+   Enabling factorized piano music modeling and generation        Dieleman, S., and Kavukcuoglu, K. Efficient neural au-
+  with the MAESTRO dataset. In International Conference           dio synthesis. In International Conference on Machine
+   on Learning Representations, 2019.                            Learning, pp. 2410­2419, 2018.
+
+Hennequin, R., Khlif, A., Voituret, F., and Moussallam, M.     Kim, J. W., Bittner, R., Kumar, A., and Bello, J. P. Neural
+   Spleeter: A fast and state-of-the art music source separa-     music synthesis for flexible timbre control. In IEEE In-
+   tion tool with pre-trained models. Late-Breaking/Demo          ternational Conference on Acoustics, Speech and Signal
+   ISMIR 2019, November 2019. Deezer Research.                   Processing, pp. 176­180, 2019.
+
+Hiller Jr, L. A. and Isaacson, L. M. Musical composition       Kingma, D. P. and Dhariwal, P. Glow: Generative flow
+  with a high speed digital computer. In Audio Engineering       with invertible 1x1 convolutions. In Advances in Neural
+  Society Convention 9. Audio Engineering Society, 1957.         Information Processing Systems, pp. 10215­10224, 2018.
+
+Ho, J., Kalchbrenner, N., Weissenborn, D., and Salimans, T.    Kingma, D. P. and Welling, M. Auto-encoding variational
+  Axial attention in multidimensional transformers. arXiv         bayes. In International Conference on Learning Repre-
+   preprint arXiv:1912.12180, 2019.                               sentations, 2014.
+
+Hsu, W.-N., Zhang, Y., Weiss, R. J., Zen, H., Wu, Y., Wang,    Kingma, D. P., Salimans, T., Jozefowicz, R., Chen, X.,
+  Y., Cao, Y., Jia, Y., Chen, Z., Shen, J., Nguyen, P., and       Sutskever, I., and Welling, M. Improved variational in-
+   Pang, R. Hierarchical generative modeling for control-         ference with inverse autoregressive flow. In Advances in
+   lable speech synthesis. In International Conference on         neural information processing systems, pp. 4743­4751,
+  Learning Representations, 2019.                                 2016.
+
+Huang, C. A., Cooijmans, T., Roberts, A., Courville, A. C.,    Klatt, D. H. Software for a cascade/parallel formant synthe-
+   and Eck, D. Counterpoint by convolution. In Interna-           sizer. Journal of the Acoustical Society of America, 67
+   tional Society for Music Information Retrieval Confer-        (3):971­995, 1980.
+   ence, pp. 211­218, 2017.
+                                                               Kumar, K., Kumar, R., de Boissiere, T., Gestin, L., Teoh,
+Huang, C.-Z. A., Vaswani, A., Uszkoreit, J., Shazeer, N.,        W. Z., Sotelo, J., de Brébisson, A., Bengio, Y., and
+   Simon, I., Hawthorne, C., Dai, A. M., Hoffman, M. D.,          Courville, A. C. MelGAN: Generative adversarial net-
+   Dinculescu, M., and Eck, D. Music Transformer: Gen-           works for conditional waveform synthesis. In Advances
+   erating music with long-term structure. In International       in Neural Information Processing Systems, pp. 14881­
+  Conference on Learning Representations, 2019a.                 14892, 2019.
+
+Huang, Y., Cheng, Y., Bapna, A., Firat, O., Chen, D., Chen,    LyricWiki. URL https://lyrics.fandom.com/
+   M., Lee, H., Ngiam, J., Le, Q. V., Wu, Y., et al. Gpipe:      wiki/LyricWiki.
+   Efficient training of giant neural networks using pipeline
+   parallelism. In Advances in Neural Information Process-     Mehri, S., Kumar, K., Gulrajani, I., Kumar, R., Jain, S.,
+   ing Systems, pp. 103­112, 2019b.                               Sotelo, J., Courville, A., and Bengio, Y. SampleRNN: An
+                                                                  unconditional end-to-end neural audio generation model.
+Hunt, A. J. and Black, A. W. Unit selection in a con-             In International Conference on Learning Representations,
+   catenative speech synthesis system using a large speech        2017.
+   database. In IEEE International Conference on Acoustics,
+  Speech, and Signal Processing Conference, pp. 373­376,       Moorer, J. A. Music and computer composition. Communi-
+  1996.                                                           cations of the ACM, 15(2):104­113, 1972.
+
+Jehan, T. Creating music by listening. PhD thesis, Mas-        Mor, N., Wolf, L., Polyak, A., and Taigman, Y. Autoencoder-
+   sachusetts Institute of Technology, School of Architecture     based music translation. In International Conference on
+   and Planning, Program in Media Arts and Sciences, 2005.       Learning Representations, 2019.
+
+Jia, Y., Zhang, Y., Weiss, R., Wang, Q., Shen, J., Ren, F.,    Oord, A. v. d., Dieleman, S., Zen, H., Simonyan, K.,
+   Chen, z., Nguyen, P., Pang, R., Lopez Moreno, I., and         Vinyals, O., Graves, A., Kalchbrenner, N., Senior, A.,
+  Wu, Y. Transfer learning from speaker verification to           and Kavukcuoglu, K. WaveNet: A generative model for
+   multispeaker text-to-speech synthesis. In Advances in          raw audio. arXiv preprint arXiv:1609.03499, 2016.
+  Neural Information Processing Systems, pp. 4480­4490.
+   2018.
+Jukebox: A Generative Model for Music
+
+Oord, A. v. d., Vinyals, O., and Kavukcuoglu, K. Neural         Roberts, A., Engel, J., Raffel, C., Hawthorne, C., and Eck,
+   discrete representation learning. In Neural Information         D. A hierarchical latent vector model for learning long-
+  Processing Systems, 2017.                                        term structure in music. In International Conference on
+                                                                  Machine Learning, pp. 4364­4373, 2018.
+Oord, A. v. d., Li, Y., Babuschkin, I., Simonyan, K., Vinyals,
+   O., Kavukcuoglu, K., van den Driessche, G., Lockhart, E.,    Saino, K., Zen, H., Nankaku, Y., Lee, A., and Tokuda,
+   Cobo, L., Stimberg, F., Casagrande, N., Grewe, D., Noury,       K. An HMM-based singing voice synthesis system. In
+   S., Dieleman, S., Elsen, E., Kalchbrenner, N., Zen, H.,        INTERSPEECH, 2006.
+   Graves, A., King, H., Walters, T., Belov, D., and Hassabis,
+   D. Parallel WaveNet: Fast high-fidelity speech synthesis.    Salakhutdinov, R. and Hinton, G. Deep boltzmann machines.
+   In International Conference on Machine Learning, pp.            In Artificial intelligence and statistics, pp. 448­455, 2009.
+   3918­3926, 2018.
+                                                                Shen, J., Pang, R., Weiss, R. J., Schuster, M., Jaitly, N.,
+Oura, K., Mase, A., Yamada, T., Muto, S., Nankaku, Y.,            Yang, Z., Chen, Z., Zhang, Y., Wang, Y., Skerrv-Ryan,
+   and Tokuda, K. Recent development of the HMM-based              R., Saurous, R. A., Agiomvrgiannakis, Y., and Wu, Y.
+   singing voice synthesis system ­ Sinsy. 2010.                   Natural TTS synthesis by conditioning wavenet on mel
+                                                                   spectrogram predictions. In IEEE International Confer-
+Papamakarios, G., Pavlakou, T., and Murray, I. Masked              ence on Acoustics, Speech and Signal Processing, pp.
+   autoregressive flow for density estimation. In Advances in     4779­4783, 2018.
+  Neural Information Processing Systems, pp. 2338­2347,
+   2017.                                                        Sites, D. Compact language detector 2. 2013. URL https:
+                                                                  //github.com/CLD2Owners/cld2.
+Payne, C. Musenet. OpenAI blog, 2019. URL https:
+  //openai.com/blog/musenet.                                    Sotelo, J., Mehri, S., Kumar, K., Santos, J. F., Kastner, K.,
+                                                                   Courville, A. C., and Bengio, Y. Char2Wav: End-to-
+Ping, W., Peng, K., Gibiansky, A., Arik, S. O., Kannan,            end speech synthesis. In International Conference on
+  A., Narang, S., Raiman, J., and Miller, J. Deep Voice           Learning Representations, 2017.
+   3: 2000-speaker neural text-to-speech. In International
+  Conference on Learning Representations, 2018.                 Sturmel, N. and Daudet, L. Signal reconstruction from stft
+                                                                   magnitude: A state of the art. International Conference
+Ping, W., Peng, K., and Chen, J. Clarinet: Parallel wave           on Digital Audio Effects, DAFx, 2011.
+   generation in end-to-end text-to-speech. In International
+  Conference on Learning Representations, 2019.                 Sutskever, I., Vinyals, O., and Le, Q. V. Sequence to se-
+                                                                   quence learning with neural networks. In Advances in
+Prenger, R., Valle, R., and Catanzaro, B. WaveGlow: A              neural information processing systems, pp. 3104­3112,
+   flow-based generative network for speech synthesis. In          2014.
+  IEEE International Conference on Acoustics, Speech and
+  Signal Processing, pp. 3617­3621, 2019.                       Taigman, Y., Wolf, L., Polyak, A., and Nachmani, E.
+                                                                  VoiceLoop: Voice fitting and synthesis via a phonological
+Pressing, J. Nonlinear maps as generators of musical design.       loop. In International Conference on Learning Represen-
+  Computer Music Journal, 12(2):35­46, 1988.                       tations, 2018.
+
+Radford, A., Wu, J., Child, R., Luan, D., Amodei, D., and       Uria, B., Côté, M.-A., Gregor, K., Murray, I., and
+   Sutskever, I. Language models are unsupervised multitask        Larochelle, H. Neural autoregressive distribution esti-
+   learners.                                                       mation. The Journal of Machine Learning Research, 17
+                                                                  (1):7184­7220, 2016.
+Razavi, A., van den Oord, A., and Vinyals, O. Generating
+   diverse high-fidelity images with vq-vae-2. In Advances      Van den Oord, A., Kalchbrenner, N., Espeholt, L., Vinyals,
+   in Neural Information Processing Systems, pp. 14837­            O., Graves, A., et al. Conditional image generation with
+  14847, 2019.                                                     pixelcnn decoders. In Advances in neural information
+                                                                   processing systems, pp. 4790­4798, 2016.
+Rezende, D. and Mohamed, S. Variational inference with
+   normalizing flows. In International Conference on Ma-        Vasquez, S. and Lewis, M. MelNet: A generative model
+   chine Learning, pp. 1530­1538, 2015.                            for audio in the frequency domain. arXiv preprint
+                                                                   arXiv:1906.01083, 2019.
+Rezende, D. J., Mohamed, S., and Wierstra, D. Stochastic
+   backpropagation and approximate inference in deep gen-       Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones,
+   erative models. In International Conference on Machine          L., Gomez, A. N., Kaiser, L., and Polosukhin, I. Atten-
+  Learning, pp. 1278­1286, 2014.                                   tion is all you need. In Advances in Neural Information
+                                                                  Processing Systems, pp. 5998­6008, 2017.
+                                                       Jukebox: A Generative Model for Music
+
+Wang, Y., Stanton, D., Zhang, Y., Skerry-Ryan, R., Batten-
+   berg, E., Shor, J., Xiao, Y., Ren, F., Jia, Y., and Saurous,
+   R. A. Style Tokens: Unsupervised style modeling, control
+   and transfer in end-to-end speech synthesis. In Interna-
+   tional Conference on Machine Learning, 2018.
+
+Wu, J., Hu, C., Wang, Y., Hu, X., and Zhu, J. A hierarchical
+   recurrent neural network for symbolic melody generation.
+  IEEE Transactions on Cybernetics, 2019.
+
+Xie, S., Girshick, R., Dollár, P., Tu, Z., and He, K. Aggre-
+   gated residual transformations for deep neural networks.
+   In IEEE Conference on Computer Vision and Pattern
+  Recognition, pp. 1492­1500, 2017.
+
+Yamamoto, R., Song, E., and Kim, J.-M. Parallel Wave-
+   GAN: A fast waveform generation model based on gener-
+   ative adversarial networks with multi-resolution spectro-
+   gram. In International Conference on Acoustics, Speech,
+   and Signal Processing, 2020.
+
+Yang, L., Chou, S., and Yang, Y. Midinet: A convolutional
+   generative adversarial network for symbolic-domain mu-
+   sic generation. In International Society for Music Infor-
+   mation Retrieval Conference, pp. 324­331, 2017.
+
+Zen, H., Tokuda, K., and Black, A. W. Review: Statistical
+   parametric speech synthesis. Speech Communication, 51
+  (11):1039­1064, 2009.
+
+Zhang, H., Dauphin, Y. N., and Ma, T. Fixup initialization:
+   Residual learning without normalization. In International
+  Conference on Machine Learning, 2019a.
+
+Zhang, H., Goodfellow, I., Metaxas, D., and Odena, A.
+   Self-attention generative adversarial networks. In Inter-
+   national Conference on Machine Learning, 2019b.
+Jukebox: A Generative Model for Music
+
+A. Scalable Transformer                                             Masked           Masked              Unmasked
+                                                                Row Attention  Column Attention  Previous-Row Attention
+We make the Sparse Transformer (Child et al., 2019) more
+scalable and easier to implement by a few small changes.        (a) Three axis-aligned attention patterns are sparse attention pat-
+We implement a simpler attention pattern that has the same      terns that allow autoregressive generative modeling while only
+performance without needing custom kernels to implement.        using simple Python-level array manipulation. Masked row and
+We simplify the initialization by using the same initalization  column attention patterns use autoregressive masks, whereas un-
+scale in the whole model without rescaling the weights          masked previous-row attention is fully visible.
+based on fan-in and depth, and we optimize the memory
+footprint with fully half-precision training, i.e. storing the  (b) Combining two of the attention patterns, each position can
+model weights, gradients and the optimizer states in half       attend to any of the previous positions, while not causing a state
+precision and performing computations in half precision as      bottleneck as in fixed sparse attention (Child et al., 2019).
+well. To cope with the narrower dynamic range of the fp16
+format, we use dynamic scaling of the gradient and Adam                       Figure 6. Axis-aligned attention patterns
+optimizer states.
+Axis-aligned attention patterns: The Sparse Transformer         sion completely without loss in training performance. For
+(Child et al., 2019) sparsifies the attention pattern by        the Adam state tensors (m_t, v_t) we do dynamic scal-
+reshaping the input sequence into a 2-D sequence of             ing. For each iteration and for every parameter, we rescale
+shape (blocks, block length) to use factorized attention.       its state tensors before casting so that their maximum corre-
+They observe that the strided attention pattern works           sponds to the maximum value of the float16 range, thus max-
+best for images and audio because it does not have the          imizing the use of the float16 range. Thus, we store the state
+state bottleneck of the fixed attention. However, their         m_t as the tuple (scale, (m_t/scale).half()),
+implementation require specialized CUDA kernels. We             where scale = m_t.max()/float16.max(), and
+can obtain a similar pattern by doing masked row, masked        similarly for v_t. The above lets us fit models of size 1B
+column, and unmasked previous-row attention. While              parameters into memory for our large context of 8192 to-
+the masked row captures the local context, the masked           kens. To train even larger models, we use GPipe (Huang
+column and unmasked previous-row attention captures             et al., 2019b).
+the context of all previous rows. We observe the same
+computational speed as well as training loss with this
+pattern. Each of these can be implemented directly as a
+dense attention by transposing or slicing the input sequence
+along appropriate axes, and thus do not require special
+CUDA kernels to implement. This can be easily extended
+to video too. Complementary to our work, a similar
+pattern was introduced in (Ho et al., 2019) where they also
+used axis-aligned attention but instead used a two-stream
+architecture.
+
+Half-precision parameters and optimizer state with dy-
+namic scaling: To allow training large models, (Child et al.,
+2019) uses recompute with gradient checkpointing, per-
+forms computations using half precision activations and
+gradients, and uses dynamic loss scaling. While this speeds
+up training on Volta cores, one still has a high memory us-
+age from storing the parameters and Adam state in full float
+precision. To scale our models further, we store our matmul
+parameters and their Adam state in half precision, thus halv-
+ing our memory usage. We use a single parameter s to set the
+scale of all weights and initialize all matmul and input/out-
+put embeddings3 to N (0, s), and position embeddings to
+N (0, 2s). The initialization ensures all parameters are in a
+similar dynamic range, and allows us to train in half preci-
+
+    3We share the input and output embedding
+Jukebox: A Generative Model for Music
+
+B. Experimental details                                                                 Dilated                         ×L
+                                                                                        Conv1D                   ×D
+B.1. Music VQ-VAE
+We have three separate raw audio VQ-VAEs to produce dis-                                             Conv1D
+crete codes at varying hop sizes for the bottom, middle, and
+top priors. All autoencoders comprise non-causal, dilated        xt   Conv1D                                     +          ht
+1-D convolutions, and are trained independently using non-
+autoregressive reconstruction losses. Basic building blocks      (a) The encoder compresses the raw audio input into a sequence
+in these networks share the same architecture, as shown in       of embeddings. The length of this latent representation relative
+Figure 7. Each encoder block consists of a downsampling          to the raw audio duration determines the amount of compression,
+convolution, a residual network, and a 1D convolution with       and is an important factor for the trade-off between fidelity and
+a kernel size of 3. Dilation is grown by a factor of 3 in        coherence.
+these residual networks to increase the receptive field. The
+decoder block mirrors this exactly with a 1D convolution                                Codebook
+with the kernel size of 3, a residual network with dilation
+contracting across depth, and an upsampling transposed con-      ht   Nearest-Neighbor  zt           Codebook               ezt
+volution. Here, all resampling convolutions use a kernel size                Search                   Lookup
+of 4 and stride 2 so that each building block changes the
+hop length by a factor of 2. To get higher compression in                      Gradient Passthrough
+time, we simply stack more of these blocks. For example,
+using seven blocks yields a hop length of 128 for the top        (b) The bottleneck takes the sequence of embeddings from the
+level autoencoder.                                               encoder and maps it into a sequence of code vectors from the
+Each residual network has four residual blocks in the mid-       codebook. This sequence of code indices is used as a discrete
+dle and top VQ-VAEs resulting in a receptive field of 120        representation to be modeled by the priors. Larger codebooks
+ms and 480 ms for the respective discrete tokens. Because        improve fidelity but may be more difficult to compress.
+increasing the residual depth helped improve reconstruction
+quality slightly, we doubled the number of residual blocks                                           ×L
+for the bottom level. This dramatically increases the recep-
+tive field to about 2 seconds per code but the actual receptive       Dilated                    ×D
+field is mostly local.                                                Conv1D   Conv1D
+We also experimented with having a single decoder and
+modeling the residuals to separate out learned representa-       ezt                        +        Transposed  Conv1D     x t
+tions as in (Razavi et al., 2019), hoping upsampling priors                                            Conv1D
+would simply fill in local musical structure. However, push-
+ing information to the top level was quite challenging as the    (c) The decoder reconstructs the raw audio from latent represen-
+bottommost level reconstructs almost perfectly early on in       tations. It is a mirror of the encoder where dilations constracts
+training. When we add auxiliary objectives to encourage          by a factor of 3 down to 1 at the last block. The final Conv1D
+the top to be used more, the top-level codes add serious         projects to the desired number of audio channels and also acts as a
+distortions to the final output. A similar challenge is shown    smoothing operation after a sequence of transposed convolutions.
+in (Dieleman et al., 2018).
+                                                                            Figure 7. Components of the VQ-VAE model
+B.2. Music Priors and Upsamplers
+Architectural details of our music prior and upsampler mod-      are upsampled by the conditioner network, using WaveNet-
+els are depicted in Figure 8. They perform autoregressive        style dilated convolutions followed by a transposed 1-D
+modeling of tokens at each level, conditioned on informa-        convolutional layer (Figure 8b).
+tion such as artist and genre, as well as the tokens from the    When the model is trained on lyrics, the top-level prior takes
+upper level in the case of the upsamplers (Figure 8a). Each      lyrics data corresponding to each audio segment and uses
+artist and genre are learned as embedding vectors, whose         them to train an encoder-decoder Transformer as shown in
+sum is provided as the very first token in each sequence.        Figure 8c. All transformer stacks use sparse self-attention
+In addition, positional embedding is learned as a function       layers with the three factorized attention types (row, column,
+of each position's absolute and relative timing in the dura-     and previous-row) repeating, and encoder-decoder attention
+tion of the song. In upsampler models, upper-level tokens        layers, when present, are interleaved with the other attention
+                                                                 types. Each layer consists of residual connections of an
+                                                                 attention and an MLP feedforward network, each prepended
+                                                                 by layer normalization (see Figure 8d).
+                                                Jukebox: A Generative Model for Music
+
+Upper-Level Tokens                   Conditioner               Not Used in the Top Level         Token Embedding
+                                                                                                                                                              ×D
+   Timing Data                   Time Embedding
+Artist & Genre                              z1:T­1                                                                         Dilated Conv1D
+                                                                                                                                Conv1D
+           Lyrics              Scalable Transformer
+                                                                                                            +
+
+                                                                          z1:T                          Transposed Conv1D
+
+(a) The structure of our prior models, performing next-token prediction at each           (b) The conditioner network takes the tokens from
+level. The Transformer takes the embeddings of the tokens z1:T -1 prepended by            the upper level, and their embedding vectors go
+the sum of the artist and genre embeddings, in addition to the time embedding             through non-causal WaveNet-like layers with in-
+that encodes relative and absolute timing of the segments in the duration of the          creasingly dilated convolutions. The transposed 1-D
+song. The upsampler priors additionally take the tokens from the upper level,             convolution upsamples the sequence to the higher
+which are fed to the conditioner network and added to the input sequence. The             temporal resolution of the current level.
+top-level prior takes lyrics as conditioning information as well (see Figure 8c).
+
+        Only in the Top Level                        VQ Codes
+
+Lyrics
+
+        Lyrics Token Embedding                       VQ Code Embedding                                     Layer Norm
+
+                    Row Attention Layer              Row Attention Layer                         Encoder   Attention
+                                                                                                 Features                      +
+        Column Attention Layer                       Column Attention Layer                ×6
+
+        Previous-Row Attention Layer                 Previous-Row Attention Layer
+
+                    Row Attention Layer              Encoder-Decoder Attention Layer
+
+        Column Attention Layer                       Row Attention Layer
+
+        Previous-Row Attention Layer                 Column Attention Layer                ×3
+
+                                                     Previous-Row Attention Layer                          Layer Norm
+                                                                                                               MLP
+                    Row Attention Layer              Encoder-Decoder Attention Layer                                             +
+
+        Column Attention Layer                                       
+
+        Previous-Row Attention Layer                 Encoder-Decoder Attention Layer
+
+                                                     Row Attention Layer
+
+                                                     Column Attention Layer                ×3
+
+        Lyrics Token Embedding                       Previous-Row Attention Layer
+                         Next-Token Prediction
+                                                     Encoder-Decoder Attention Layer
+
+                                                     VQ Code Embedding                           (d) Each Transformer layer is a resid-
+                                                                    Next-Token Prediction        ual attention block, which performs
+                                                                                                 two residual operations, attention and
+(c) The Scalable Transformer architecture, shown with the lyrics Transformer used in the         MLP, each prepended with layer nor-
+top-level prior. The Transformer layers use the three factorized attention types alternatingly,  malization. Depending on the layer's
+i.e. repeating row, column, and previous-row attentions. In the top-level prior, the VQ          type, it uses either one of the three fac-
+Transformer additionally includes interleaved encoder-decoder attention layers that apply        torized attentions or encoder-decoder
+lyrics conditioning by attending on the activation of the last encoder layer.                    attention taking the lyrics features
+                                                                                                 from the encoder.
+
+                    Figure 8. Detailed architecture of the music prior and upsampler models
+                                     Jukebox: A Generative Model for Music
+
+B.3. Hyperparameters
+For all Transformers' residual blocks, we use MLP blocks
+with the same width as the model width, and attention blocks
+with queries, keys, and values with width 0.25 times the
+model width. For all convolutional residual blocks, we use
+convolutions with same channels as the model width.
+
+Sample rate                                44100              Sample length                            5B prior
+Sample length                             393216              Context length                           1048576
+Hop lengths                             8, 32, 128            Transformer width
+Embedding width                                               Transformer self-attention layers          8192
+Residual block width                         64               Attention heads                            4800
+Residual blocks (per 2x downsample)     64, 32, 32            Factorized attention shape                   72
+Conv filter size                                              Lyrics encoder tokens
+Conv channels                              8, 4, 4            Lyrics encoder width                         8
+Dilation growth rate                          3               Lyrics encoder layers                    (128, 64)
+Commit weight                                32               Lyrics encoder attention heads
+Codebook EMA                                  3               Lyrics encoder factored attention shape     512
+Codebook size                                                 Encoder-Decoder attention layers           1280
+Spectral loss STFT bins                     0.02              Initialization scale                         18
+Spectral loss STFT hop length               0.99              Encoder initialization scale
+Spectral loss STFT window size             2048               Batch size                                   4
+Initialization scale                 2048, 1024, 512          Training steps                           (32, 16)
+Batch size                             240, 120, 50           Learning rate
+Training steps                       1200, 600, 240           Adam 2                                       7
+Learning rate                               0.02              Weight decay                               0.002
+                                            256                                                          0.014
+                                          384618                                                          512
+                                          0.0003                                                        310500
+                                                                                                       0.00015
+Table 4. VQ-VAE hyperparameters                                                                          0.925
+                                                                                                         0.002
+Sample length                        1B upsamplers
+Context length                       262144, 65536            Table 6. Top-level prior hyperparameters
+Transformer width
+Transformer layers                         8192
+Attention heads                            1920
+Factorized attention shape                   72
+Conditioner residual block width
+Conditioner residual blocks                   1
+Conditioner conv filter size             (128, 64)
+Conditioner conv channels
+Conditioner dilation growth rate           1024
+Conditioner dilation cycle                   16
+Initialization scale                          3
+Batch size                                 1024
+Training steps                                3
+Learning rate                                 8
+Adam 2                                 0.004, 0.008
+Weight decay                             192, 184
+                                     265000, 279000
+                                          0.0003
+                                            0.95
+                                            0.01
+
+Table 5. Middle- and bottom-level upsampler hyperparameters
+                                                                    Jukebox: A Generative Model for Music
+
+B.4. t-SNE Plot of Artists
+
+                     Barry White         Natalie Cole       Barrington Levy               Tony Bennett          Ray Noble                       R&B Soul           Jazz
+                                         Donna Summer                             Dinah Washington             Cab Calloway                     R&B                Blues
+Fats Domino                                                                                                  Louis Prima                        Hip Hop            Country
+    Lou Rawls                                                                                              The Mills Brothers
+                                                                                                                                                Rock               Soundtrack
+  The Platters                                                                                                                                  Pop                Classical
+                                                                                                                                                Reggae
+
+                                                                    J immy Cliff
+
+                                         Sean Paul
+
+                                                            Shaggy   Bobby Bland                           Nina Simone                              Walter Gieseking
+
+                      Luther Vandross                                                                      Bessie Smith                              Yann Tiersen               Glenn Gould
+         The Weeknd                                                                                                               Howard Shore                                Garrick Ohlsson
+
+                                                                                      Lonnie J ohnson
+
+                                         Ariana Grande                                                                                                             Franz Schubert
+
+         Akon                                                                     Dean Martin              Ramin Djawadi
+
+T. Pain                                         Ed Sheeran           Neil Diamond                                            Vangelis                                 Yo-Yo Ma
+                                         Kanye West                                            Buck Owens                            Henry Mancini  J ohann Sebastian Bach
+
+         Migos O.S.T.R.                                                                                                                             Andrea Bocelli
+
+                                         The Beatles                                                            Hank Snow    ELO                                    Fleetwood Mac
+                                                                                                                Eddy Arnold                         Rod Stewart
+
+                                                                    Van Morrison                           Marty Robbins                 The Beatles                          Neil Young
+                                                                                                                             George Harrison                                    Eagles
+               The Beach Boys
+                                                                                                                                            Paul McCartney
+                                                                                                                                                                 John Lennon
+
+                                         Pink Floyd                  Billy Ray Cyrus                                                            Ringo Starr
+
+                               The Cure                                                                                                         Cheap Trick
+         The Smashing Pumpkins
+                                                              P !nk                                                                  Aerosmith      Status Quo                Pearl Jam
+                                         Linkin Park                                                                              Queen
+
+Figure 9. t-SNE of (artist, genre) embedding. The overall clustering shows very clearly how genres are related to one another. The
+broadest of all, pop, is situated in the middle of rock, country, blues, hip hop, and many more. Soundtrack and classical form their own
+island. Within a genre, we see a similar trend among artists. John Lennon, Paul McCartney, George Harrison and Ringo Starr are clustered
+around The Beatles. Cheap Trick which has a number of Beatles covers is also found near. Because we are showing only about 400 artists
+here, not all neighboring artists may be related. For an interactive version, we point to our blog post.
+

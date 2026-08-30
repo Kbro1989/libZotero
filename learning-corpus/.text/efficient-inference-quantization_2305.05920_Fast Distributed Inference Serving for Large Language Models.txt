@@ -1,0 +1,89 @@
+arXiv:2305.05920v3 [cs.LG] 25 Sep 2024 Time Breakdown (%)
+
+Fast Distributed Inference Serving for Large Language Models
+
+Bingyang Wu Yinmin Zhong Zili Zhang Shengyu Liu Fangyue Liu Yuanhang Sun Gang Huang Xuanzhe Liu Xin Jin
+
+Peking University
+
+Abstract
+Large language models (LLMs) power a new generation of interactive AI applications exemplified by ChatGPT. The interactive nature of these applications demands low latency for LLM inference. Existing LLM serving systems use run-tocompletion processing for inference jobs, which suffers from head-of-line blocking and long latency.
+We present FastServe, a distributed inference serving system for LLMs. FastServe exploits the autoregressive pattern of LLM inference to enable preemption at the granularity of each output token. FastServe uses preemptive scheduling to minimize latency with a novel skip-join Multi-Level Feedback Queue scheduler. Based on the new semi information-agnostic setting of LLM inference, the scheduler leverages the input length information to assign an appropriate initial queue for each arrival job to join. The higher priority queues than the joined queue are skipped to reduce demotions. We design an efficient GPU memory management mechanism that proactively offloads and uploads intermediate state between GPU memory and host memory for LLM inference. We build a system prototype of FastServe and experimental results show that compared to the state-of-the-art solution vLLM, FastServe improves the throughput by up to 31.4× and 17.9× under the same average and tail latency requirements, respectively.
+1 Introduction
+Advancements in large language models (LLMs) open new possibilities in a wide variety of areas and trigger a new generation of interactive AI applications. The most notable one is ChatGPT [1] that enables users to interact with an AI agent in a conversational way to solve tasks ranging from language translation to software engineering. The impressive capability of ChatGPT makes it one of the fastest growing applications in history [2]. Many organizations follow the trend to release LLMs and ChatGPT-like applications, such as the New Bing from Microsoft [3], Gemini from Google [4], Claude-3 [5] from Anthropic, Qwen [6] from Alibaba, etc.
+Inference serving is critical to interactive AI applications based on LLMs. In order to provide engaging user experience, the interactive nature of these applications demands low latency for LLM inference. For example, users expect their
+Equal contribution.
+
+Queuing Delay
+
+Execution Time
+
+100
+
+12.3
+
+7.2
+
+80
+
+60.1
+
+60
+
+79.6
+
+98.0 98.0
+40
+
+87.6
+
+92.7
+
+20
+
+39.9
+
+20.3
+
+0 Fix-Len (load=F0i.x9-)Len (loadA=l1p)aca (load=0A.9lp)aca (loaSdh=a1r)eGPT (loaSdh=a0r.e9G) PT (load=1)
+
+Figure 1: Head-of-line blocking in LLM inference.
+
+inputs to ChatGPT to be responded instantly. Yet, the size and complexity of LLMs put tremendous pressure on the underlying inference serving infrastructure. Enterprises provision huge and expensive clusters that consist of accelerators like GPUs and TPUs to process LLM inference jobs.
+LLM inference has its own unique characteristics (§2) that are different from other deep neural network (DNN) model inference like ResNet [7]. DNN inference jobs are typically deterministic and highly-predictable [8], i.e., the execution time of an inference job is mainly decided by the model and the hardware. For example, different input images have similar execution time on the same ResNet model on a given GPU. In contrast, LLM inference jobs have a special autoregressive pattern. An LLM inference job contains multiple iterations. Each iteration generates one output token, and each output token is appended to the input to generate the next output token in the next iteration. The execution time depends on both the input length and the output length, the latter of which is not known a priori.
+Existing inference serving solutions like Clockwork [8] and Shepherd [9] target deterministic model inference like ResNet [7]. They rely on accurate execution time profiling to schedule jobs, which do not work for LLM inference that has variable execution time. Orca [10], designed for LLM inference, introduces iteration-level scheduling that dynamically adds new jobs or removes completed ones at the end of each iteration. vLLM [11] further introduces PagedAttention to reduce the memory fragmentation of the intermediate state of LLM inference jobs. However, they both use first-comefirst-served (FCFS) to process inference jobs. Once a job is scheduled, it runs until it finishes. Due to the limited GPU memory and the strict latency requirement, the current pro-
+
+1
+
+cessing batch cannot be expanded with an arbitrary number of incoming jobs, thus a long job may block the incoming ones, known as head-of-line blocking [12]. The problem is particularly acute for LLM inference jobs. A large LLM inference job, i.e., with long input and output length, would run for a long time to block incoming short jobs.
+Figure 1 demonstrates the problem based on real-world datasets. The detailed setup is in §6. Ideally, if the input length and output length of the jobs are all the same among jobs, there is almost no queuing delay even when the load reaches capacity (load  1), as the first two columns in Figure 1 suggest. However, LLM datasets like ShareGPT [13] and Alpaca [14] show that real-world workloads are highly skewed. The long-tail distribution of output length leads to a long queuing delay. Figure 1 shows that up to 90% of total latency is the queuing delay for real-world datasets. In this case, optimizing execution time is not enough, because it only contributes to a small portion of the end-to-end latency. Instead, we need to optimize the queuing delay, which is the major contributor to the end-to-end latency.
+We present FastServe, a distributed inference serving system for LLMs. FastServe exploits the autoregressive pattern of LLM inference and iteration-level scheduling to enable preemption at the granularity of each output token. Specifically, when one scheduled job finishes generating an output token, FastServe can decide whether to continue this job or preempt it with another job in the queue. This allows FastServe to use preemptive scheduling to eliminate head-of-line blocking problem and minimize latency.
+The core of FastServe is a novel skip-join Multi-Level Feedback Queue (MLFQ) scheduler. MLFQ is a classic approach to minimize latency in information-agnostic settings [15]. Each job first enters the highest priority queue, and is demoted to the next priority queue if it does not finish after a threshold. The key difference between LLM inference and the classic setting is that LLM inference is semi informationagnostic, i.e., while the output length is not known a priori, the input length is known. Because of the autoregressive pattern of LLM inference, the input length decides the execution time to generate the first output token, which can be significantly larger than those of the later tokens (§4.1). For a long input and a short output, the execution time of the first output token dominates the entire job. We leverage this characteristic to extend the classic MLFQ with skip-join. Instead of always entering the highest priority queue, each arrival job joins an appropriate queue by comparing its execution time of the first output token with the quantum of the queues. The higher priority queues are skipped to reduce demotions.
+Preemptive scheduling introduces extra memory overhead to maintain intermediate state for started but unfinished jobs. LLMs maintain a key-value cache for each Transformer layer to store intermediate state (§2.2). In FCFS, the cache only needs to store the intermediate state of the scheduled jobs in the processing batch, limited by the maximum batch size.
+
+...
+
+GPT
+Decoding Transformer
+Transformer Embedding
+
+Transformer
+Add FC2 FC1 LayerNorm
+Add Masked Self-Attention LayerNorm
+
+Self-Attention
+Atten Out FC MatMul
+Softmax
+Query Key Value QKV Linear
+
+Figure 2: GPT-like model architecture.
+But in MLFQ, more jobs may have started but are demoted to lower priority queues. The cache has to maintain the intermediate state for all started but unfinished jobs in MLFQ. The cache can overflow, given the large size of intermediate state and the limited memory capacity of GPUs. Naively, the scheduler can pause starting new jobs when the cache is full, but this again introduces head-of-line blocking. Instead, we design proactive GPU memory management mechanism that proactively offloads the state of the jobs in low-priority queues to the host memory when the cache is close to full, and uploads the state back when these jobs are to be scheduled. We use pipelining and asynchronous memory operations to improve the efficiency.
+For large models that do not fit in one GPU, FastServe leverages parallelization strategies including tensor parallelism [16] and pipeline parallelism [17] to perform distributed inference serving with multiple GPUs (§4.3). The scheduler runs multiple batches of jobs concurrently in a pipeline to minimize pipeline bubbles. The key-value cache manager partitions the key-value cache over multiple GPUs, and handles swapping between GPU memory and host memory in a distributed manner.
+We implement a system prototype of FastServe and integrate many optimization techniques like PagedAttention [11]. We evaluate FastServe on different configurations of LLMs with real-world LLM inference workloads. In particular, we evaluate the end-to-end performance of FastServe for OPT175B [18] (an open-source LLM similar to the largest GPT-3 model) on 16 NVIDIA A100 GPUs. The experiments show that compared to the state-of-the-art solution vLLM [11], FastServe improves the throughput by up to 31.4× and 17.9× under the same average and tail latency requirements, respectively.
+2 Background and Motivation
+2.1 LLM Inference and Applications
+LLM inference. The LLM family [18­20] comprises a set of language models built on the foundation of Transformer [21]. LLM inference operates in an autoregressive fashion, where the input, often known as a prompt, is processed as a sequence of tokens. It then produces a probability distribution for the
+
+2
+
+

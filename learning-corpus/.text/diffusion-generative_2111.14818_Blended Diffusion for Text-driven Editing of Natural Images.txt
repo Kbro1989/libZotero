@@ -1,0 +1,64 @@
+Blended Diffusion for Text-driven Editing of Natural Images
+
+Omri Avrahami1 Dani Lischinski1 Ohad Fried2
+
+1The Hebrew University of Jerusalem
+
+2Reichman University
+
+Abstract
+Natural language offers a highly intuitive interface for image editing. In this paper, we introduce the first solution for performing local (region-based) edits in generic natural images, based on a natural language description along with an ROI mask. We achieve our goal by leveraging and combining a pretrained language-image model (CLIP), to steer the edit towards a user-provided text prompt, with a denoising diffusion probabilistic model (DDPM) to generate natural-looking results. To seamlessly fuse the edited region with the unchanged parts of the image, we spatially blend noised versions of the input image with the local text-guided diffusion latent at a progression of noise levels. In addition, we show that adding augmentations to the diffusion process mitigates adversarial results. We compare against several baselines and related methods, both qualitatively and quantitatively, and show that our method outperforms these solutions in terms of overall realism, ability to preserve the background and matching the text. Finally, we show several text-driven editing applications, including adding a new object to an image, removing/replacing/altering existing objects, background replacement, and image extrapolation.
+1. Introduction
+It is said that "a picture is worth a thousand words", but recent research indicates that only a few words are often sufficient to describe one. Recent works that leverage the tremendous progress in vision-language models and datadriven image generation have demonstrated that text-based interfaces for image creation and manipulation are now finally within reach [12, 24, 30, 31, 42, 43, 45, 52, 57, 63].
+The most impressive results in text-driven image manipulation leverage the strong generative capabilities of modern GANs [6,20,26­28]. However, GAN-based approaches are typically limited to images from a restricted domain, on which the GAN was trained. Furthermore, in order to manipulate real images, they must be first inverted into the GAN's latent space. Although many GAN inversion techniques have recently emerged [1­3, 48, 53, 58, 65], it was also shown that there is a trade-off between the reconstruc-
+
+input+mask no prompt "white ball" "bowl of water"
+input+mask "big mountain" "big wall" "New York City"
+Figure 1. Text-driven object/background replacement: Given an input image and a mask, we modify the masked area according to a guiding text prompt, without affecting the unmasked regions.
+tion accuracy and the editability of the inverted images [53]. Restricting the image manipulation to a specific region in the image is another challenge for existing approaches [4].
+In this work, we present the first approach for regionbased editing of generic real-world natural images, using natural language text guidance1. Specifically, we aim at a text-driven method that (1) can operate on real images, rather than generated ones, (2) is not restricted to a specific domain, such as human faces or bedrooms, (3) modifies only a user-specified region, while preserving the rest of the image, (4) yields globally coherent (seamless) editing results, and (5) capable of generating multiple results for the same input, because of the one-to-many nature of the task. Several examples of such edits are shown in Figure 1.
+The demanding image editing scenario described above has not received much attention in the deep-learning era. In fact, the most closely related works are classical approaches, such as seamless cloning [15,41] and image completion [22], none of which are text-driven. A more recent related work is zero-shot semantic image painting [4] in which arbitrary simple textual descriptions can be attributed to the desired location within an image. However, this method does not operate on real images (requirement 1), does not preserve the background of the image (require-
+1Code is available at: https : / / omriavrahami . com / blended-diffusion-page/
+
+1
+
+ment 3), and does not generate multiple outputs for the same input (requirement 5).
+To achieve our goals, we utilize two off-the-shelf pretrained models: Denoising Diffusion Probabilistic Models (DDPM) [11, 25, 36] and Contrastive Language-Image Pretraining (CLIP) [44]. DDPM is a class of probabilistic generative models that has recently been shown to surpass the image generation quality of state-of-the-art GANs [11]. We use DPPM as our generative backbone in order to ensure natural-looking results. The CLIP model is contrastively trained on a dataset of 400 million (image, text) pairs collected from the internet to learn a rich shared embedding space for images and text. We use CLIP in order to guide the manipulation to match the user-provided text prompt.
+We show that a na¨ive combination of DDPM and CLIP to perform text-driven local editing fails to preserve the image background, and in many cases, leads to a less natural result. Instead, we propose a novel way to leverage the diffusion process, which blends the CLIP-guided diffusion latents with suitably noised versions of the input image, at each diffusion step. We show that this scheme produces natural-looking results that are coherent with the unaltered parts of the input. We further show that using extending augmentations at each step of the diffusion process reduces adversarial results. Our method utilizes pretrained DDPM and CLIP models, without requiring additional training.
+In summary, our main contributions are: (1) We propose the first solution for general-purpose region-based image editing, using natural language guidance, applicable to real, diverse images. (2) Our background preservation technique guarantees that unaltered regions are perfectly preserved. (3) We demonstrate that a simple augmentation technique significantly reduces the risk of adversarial results, allowing us to use gradient-based diffusion guidance.
+2. Related Work
+Text-to-image synthesis. Recently, we've witnessed significant advances in text-to-image generation. Initial RNNbased works [33] were quickly superseded by generative adversarial approaches, such as the seminal work by Reed et al. [47]. The latter was further improved by multi-stage architectures [60, 61] and an attention mechanism [59].
+DALL-E [45] introduced a GAN-free two stage approach: first, a discrete VAE [46, 55] is trained to reduce the context for the transformer. Next, a transformer [56] is trained autoregressively to model the joint distribution over the text and image tokens.
+Several recent projects [8, 9, 34] utilize a pretrained generative model [6,11,14] using a pretrained CLIP model [44] to steer the generated result towards the desired target description. These methods are mainly used to create abstract artworks from text descriptions and lack the ability to edit parts of a real image, while preserving the rest.
+
+Forward Markovian noising process
+
+... ...
+
+x0
+
+xt-1
+
+q(xt | xt-1) p(xt-1 | xt)
+Reverse process
+
+... ...
+
+xt
+
+xT
+
+Figure 2. Denoising diffusion. Starting from a sample x0, a forward Markovian noising process produces a series of noisy images by gradually adding Gaussian noise q(xt|xt-1), until obtaining a nearly isotropic Gaussian noise sample xT . The reverse process transforms a Gaussian noise sample xT into x0 by repeated denoising using a learned posterior p(xt-1|xt).
+
+While text-to-image is a challenging and interesting task, in this work we focus on text-driven image manipulation, where edits are restricted to a user-specified region.
+
+Text-driven image manipulation. Several recent works utilize CLIP in order to manipulate real images. StyleCLIP [40] use pretrained StyleGAN2 [28] and CLIP models to modify images based on text prompts. To manipulate real images (rather than generated ones), they must first be encoded to the latent space [53]. This approach cannot handle generic real images, and is restricted to domains for which high-quality generators are available. In addition, StyleCLIP operates on images in a global fashion, without providing spatial control over which areas should change.
+More closely related to ours is the work of Bau et al. [4], where arbitrary simple textual descriptions can be attributed to a desired location within an image. Their GAN-based approach has several limitations: (1) although they attempt to preserve the background, it may still change, as can be seen in Figure 5; (2) their solution is mainly demonstrated in the restricted domain of bedrooms, and mainly for color and texture editing tasks. A few examples of general images are shown, but the results are less natural or lack background preservation (see Figure 5). (3) Their model is able to operate only on generated images and is not applicable out-of-the-box to arbitrary natural images. GAN-inversion techniques [1­3, 48, 53, 58, 65] can be used to edit real images, but it was shown [53] that there is a trade-off between the edibility and the distortion of the reconstructed image.
+Concurrently with our work, Liu et al. [32] and Kim et al. [29] propose ways to utilize a diffusion model in order to perform global text-guided image manipulations. In addition, GLIDE [35] is a concurrent work that utilizes the diffusion model for text-to-image synthesis, as well as local image editing using text guidance. In order to do so, they train a designated diffusion model for these tasks.
+
+3. Denoising Diffusion Probabilistic Models
+Denoising diffusion probabilistic models (DDPMs) learn to invert a parameterized Markovian image noising process.
+
+2
+
+

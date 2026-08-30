@@ -1,0 +1,683 @@
+                                        GNN-FiLM: Graph Neural Networks with Feature-wise Linear Modulation
+
+                                        Marc Brockschmidt 1
+
+arXiv:1906.12192v5 [cs.LG] 26 Jun 2020                          Abstract                              Most neural graph learning methods can be summarised as
+                                                                                                      neural message passing (Gilmer et al., 2017): nodes are
+                                              This paper presents a new Graph Neural Network          initialised with some representation and then exchange in-
+                                              (GNN) type using feature-wise linear modulation         formation by transforming their current state (in practice
+                                              (FiLM). Many standard GNN variants propagate            with a single linear layer) and sending it as a message to
+                                              information along the edges of a graph by com-          all neighbours in the graph. At each node, messages are
+                                              puting messages based only on the representation        aggregated in some way and then used to update the as-
+                                              of the source of each edge. In GNN-FiLM, the            sociated node representation. In this setting, the message
+                                              representation of the target node of an edge is         is entirely determined by the source node (and potentially
+                                              used to compute a transformation that can be ap-        the edge type) and the target node is not taken into con-
+                                              plied to all incoming messages, allowing feature-       sideration. A (partial) exception to this is the family of
+                                              wise modulation of the passed information. Dif-         Graph Attention Networks (Velickovic´ et al., 2018), where
+                                              ferent GNN architectures are compared in exten-         the agreement between source and target representation of
+                                              sive experiments on three tasks from the litera-        an edge is used to determine the weight of the message in
+                                              ture, using re-implementations of many baseline         an attention architecture. However, this weight is applied
+                                              methods. Hyperparameters for all methods were           to all dimensions of the message at the same time.
+                                              found using extensive search, yielding somewhat
+                                              surprising results: differences between state of        A simple consequence of this observation may be to simply
+                                              the art models are much smaller than reported           compute messages from the pair of source and target node
+                                              in the literature and well-known simple baselines       state. However, the linear layer commonly used to com-
+                                              that are often not compared to perform better           pute messages would only allow additive interactions be-
+                                              than recently proposed GNN variants. Nonethe-           tween the representations of source and target nodes. More
+                                              less, GNN-FiLM outperforms these methods on             complex transformation functions are often impractical, as
+                                              a regression task on molecular graphs and per-          computation in GNN implementations is dominated by the
+                                              forms competitively on other tasks.                     message transformation function.
+
+                                        1. Introduction                                               However, this need for non-trivial interaction between dif-
+                                                                                                      ferent information sources is a common problem in neural
+                                        Learning from graph-structured data has seen explosive        network design. A recent trend has been the use of hyper-
+                                        growth over the last few years, as graphs are a convenient    networks (Ha et al., 2017), neural networks that compute
+                                        formalism to model the broad class of data that has objects   the weights of other networks. In this setting, interaction
+                                        (treated as vertices) with some known relationships (treated  between two signal sources is achieved by using one of
+                                        as edges). This capability has been used in physical and      them as the input to a hypernetwork and the other as input
+                                        biological systems, knowledge bases, computer programs,       to the computed network. While an intellectually pleasing
+                                        and relational reasoning in computer vision tasks. This       approach, it is often impractical because the prediction of
+                                        graph construction is a highly complex form of feature en-    weights of non-trivial neural networks is computationally
+                                        gineering, mapping the knowledge of a domain expert into      expensive. Approaches to mitigate this exist (e.g., Wu et al.
+                                        a graph structure which can be consumed and exploited by      (2019) handle this in natural language processing), but are
+                                        high-capacity neural network models.                          often domain-specific.
+
+                                            1Microsoft Research, Cambridge, UK. Correspondence to:    A more general mitigation method is to restrict the structure
+                                        Marc Brockschmidt <mabrocks@microsoft.com>.                   of the computed network. Recently, "feature-wise linear
+                                                                                                      modulations" (FiLM) were introduced in the visual ques-
+                                        Proceedings of the 37 th International Conference on Machine  tion answering domain (Perez et al., 2017). Here, the hy-
+                                        Learning, Vienna, Austria, PMLR 119, 2020. Copyright 2020 by  pernetwork is fed with an encoding of a question and pro-
+                                        the author(s).                                                duces an element-wise affine function that is applied to the
+GNN-FiLM: Graph Neural Networks with Feature-wise Linear Modulation
+
+features extracted from a picture. This can be adapted to the                       ö
+graph message passing domain by using the representation
+of the target node to compute the affine function. This com-            Bö          1              B1 ö
+promise between expressiveness and computational feasi-
+bility has been very effective in some domains and the re-           1     2                    1        2
+sults presented in this article indicate that it is also a good
+fit for the graph domain.                                               1              1           1
+
+This article explores the use of hypernetworks in learn-         öA     1 Dö              ö A1     1 D1 ö
+ing on graphs. Sect. 2 first reviews existing GNN mod-
+els from the related work to identify commonalities and              2     1        2           2        1
+differences. This involves generalising a number of exist-
+ing formalisms to new formulations that are able to handle              Cö                         C1 ö
+graphs with different types of edges, which are often used
+to model different relationship between vertices. Then,          Figure 1: Graphical illustration of GNN computation. Left:
+two new formalisms are introduced: Relational Graph              Graph of vertices A, B, C, D (identified with their repre-
+Dynamic Convolutional Networks (RGDCN), which dy-                sentation) and directed edge types ö, 1, 2. Right: Graph
+namically compute the neural message passing function as         with same topology, but new representations. Data flow in
+a linear layer, and Graph Neural Networks with Feature-          computation of A1 indicated by dashed edges. Best viewed
+wise Linear Modulation (GNN-FiLM), which combine                 in colour.
+learned message passing functions with dynamically com-
+puted element-wise affine transformations. In Sect. 3, a         tained from the label of that node, or by some other model
+range of baselines are compared in extensive experiments         component). Then, a GNN layer updates the node repre-
+on three tasks from the literature, spanning classification,     sentations using the node representations of its neighbours
+regression and ranking tasks on small and large graphs.          in the graph, yielding representations hvp1q. This compu-
+                                                                 tation is illustrated for an example graph in Fig. 1. The
+The core contributions of this article are (1) a new GNN         process can be unrolled through time by repeatedly ap-
+type based on the FiLM idea from visual question answer-         plying the same update function, yielding representations
+ing, (2) generalisations of existing GNN types (GAT and          hpv2q . . . hpvT q. Alternatively, several GNN layers can be
+GIN) to the multi-relational setting, and (3) an empirical       stacked, which is intuitively similar to unrolling through
+evaluation using a unified framework and a consistent hy-        time, but increases the GNN capacity by using different
+perparameter optimisation method. The key takeaways are          parameters for each timestep.
+that (a) existing GNN models perform similarly on many
+tasks, (b) a simple GNN-MLP baseline model, using MLPs           In Gated Graph Neural Networks (GGNN) (Li et al., 2016),
+on the concatenation of source and target representation,        the update rule uses one linear layer W per edge type to
+often outperforms well-published models from the litera-         compute messages and combines the aggregated messages
+ture, (c) GNN-FiLM is competitive with or outperforms            with the current representation of a node using a recurrent
+GNN-MLP on all tested tasks.                                     unit r (e.g., GRU or LSTM cells), yielding the following
+                                                                 definition.
+2. Model
+                                                                              ~                          ¸
+Notation. Let L be a finite (usually small) set of edge
+types. Then, a directed graph G " pV, Eq has nodes V                 hpvt`1q " r hpvtq, ÿ W huptq ; r       (1)
+and typed edges E  V ^ L ^ V, where pu, , vq P E
+denotes an edge from node u to node v of type , usu-                                   uÑvPE
+ally written as u Ñ v. For example, in a graph repre-
+sentation of source code, successive tokens may be con-          The learnable parameters of the model are the edge-type-
+nected using a NextToken edge type, and method calls             dependent weights W and the recurrent cell parameters
+may be connected to the corresponding method definition          r.
+using CalledMethod edges.
+                                                                 In Relational Graph Convolutional Networks (R-
+Graph Neural Networks. As discussed above, Graph                 GCN) (Schlichtkrull et al., 2018) (an extension of
+Neural Networks operate by propagating information along         Graph Convolutional Networks (GCN) (Kipf & Welling,
+the edges of a given graph. Concretely, each node v is asso-     2017)), the gated unit is replaced by a simple non-linearity
+ciated with an initial representation hvp0q (for example ob-      (e.g., the hyperbolic tangent).
+
+                                                                                 ~                       ¸
+
+                                                                     hpvt`1q "     ÿ1         ¨ W hputq     (2)
+                                                                                 uÑvPE cv,
+
+                                                                 Here, cv, is a normalisation factor usually set to the num-
+                                                                 ber of edges of type ending in v. The learnable parameters
+                                                                 of the model are the edge-type-dependent weights W . It
+                                                                 is important to note that in this setting, the edge type set L
+   GNN-FiLM: Graph Neural Networks with Feature-wise Linear Modulation
+
+is assumed to contain a special edge type ö for self-loops            by again using a fresh edge type ö for self-loops v Ñö v.
+v Ñö v, allowing state associated with a node to be kept.             In that setting, the factor p1 ` q can be integrated into fö.
+                                                                      Finally, following an argument similar to Xu et al. (2019),
+In Graph Attention Networks (GAT) (Velickovic´ et al.,                 and f at subsequent layers can be "merged" into a single
+2018), new node representations are computed from a                   function which can be approximated by a multilayer per-
+weighted sum of neighbouring node representations. The                ceptron (MLP), yielding the final R-GIN definition
+model can be generalised from the original definition to
+support different edge types as follows (we will call this                                ~                        ¸
+R-GAT below).1
+                                                                           hpvt`1q "  ÿ MLP phputqq .                       (4)
+
+eu, ,v " LeakyReLUp ¨ pW huptq}W hpvtqqq                                                  uÑvPE
+
+av " softmaxpeu, ,v | u Ñ v P Eq                                      The learnable parameters here are the edge-specific MLPs
+
+~                                 ¸                                   MLP . Note that Eq. p4q is very similar to the definition of
+
+hpvt`1q "  ÿ pavquÑv ¨ W hputq                 (3)                    R-GCNs (Eq. p2q), only dropping the normalisation factor
+
+                                                                       1   and replacing linear layers by an MLP.
+                                                                      cv,
+   uÑvPE
+
+Here,  is a learnable row vector used to weigh different              While many more GNN variants exist, the four formalisms
+feature dimensions in the computation of an attention ("rel-          above are broadly representative of general trends. It is
+evance") score of the node representations, x}y is the con-           notable that in all of these models, the information passed
+catenation of vectors x and y, and pavquÑv refers to the              from one node to another is based on the learned weights
+weight computed by the softmax for that edge. The learn-              and the representation of the source of an edge. In contrast,
+able parameters of the model are the edge-type-dependent              the representation of the target of an edge is only updated
+weights W and the attention parameters  . In practice,                (in the GGNN case Eq. p1q), treated as another incoming
+GATs usually employ several attention heads that indepen-             message (in the R-GCN case Eq. p2q and the R-GIN case
+dently implement the mechanism above in parallel, using               Eq. p4q), or used to weight the relevance of an edge (in the
+separate learnable parameters. The results of the different           R-GAT case Eq. p3q). Sometimes unnamed GNN variants
+attention heads are then concatenated after each propaga-             of the above are used (e.g., by Selsam et al. (2019); Pali-
+tion round to yield the value of hpvt`1q.                             wal et al. (2019)), replacing the linear layers to compute the
+                                                                      messages for each edge by MLPs applied to the concatena-
+More recently, Xu et al. (2019) analysed the expressive-              tion of the representations of source and target nodes. In
+ness of different GNN types, comparing their ability to dis-          the experiments, this will be called GNN-MLP, formally
+tinguish similar graphs with the Weisfeiler-Lehman (WL)               defined as follows.2
+graph isomorphism test. Their results show that GCNs and
+the GraphSAGE model (Hamilton et al., 2017) are strictly                               ~                                 ¸
+weaker than the WL test and hence they developed Graph
+Isomorphism Networks (GIN), which are indeed as power-                     hpvt`1q "     ÿ1              ´  hputq}hpvtq  ¯
+ful as the WL test. While the GIN definition is limited to a                           uÑvPE cv,
+single edge type, Corollary 6 of Xu et al. (2019) shows that                                      ¨ MLP                     (5)
+using the definition
+                                                                      Below, we will instantiate the MLP with a single linear
+~                                    ¸                                layer to obtain what we call GNN-MLP0, which only dif-
+                                                                      fers from R-GCNs (Eq. p2q) in that the message passing
+hvpt`1q "  p1 ` q ¨ f phvptqq ` ÿ f phputqq ,                         function is applied to the concatenation of source and tar-
+                                                                      get state.
+
+          uÑvPE                                                       2.1. Graph Hypernetworks
+
+there are choices for ,  and f such that the node repre-              Hypernetworks (i.e., neural networks computing the pa-
+sentation update is sufficient for the overall network to be          rameters of another neural network) (Ha et al., 2017) have
+as powerful as the WL test. In the setting of different edge          been successfully applied to a number of different tasks;
+types, the function f in the sum over neighbouring nodes              naturally raising the question if they are also applicable in
+needs to reflect different edge types to distinguish graphs           the graph domain.
+such as v Ñ1 u Ð2 w and v Ñ2 u Ð1 w from each other.
+Using different functions f for different edge types makes            Intuitively, a hypernetwork corresponds to a higher-order
+                                                                      function, i.e., it can be viewed as a function computing an-
+it possible to unify the use of the current node representa-          other function. Hence, a natural idea would be to use the
+tion hvptq with the use of neighbouring node representations          target of a message propagation step to compute the func-
+                                                                      tion computing the message; essentially allowing it to focus
+    1Note that this is similar to the ARGAT model presented by
+Busbridge et al. (2019), but unlike the models studied there (and         2 These are similar to R-GIN, but apply an MLP to the con-
+like the original GATs) uses a single linear layer to compute at-     catenation of source and target state for each message.
+tention scores eu, ,v, instead of simpler additive or multiplicative
+variants.
+                              GNN-FiLM: Graph Neural Networks with Feature-wise Linear Modulation
+
+on features that are especially relevant for the update of the    the information present at the target node of an edge. This
+target node representation.                                       yields the following update rule, using a learnable function
+                                                                  g to compute the parameters of the affine transformation.
+
+Relational Graph Dynamic Convolutional Networks                   pt,vq  ,    ptq  " gphvptq  ;  g,   q
+(RGDCN) A first attempt would be to adapt p2q to re-                           ,v
+place the learnable message transformation W by the re-
+sult of some learnable function f that operates on the target                      ~                                          ¸
+representation:
+                                                                  hvpt`1q "               ÿ          ptq      hputq  ` pt,vq
+                                                                                                      ,v
+                                                                                                          dW                        (7)
+
+                                                                                      uÑvPE
+
+                        ~                       ¸
+
+             hvpt`1q "  ÿ f phvptq ; f, qhputq                    The learnable parameters of the model are both the hyper-
+                                                                  network parameters g, and the weights W . In practice,
+                              uÑvPE                               implementing g as a single linear layer works well.
+
+However, for a representation size D, f would need to pro-        In the case of using a single linear layer, the resulting
+duce a matrix of size D2 from D inputs. Hence, if im-             message passing function is bilinear in source and target
+                                                                  node representation, as the message computation is centred
+plemented as a simple linear layer, f would have on the           around pWg, hpvtqq d pW hputqq. This is the core difference
+order of OpD3q parameters, quickly making it impractical          to the (additive) interaction of source and target node rep-
+                                                                  resentations in models that use W phuptq}hpvtqq.
+in most contexts.
+                                                                  A simple toy example may illustrate the usefulness of such
+Following Wu et al. (2019), this can be somewhat mitigated        a mechanism: assuming a graph of disjoint sets of nodes
+                                                                  VA and VB and edge types 1 and 2, a task may involve
+by splitting the node representations hpvtq into C "chunks"       counting the number of 1-neighbours of VA nodes and of
+                                                                  2-neighbours of VB nodes. By setting 1,va " 1, 2,va " 0
+hpvt,qc  of  dimension  K  "  D  :                                for va P VA and 1,vb " 0, 2,vb " 1 for vb P VB, GNN-
+                              C                                   FiLM can solve this in a single layer. Simpler approaches
+                                                                  can solve this by counting 1-neighbours and 2-neighbours
+             W ,t,v,c " f phvptq ; f, ,cq                         separately in one layer and then projecting to the correct
+                                                                  counter in the next layer, but require more feature dimen-
+                                    ~                     ¸       sions and layers for this. As this toy example illustrates, a
+                                                                  core capability of GNN-FiLM is to learn to ignore graph
+             hvpt`1q "     >           ÿ W ,t,v,chupt,qc     (6)  edges based on the representation of target nodes.
+                           >
+
+                        1cC          uÑvPE
+
+The number of parameters of the model can now be re-              Note that feature-wise modulation can also be viewed of an
+duced by tying the value of some instances of f, ,c. For          extension of the gating mechanism of GRU or LSTM cells
+example, the update function for a chunk c can be com-            used in GGNNs. Concretely, the "forgetting" of memories
+                                                                  in a GRU/LSTM is similar to down-weighting messages
+puted using only the corresponding chunk of the node rep-         computed for the self-loop edges and the gating of the cell
+resentation hvpt,qc, or the same update function can be ap-       input is similar to the modulation of other incoming mes-
+plied to all "chunks" by setting f, ,1 " . . . " f, ,C . The      sages. However, GGNNs apply this gating to the sum of all
+learnable parameters of the model are only the hypernet-          incoming messages (cf. Eq. p1q), whereas in GNN-FiLM
+work parameters f, ,c. This is somewhat less desirable            the modulation additionally depends on the edge type, al-
+than the related idea of Wu et al. (2019), which operates on      lowing for a more fine-grained gating mechanism.
+
+sequences, where sharing between neighbouring elements
+
+of the sequence has an intuitive interpretation that is not
+
+applicable in the general graph setting.
+
+Graph Neural Networks with Feature-wise Linear                    Finally, a small implementation bug brought focus to the
+Modulation (GNN-FiLM) In p6q, the message passing                 fact that applying the non-linearity  after summing up
+layer is a linear transformation conditioned on the tar-          messages from neighbouring nodes can make it harder to
+get node representation, focusing on separate chunks of           perform tasks such as counting the number of neighbours
+the node representation at a time. In the extreme case in         with a certain feature. In experiments, applying the non-
+which the dimension of each chunk is 1, this method coin-         linearity before aggregation as in the following update rule
+cides with the ideas of Perez et al. (2017), who propose to       improved performance.
+use layers of element-wise affine transformations to modu-
+late feature maps in the visual question answering setting;                    ~                                                    ¸
+there, a natural language question is the input used to com-
+pute the affine transformation applied to the features ex-        hvpt`1q " l      ÿ          ´  ptq      huptq ` pt,vq ¯
+tracted from a picture.                                                                           ,v
+                                                                                                      dW                      ;  l
+In the graph setting, we can use each node's representation
+as an input that determines an element-wise affine transfor-                       uÑvPE
+mation of incoming messages, allowing the model to dy-
+namically up-weight and down-weight features based on                                                                               (8)
+                 GNN-FiLM: Graph Neural Networks with Feature-wise Linear Modulation
+
+GGNN: A1 "GRU p  A,                                               W1 ¨ B `     W2 ¨ C `      W1 ¨ D q
+
+R-GCN: A1 " p    Wö ¨ A `                                         W1 ¨ B `     W2 ¨ C `      W1 ¨ D q
+
+R-GAT: A1 " p paA1 qAÑöA ¨ Wö ¨ A ` paA1 qBÑ1 A ¨ W1 ¨ B ` paA1 qCÑ2 A ¨ W2 ¨ C ` paA1 qDÑ1 A ¨ W1 ¨ D q
+
+R-GIN: A1 " p    MLPöpAq`                                         MLP1pBq`     MLP2 pC q`    MLP1pDqq
+
+GNN-MLP: A1 " p  MLPöpA}Aq`                                       MLP1pB}Aq`   MLP2 pC }Aq`  MLP1pD}Aqq
+
+RGDCN: A1 " p    W ö,A ¨ A `                                      W 1,A ¨ B `  W 2,A ¨ C `   W 1,A ¨ D q
+
+GNN-FiLM: A1 " pö,A ` ö,A d Wö ¨ A `1,A ` 1,A d W1 ¨ B `2,A ` 2,A d W2 ¨ C `1,A ` 1,A d W1 ¨ D q
+
+Figure 2: Computation of A1 from Fig. 1 in different GNN implementations (see main text for definitions of
+
+v,  ,v,  ,v, W , MLP ). Colours chosen to match colours of elements in Fig. 1; more colours in a term indicate
+more interactions between different elements.
+
+However, this means that the magnitude of node represen-                the goal is node-level classification, where each node
+tations is now dependent on the degree of nodes in the con-             may belong to several of the 121 classes. State of the
+sidered graph. This can sometimes lead to instability dur-              art performance on this task requires three propaga-
+ing training, which can in turn be controlled by adding an              tion steps.
+additional layer l after message passing, which can be a
+simple bounded nonlinearity (e.g. tanh), a fully connected           · QM9 property prediction (Ramakrishnan et al., 2014):
+layer, layer normalisation (Ba et al., 2016), or any combi-             ,, 130 000 graphs of ,, 18 nodes represent molecules,
+nation of these.                                                        where nodes are atoms and undirected, typed edges
+                                                                        are bonds between these atoms, different edge types
+The different GNN definitions are illustrated by example in             indicating single/double/etc. bonds. The goal is to
+Fig. 2, which shows how to compute a new representation                 regress from each graph to a number of quantum
+of node A1 from Fig. 1 for all presented variants.                      chemical properties. State of the art performance on
+                                                                        these tasks requires at least four propagation steps.
+3. Evaluation
+                                                                     · VarMisuse (Allamanis et al., 2018): ,, 235 000 graphs
+3.1. GNN Benchmark Tasks                                                of ,, 2500 nodes each represent program fragments,
+                                                                        where nodes are tokens in the program text and differ-
+Due to the versatile nature of the GNN modelling formal-                ent edge types represent the program's abstract syntax
+ism, many fundamentally different tasks are studied in the              tree, data flow between variables, etc. The goal is to
+research area and it should be noted that good results on               select one of a set of candidate nodes per graph. State
+one task often do not transfer over to other tasks. This is             of the art performance requires at least six propagation
+due to the widely varying requirements of different tasks, as           steps.
+the following summary of tasks from the literature should
+illustrate.                                                       Hence, tasks differ in the complexity of edges (from undi-
+                                                                  rected and untyped to directed and many-typed), the size
+   · Cora/Citeseer/Pubmed (Sen et al., 2008): Each task           of the considered graphs, the size of the dataset, the impor-
+      consists of a single graph of ,, 10 000 nodes corre-        tance of node-level vs. graph-level representations, and the
+      sponding to documents and undirected (sic!) edges           number of required propagation steps.
+      corresponding to references. The sparse ,, 1 000 node
+      features are a bag of words representation of the cor-      This article includes results on the PPI, QM9 and VarMis-
+      responding documents. The goal is to assign a subset        use tasks. Preliminary experiments on the citation network
+      of nodes to a small number of classes. State of the         data showed results that were at best comparable to the
+      art performance on these tasks is achieved with just        baseline methods, but changes of a random seed led to sub-
+      two message propagation steps along graph edges, in-        stantial fluctuations (mirroring the problems with evalua-
+      dicating that the graph structure is used to only a little  tion on these tasks reported by Shchur et al. (2018)).
+      degree.
+                                                                  3.2. Implementation
+   · PPI (Zitnik & Leskovec, 2017): A protein-protein in-
+      teraction dataset consisting of 24 graphs of ,, 2 500       To allow for a wider comparison, the implementation of
+      nodes corresponding to different human tissues. Each        GNN-FiLM is accompanied by implementations of a range
+      node has 50 features selected by domain experts and         of baseline methods. These include GGNN (Li et al., 2016)
+GNN-FiLM: Graph Neural Networks with Feature-wise Linear Modulation
+
+(see Eq. p1q), R-GCN (Schlichtkrull et al., 2018) (see Eq.         Table 1: GNN results on PPI task. GAT° result taken from
+p2q), R-GAT (Velickovic´ et al., 2018) (see Eq. p3q), and          Velickovic´ et al. (2018).
+R-GIN (Hamilton et al., 2017) (see Eq. p4q)3. Addition-
+ally, GNN-MLP0 is a variant of R-GCN using a single lin-           Model     Avg. Micro-F1 Time (s)
+ear layer to compute the edge message from both source
+and target state (i.e., Eq. p5q instantiated with an "MLP"         GAT°      0.973 0.002     n/a
+without hidden layers), and GNN-MLP1 is the same with              GGNN      0.990 0.001  432.6
+a single hidden layer. The baseline methods were re-               R-GCN     0.989 0.000  759.0
+implemented in TensorFlow and individually tested to               R-GAT     0.989 0.001  782.3
+reach performance equivalent to results reported in their          R-GIN     0.991 0.001  704.8
+respective source papers. All code for the implementation          GNN-MLP0  0.9920.000   556.9
+of these GNNs is released on https://github.com/                   GNN-MLP1  0.9920.001   479.2
+Microsoft/tf-gnn-samples, together with imple-                     GNN-FiLM  0.9920.000   308.1
+mentations of all tasks and scripts necessary to reproduce
+the results reported in this paper. This includes the hy-          dataset split from earlier papers. Training hence used a set
+perparameter settings found by search, which are stored in         of 20 graphs and validation and test sets of two separate
+tasks/default hypers/ and are selected by default                  graphs each. The graphs use two edge types: the dataset-
+on the respective tasks. The code is designed to facilitate        provided untyped edges as well as a fresh "self-loop" edge
+testing new GNN types on existing tasks and easily adding          type to allows nodes to keep state across propagation steps.
+new tasks, allowing for rapid evaluation of new architec-
+tures.                                                             Hyperparameters for all models were selected based on re-
+                                                                   sults from earlier papers and a small grid search of a num-
+Early on in the experiments, it became clear that the              ber of author-selected hyperparameter ranges (see App. A
+RGDCN approach (Eq. p6q) as presented is infeasible. It            for details). This resulted in three (R-GAT), four (GGNN,
+is extremely sensitive to the parameter initialisation and         GNN-FiLM, GNN-MLP1, R-GCN), or five (GNN-MLP0,
+hence changes to the random seed lead to wild swings in the        R-GIN) layers (propagation steps) and a node representa-
+target metrics. Hence, no experimental results are reported        tion size of 256 (GNN-MLP0, R-GIN) or 320 (all others).
+for it in the following. It is nonetheless included in the ar-     All models use dropout on the node representations before
+ticle (and the implementation) to show the thought process         all GNN layers, with a keep ratio of 0.9. After selecting
+leading to GNN-FiLM, as well as to allow other researchers         hyperparameters, all models were trained ten times with
+to build upon this. In the following, GNN-FiLM refers to           different random seeds on a NVidia V100.
+the formulation of Eq. p8q, which performed better than
+the variant of Eq. p7q across all experiments. Somewhat            Tab. 1 shows the micro-averaged F1 score on the classi-
+surprisingly, the same trick (of moving the non-linearity          fication task on the test graphs, with standard deviations
+before the message aggregation step) did not help the other        and training times in seconds computed over the ten runs.
+GNN types. For all models, using different layer weights           The results for all re-implemented models are better than
+for different propagation steps performed better than using        the results reported by Velickovic´ et al. (2018) for the GAT
+the same layer weights across several propagation steps.           model (without edge types). A cursory exploration of the
+                                                                   reasons yielded three factors. First, the generalisation to
+In all experiments, early stopping was used, i.e., the mod-        different edge types (cf. Eq. p3q) and the subsequent
+els were trained until the target metric did not improve any-      use of a special self-loop edge type helps R-GAT (and
+more for some additional epochs (25 for PPI and QM9, 5             all other models) significantly. Second, using dropout be-
+for VarMisuse). The reported results on the held-out test          tween layers significantly improved the results. Third, the
+data are averaged across the results of a number of training       larger node representation sizes (compared to 256 used by
+runs, each starting from different random parameter initial-       Velickovic´ et al. (2018)) improved the results again. Sect. B
+isations.                                                          in the appendix shows this in detail with ablation exper-
+                                                                   iments. Overall, the new GNN-FiLM improves slightly
+3.3. Experimental Results                                          over the four baselines from the literature, while converg-
+                                                                   ing substantially faster than all baselines, mainly because it
+3.3.1. PROTEIN-PROTEIN INTERACTIONS (PPI)                          converges in significantly fewer training steps (approx. 150
+                                                                   epochs compared to 400-700 epochs for the other models).
+The models are first evaluated on the node-level classifi-         Training curves for all models are included in Sect. C in the
+cation PPI task (Zitnik & Leskovec, 2017), following the           appendix.
+
+    3Note that Eq. p3q and Eq. p4q define generalisations to dif-
+ferent edge types not present in the original papers.
+                GNN-FiLM: Graph Neural Networks with Feature-wise Linear Modulation
+
+          Table 2: GNN average error rates and standard deviations on QM9 target values.
+
+Property  GGNN           R-GCN        R-GAT                           R-GIN    GNN-MLP0     GNN-MLP1    GNN-FiLM
+
+mu         3.85 0.16    3.21 0.06   2.68 0.06                      2.64 0.11    2.36 0.04    2.44 0.12    2.38 0.13
+alpha      5.22 0.86    4.22 0.45   4.65 0.44                      4.67 0.52     4.27 0.36   4.63 0.54   3.75 0.11
+HOMO       1.67 0.07    1.45 0.01   1.48 0.03                      1.42 0.01     1.25 0.04   1.29 0.06   1.22 0.07
+LUMO       1.74 0.06    1.62 0.04   1.53 0.07                      1.50 0.09     1.35 0.04   1.50 0.19   1.30 0.05
+gap        2.60 0.06    2.42 0.14   2.31 0.06                      2.27 0.09     2.04 0.05   2.06 0.10   1.96 0.06
+R2        35.94 35.68  16.38 0.49  52.39 42.58                    15.63 1.40   14.86 1.62   15.81 1.42  15.59 1.38
+ZPVE      17.84 3.61   17.40 3.56  14.87 2.88                     12.93 1.81   12.00 1.66   14.12 1.10  11.00 0.74
+U0         8.65 2.46    7.82 0.80   7.61 0.46                      5.88 1.01     5.55 0.38   6.94 0.64   5.43 0.96
+U          9.24 2.26    8.24 1.25   6.86 0.53                     18.71 23.36    6.20 0.88   7.00 1.06   5.95 0.46
+H          9.35 0.96    9.05 1.21   7.64 0.92                      5.62 0.81     5.96 0.45   7.98 0.88   5.59 0.57
+G          7.14 1.15    7.00 1.51   6.54 0.36                      5.38 0.75    5.09 0.57    7.14 0.51    5.17 1.13
+Cv         8.86 9.07    3.93 0.48   4.11 0.27                      3.53 0.37    3.38 0.20    4.60 0.74    3.46 0.21
+Omega      1.57 0.53    1.02 0.05   1.48 0.87                      1.05 0.11    0.84 0.02    5.60 8.82    0.98 0.06
+
+3.3.2. QUANTUM CHEMISTRY (QM9)                                    Each model was trained for each of the properties sep-
+                                                                  arately five times using different random seeds on com-
+All models were additionally evaluated on graph-level re-         pute nodes with NVidia P100 cards. The average results
+gression tasks on the QM9 molecule data set (Ramakrish-           of the five runs are reported in Tab. 2, with their respec-
+nan et al., 2014), considering thirteen different quantum         tive standard deviations.5 The results indicate that the new
+chemical properties. The ,,130k molecular graphs in the           GNN-FiLM model outperforms the standard baselines on
+dataset were split into training, validation and test data by     all tasks and the usually not considered GNN-MLP vari-
+randomly selecting 10 000 graphs for the latter two sets.         ants on the majority of tasks.
+Additionally, another data split without a test set was used
+for the hyperparameter search (see below). The graphs use         3.3.3. VARIABLE USAGE IN PROGRAMS (VARMISUSE)
+five edge types: the dataset-provided typed edges (single,
+double, triple and aromatic bonds between atoms) as well          Finally, the models were evaluated on the VarMisuse task
+as a fresh "self-loop" edge type that allows nodes to keep        of Allamanis et al. (2018). This task requires to process
+state across propagation steps. The evaluation differs from       a graph representing an abstraction of a program fragment
+the setting reported by Gilmer et al. (2017), as no addi-         and then select one of a few candidate nodes (representing
+tional molecular information is encoded as edge features,         program variables) based on the representation of another
+nor are the graphs augmented by master nodes or additional        node (representing the location to use a variable in). The
+edges.4                                                           experiments are performed using the released split of the
+                                                                  dataset, which contains ,, 130k training graphs, ,, 20k val-
+Hyperparameters for all models were found using a staged          idation graphs and two test sets: SEENPROJTEST, which
+search process. First, 500 hyperparameter configurations          contains ,, 55k graphs extracted from open source projects
+were sampled from an author-provided search space (see            that also contributed data to the training and validation sets,
+App. A for details) and run on the first three regression         and UNSEENPROJTEST, which contains ,, 30k graphs ex-
+tasks. The top three configurations for each of these three       tracted from completely unseen projects.
+tasks were then run on all thirteen tasks and the final config-
+uration was chosen as the one with the lowest average mean        Due to the inherent cost of training models on this dataset
+absolute error across all properties, as evaluated on the val-    (Balog et al. (2019) provide an in-depth performance anal-
+idation data of that dataset split. This process led to eight     ysis), a limited hyperparameter grid search was performed,
+layers / propagation steps for all models but GGNN and R-         with only ,, 30 candidate configurations for each model
+GIN, which showed best performance with six layers. Fur-          (see App. A for details). For each model, the configuration
+thermore, all models used residual connections connecting         yielding the best results on the validation data set fold was
+every second layer and GGNN, R-GCN, GNN-FiLM and                  selected. This led to six layers for GGNN and R-GIN, eight
+GNN-MLP0 additionally used layer normalisation (as in
+Eq. p8q).                                                             5Note that training sometimes did not converge (as visible in
+                                                                  the large standard deviation). Removing these outliers, GGNN
+    4Adding these features is straightforward, but orthogonal to  achieved 18.11p1.62q and R-GAT achieved 17.66p1.23q on
+the comparison of different GNN variants.                         R2; R-GIN has an average error rate of 7.04p1.41q on U, and
+                                                                  GNN-MLP1's result on the Omega task is 1.19p0.08q.
+GNN-FiLM: Graph Neural Networks with Feature-wise Linear Modulation
+
+Table 3: Accuracy on VarMisuse task. GGNN° result taken from appendix of Allamanis et al. (2018).
+
+Model        TRAIN       VALID                                  SEENPROJTEST  UNSEENPROJTEST
+
+GGNN°     n/a        n/a                                          84.0 n/a          74.1 n/a
+GGNN      87.5 1.8%  82.1 0.9%                                    85.7 0.5%         79.3 1.2%
+R-GCN     88.7 3.1%  85.7 1.6%                                    87.2 1.5%        81.4 2.3%
+R-GAT     90.4 3.9%  84.2 1.0%                                    86.9 0.7%         81.2 0.9%
+R-GIN     93.4 1.8%  84.2 1.0%                                    87.1 0.1%         81.1 0.9%
+GNN-MLP0  95.3 2.4%  83.4 0.3%                                    86.5 0.2%         80.5 1.4%
+GNN-MLP1  94.7 1.2%  84.4 0.4%                                    86.9 0.3%        81.4 0.7%
+GNN-FiLM  94.3 1.0%  84.6 0.6%                                    87.0 0.2%         81.3 0.9%
+
+layers for R-GAT and GNN-MLP0, and ten layers for the           that work well across all examples.
+remaining models. Graph node hidden sizes were 128 for
+all models but GGNN and R-GAT, which performed better           Finally, the large variance in results on the validation set
+with 96 dimensions.                                             (especially for R-GCN) makes it likely that the hyperpa-
+                                                                rameter grid search with only one training run per configu-
+The results, shown in Tab. 3, are somewhat surprising, as       ration did not yield the best configuration for each model.
+they indicate a different ranking of model architectures as
+the results on PPI and QM9, with R-GCN performing best.         4. Discussion & Conclusions
+All re-implemented baselines beat the results reported by
+Allamanis et al. (2018), who also reported that R-GCN and       After a review of existing graph neural network architec-
+GGNN show very similar performance. This is in spite of         tures, the idea of using hypernetwork-inspired models in
+a simpler implementation of the task than in the original       the graph setting was explored. This led to two models:
+paper, as it only uses the string labels of nodes for the rep-  Graph Dynamic Convolutional Networks and GNNs with
+resentation and does not use the additional type information    feature-wise linear modulation. While RGDCNs seem to
+provided in the dataset. However, the re-implementation of      be impractical to train, experiments show that GNN-FiLM
+the task uses the insights from Cvitkovic et al. (2019), who    outperforms the established baseline models from the liter-
+use character CNNs to encode node labels and furthermore        ature. However, extensive experiments have shown that the
+introduce extra nodes for subtokens appearing in labels         same holds for the simple GNN-MLP definition, which is
+of different nodes, connecting them to their sources (e.g.,     usally not considered in GNN evaluations.
+nodes labelled openWullfrax and closeWullfrax
+are both connected to a fresh Wullfrax node).                   The extensive experiments also show that a number of re-
+                                                                sults from the literature could benefit from more substantial
+A deeper investigation results showed that the more com-        hyperparameter search and are often missing comparisons
+plex models seem to suffer from significant overfitting to      to a number of obvious baselines:
+the training data, as can be seen in the results for train-
+ing and validation accuracy reported in Tab. 3. A brief ex-        · The results in Tab. 1 indicate that GATs have no ad-
+ploration of more aggressive regularisation methods (more             vantage over GGNNs or R-GCNs on the PPI task,
+dropout, weight decay) showed no improvement.                         which does not match the findings by Velickovic´ et al.
+                                                                      (2018).
+A possible explanation would be that there are classes of
+examples that can not be solve by one model architecture           · The results in Tab. 3 indicate that R-GCNs are outper-
+due to limits in its expressivity, but that are solvable by           forming GGNNs substantially on the VarMisuse task,
+other architectures. To this end, we can consider the num-            contradicting the findings of Allamanis et al. (2018).
+ber of examples that can only be solved by one model ar-
+chitecture, but not by another. For example, an in-depth           · The GNN-MLP models are obvious implementations
+analysis shows that 2.2% of the examples in SEENPRO-                  of the core GNN message passing principle that are
+JTEST are predicted correctly by (at least) one of the five           often alluded to, but are not part of the usually con-
+trained R-GCN models, whereas 2.7% of examples could                  sidered set of baseline models. Nonetheless, exper-
+be predicted correctly by one of the trained R-GIN mod-               iments across all three tasks have shown that these
+els. This indicates that R-GCN's better (average) results             methods outperform better-published techniques such
+are not due to a more expressive architecture, but that train-        as GGNNs, R-GCNs and GATs, without a substantial
+ing is just slightly more successful at finding parameters            runtime penalty.
+GNN-FiLM: Graph Neural Networks with Feature-wise Linear Modulation
+
+These results indicate that there is substantial value in in-  Li, Y., Tarlow, D., Brockschmidt, M., and Zemel, R. Gated
+dependent reproducibility efforts and comparisons that in-        graph sequence neural networks. In International Con-
+clude "obvious" baselines, matching the experiences from          ference on Learning Representations (ICLR), 2016.
+other areas of machine learning as well as earlier work by
+Shchur et al. (2018) on reproducing experimental results       Paliwal, A., Loos, S. M., Rabe, M. N., Bansal, K., and
+for GNNs on citation network tasks.                               Szegedy, C. Graph representations for higher-order logic
+                                                                  and theorem proving. CoRR, abs/1905.10006, 2019.
+ACKNOWLEDGMENTS
+                                                               Perez, E., Strub, F., de Vries, H., Dumoulin, V., and
+The author wants to thank Miltos Allamanis for the many           Courville, A. C. FiLM: Visual reasoning with a general
+discussions about GNNs and feedback on a draft of this ar-        conditioning layer. In AAAI Conference on Artificial In-
+ticle, Daniel Tarlow for helpful discussions and pointing to      telligence, 2017.
+the FiLM idea, Pashmina Cameron for feedback on the im-
+plementation and this article, and Uri Alon and the anony-     Ramakrishnan, R., Dral, P. O., Rupp, M., and Lilienfeld,
+mous reviewers for suggesting improvements to the paper.          O. A. V. Quantum chemistry structures and properties of
+                                                                  134 kilo molecules. Scientific Data, 1, 2014.
+References
+                                                               Schlichtkrull, M., Kipf, T. N., Bloem, P., van den Berg, R.,
+Allamanis, M., Brockschmidt, M., and Khademi, M.                  Titov, I., and Welling, M. Modeling relational data with
+   Learning to represent programs with graphs. In Interna-        graph convolutional network. In Extended Semantic Web
+   tional Conference on Learning Representations (ICLR),          Conference (ESWC), 2018.
+   2018.
+                                                               Selsam, D., Lamm, M., Bu¨nz, B., Liang, P., de Moura, L.,
+Ba, L. J., Kiros, R., and Hinton, G. E. Layer normalization.      and Dill, D. L. Learning a SAT solver from single-bit
+   CoRR, abs/1607.06450, 2016.                                    supervision. In International Conference on Learning
+                                                                  Representations (ICLR), 2019.
+Balog, M., van Merrie¨nboer, B., Moitra, S., Li, Y., and Tar-
+   low, D. Fast training of sparse graph neural networks on    Sen, P., Namata, G., Bilgic, M., Getoor, L., Galligher, B.,
+   dense hardware. CoRR, abs/1906.11786, 2019.                    and Eliassi-Rad, T. Collective classification in network
+                                                                  data. AI magazine, 29, 2008.
+Busbridge, D., Sherburn, D., Cavallo, P., and Hammerla,
+   N. Y. Relational graph attention networks. CoRR,            Shchur, O., Mumme, M., Bojchevski, A., and Gu¨nnemann,
+   abs/1904.05811, 2019.                                          S. Pitfalls of graph neural network evaluation. CoRR,
+                                                                  abs/1811.05868, 2018.
+Cvitkovic, M., Singh, B., and Anandkumar, A. Open vo-
+   cabulary learning on source code with a graph-structured    Velickovic´, P., Cucurull, G., Casanova, A., Romero, A.,
+   cache. In International Conference on Machine Learn-           Lio`, P., and Bengio, Y. Graph Attention Networks. In
+   ing (ICML), 2019.                                              International Conference on Learning Representations
+                                                                  (ICLR), 2018.
+Gilmer, J., Schoenholz, S. S., Riley, P. F., Vinyals, O., and
+   Dahl, G. E. Neural message passing for quantum chem-        Wu, F., Fan, A., Baevski, A., Dauphin, Y., and Auli, M.
+   istry. In International Conference on Machine Learning         Pay less attention with lightweight and dynamic convo-
+   (ICML), 2017.                                                  lutions. In International Conference on Learning Repre-
+                                                                  sentations (ICLR), 2019.
+Ha, D., Dai, A. M., and Le, Q. V. HyperNetworks. In
+   International Conference on Learning Representations        Xu, K., Hu, W., Leskovec, J., and Jegelka, S. How powerful
+   (ICLR), 2017.                                                  are graph neural networks? In International Conference
+                                                                  on Learning Representations (ICLR), 2019.
+Hamilton, W. L., Ying, R., and Leskovec, J. Inductive
+   representation learning on large graphs. In Advances        Zitnik, M. and Leskovec, J. Predicting multicellular func-
+   in Neural Information Processing Systems (NeurIPS),            tion through multi-layer tissue networks. Bioinformatics,
+   2017.                                                          33, 2017.
+
+Kipf, T. N. and Welling, M. Semi-supervised classifica-
+   tion with graph convolutional networks. In International
+   Conference on Learning Representations, 2017.
+GNN-FiLM: Graph Neural Networks with Feature-wise Linear Modulation
+
+A. Hyperparameter search spaces                              Table 4: (R-)GAT ablation results on PPI task.
+
+A.1. PPI                                                     Model                           Avg. Micro-F1
+For all models, a full grid search considering all combina-
+tions of the following parameters was performed:             GAT (dropout" 0.0, dim" 256)    0.9240.004
+                                                             GAT (dropout" 0.2, dim" 256)    0.9280.005
+   · hidden size P t192, 256, 320u - size of per-node        GAT (dropout" 0.0, dim" 320)    0.9420.004
+      representations.                                       GAT (dropout" 0.2, dim" 320)    0.9530.002
+                                                             R-GAT (dropout" 0.0, dim" 256)  0.9860.001
+   · graph num layers P t2, 3, 4, 5u - number of             R-GAT (dropout" 0.2, dim" 256)  0.9880.001
+      propagation steps / layers.                            R-GAT (dropout" 0.0, dim" 320)  0.9880.001
+                                                             R-GAT (dropout" 0.2, dim" 320)  0.9890.001
+
+· graph layer input dropout keep prob P                      A.3. VarMisuse
+   t0.8, 0.9, 1.0u - dropout applied before propagation
+   steps.                                                    For all models, a full grid search considering all combina-
+                                                             tions of the following parameters was performed:
+A.2. QM9
+                                                                · hidden size P t64, 96, 128u - size of per-node
+For all models, 500 configurations were considered, sam-           representations.
+pling hyperparameter settings uniformly from the follow-
+ing options:                                                    · graph num layers P t6, 8, 10u - number of prop-
+                                                                   agation steps / layers.
+· hidden size P t64, 96, 128u - size of per-node
+   representations.                                             · graph layer input dropout keep prob P
+                                                                   t0.8, 0.9, 1.0u - dropout applied before propagation
+· graph num layers P t4, 6, 8u - number of propa-                  steps.
+   gation steps / layers.
+                                                                · cell P tGRU , LSTM u - gated cell used for GGNN.
+· graph layer input dropout keep prob P
+   t0.8, 0.9, 1.0u - dropout applied before propagation         · num heads P t4, 8u - number of attention heads
+   steps.                                                          used for R-GAT.
+
+· layer norm P tTrue, F alseu - decided if layer             B. R-GAT Ablations on PPI
+   norm is applied after each propagation step.
+                                                             As discussed in the main text, the R-GAT model imple-
+· dense layers P t1, 2, 32u - insert a fully con-            mented used in the experiments of this paper significantly
+   nected layer applied to node representations between      outperforms the GAT model from Velickovic´ et al. (2018).
+   every dense layers propagation steps. (32 effec-          To understand the causes of this, a number of ablation
+   tively turns this off)                                    experiments were performed, whose results are shown in
+                                                             Tab. 4.
+· res connection P t1, 2, 32u - insert a residual
+   connection between every res connection prop-             Note that while the "GAT (dropout" 0.0, dim" 256)" con-
+   agation steps. (32 effectively turns this off)            figuration roughly corresponds to the GAT ablations used
+                                                             by Velickovic´ et al. (2018), there are two major differences
+· graph activation function              P                   that explain the performance difference. First, the model
+                                                             here uses a linear layer to map the input node features
+trelu, leaky relu, elu, gelu, tanhu - non-linearity          into a representation that has the same size as the hidden
+                                                             layers of the GNN, while the original GAT implementa-
+applied after message passing.                               tion directly uses the input representation. Second, the re-
+                                                             implementation uses a linear layer applied to the final node
+· optimizer P tRMSProp, Adamu - optimizer used               representation to obtain logits, whereas the original GAT
+   (with TF 1.13.1 default parameters).                      model uses the final GNN layer to directly compute the
+                                                             logits from the messages.
+· lr P r0.0005, 0.001s - learning rate.
+                                                             In the ablation results, the biggest jump in performance is
+· cell P tRNN , GRU , LSTM u - gated cell used for           caused by switching from the original GAT formulation to
+   GGNN.
+
+· num heads P t4, 8, 16u - number of attention heads
+   used for R-GAT.
+                           GNN-FiLM: Graph Neural Networks with Feature-wise Linear Modulation
+
+          64                               Model
+                                           ggnn
+                                           rgcn
+                                           rgat
+          32                               rgin
+
+                                           gnn-edge-mlp0
+Accuracy                                   gnn-edge-mlp1
+  Loss    16                               gnn_film
+
+          8
+
+          4         100 200 300Epoch400 500 600 700
+               0
+
+        Figure 3: Validation loss of different models during train-
+        ing for PPI task.
+
+        0.875                              Model
+        0.850                              ggnn
+        0.825                              rgcn
+        0.800                              rgat
+        0.775                              rgin
+        0.750                              gnn-edge-mlp0
+        0.725                              gnn-edge-mlp1
+        0.700                              gnn_film
+        0.675
+                    5  10  15Epoch 20  25        30  35
+                 0
+
+Figure 4: Accuracy on validation data of different models
+during training for VarMisuse task.
+
+the R-GAT formulation from p3q. In the case of the PPI
+task, this only distinguishes edges present in the dataset
+from the newly-introduced self-loop edges used to keep
+state at a node, which seems to be of great importance for
+model performance.
+
+C. Training Curves
+
+The loss on the validation set during training of all con-
+sidered models on the PPI task is shown in Fig. 3, with
+(barely visible) confidence intervals obtained by using the
+runs for all 10 considered different random seeds. The very
+fast convergence of the GNN-FiLM model becomes visi-
+ble here. The GNN-MLP0 model converges equally fast in
+terms of training steps, but requires more time per epoch,
+and hence is slower in wall clock time, as seen in Tab. 1.
+
+The accuracy on the validation set during training of all
+considered models on the VarMisuse task is shown in
+Fig. 4, with confidence intervals obtained by using the runs
+for all 5 considered random seeds.
+

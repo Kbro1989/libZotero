@@ -1,0 +1,121 @@
+Jukebox: A Generative Model for Music
+
+arXiv:2005.00341v1 [eess.AS] 30 Apr 2020
+
+Prafulla Dhariwal * 1 Heewoo Jun * 1 Christine Payne * 1 Jong Wook Kim 1 Alec Radford 1 Ilya Sutskever 1
+
+Abstract
+We introduce Jukebox, a model that generates music with singing in the raw audio domain. We tackle the long context of raw audio using a multiscale VQ-VAE to compress it to discrete codes, and modeling those using autoregressive Transformers. We show that the combined model at scale can generate high-fidelity and diverse songs with coherence up to multiple minutes. We can condition on artist and genre to steer the musical and vocal style, and on unaligned lyrics to make the singing more controllable. We are releasing thousands of non cherry-picked samples, along with model weights and code.
+1. Introduction
+Music is an integral part of human culture, existing from the earliest periods of human civilization and evolving into a wide diversity of forms. It evokes a unique human spirit in its creation, and the question of whether computers can ever capture this creative process has fascinated computer scientists for decades. We have had algorithms generating piano sheet music (Hiller Jr & Isaacson, 1957; Moorer, 1972; Hadjeres et al., 2017; Huang et al., 2017), digital vocoders generating a singer's voice (Bonada & Serra, 2007; Saino et al., 2006; Blaauw & Bonada, 2017) and also synthesizers producing timbres for various musical instruments (Engel et al., 2017; 2019). Each captures a specific aspect of music generation: melody, composition, timbre, and the human voice singing. However, a single system to do it all remains elusive. The field of generative models has made tremendous progress in the last few years. One of the aims of generative modeling is to capture the salient aspects of the data and to generate new instances indistinguishable from the true data The hypothesis is that by learning to produce the data we can learn the best features of the data1. We are surrounded by highly complex distributions in the visual, audio, and text domain, and in recent years we have devel-
+*Equal contribution 1OpenAI, San Francisco. Correspondence to: <jukebox@openai.com>.
+
+oped advances in text generation (Radford et al.), speech generation (Xie et al., 2017) and image generation (Brock et al., 2019; Razavi et al., 2019). The rate of progress in this field has been rapid, where only a few years ago we had algorithms producing blurry faces (Kingma & Welling, 2014; Goodfellow et al., 2014) but now we now can generate high-resolution faces indistinguishable from real ones (Zhang et al., 2019b). Generative models have been applied to the music generation task too. Earlier models generated music symbolically in the form of a pianoroll, which specifies the timing, pitch, velocity, and instrument of each note to be played. (Yang et al., 2017; Dong et al., 2018; Huang et al., 2019a; Payne, 2019; Roberts et al., 2018; Wu et al., 2019). The symbolic approach makes the modeling problem easier by working on the problem in the lower-dimensional space. However, it constrains the music that can be generated to being a specific sequence of notes and a fixed set of instruments to render with. In parallel, researchers have been pursuing the nonsymbolic approach, where they try to produce music directly as a piece of audio. This makes the problem more challenging, as the space of raw audio is extremely high dimensional with a high amount of information content to model. There has been some success, with models producing piano pieces either in the raw audio domain (Oord et al., 2016; Mehri et al., 2017; Yamamoto et al., 2020) or in the spectrogram domain (Vasquez & Lewis, 2019). The key bottleneck is that modeling the raw audio directly introduces extremely long-range dependencies, making it computationally challenging to learn the high-level semantics of music. A way to reduce the difficulty is to learn a lower-dimensional encoding of the audio with the goal of losing the less important information but retaining most of the musical information. This approach has demonstrated some success in generating short instrumental pieces restricted to a set of a few instruments (Oord et al., 2017; Dieleman et al., 2018). In this work, we show that we can use state-of-the-art deep generative models to produce a single system capable of generating diverse high-fidelity music in the raw audio domain, with long-range coherence spanning multiple minutes. Our approach uses a hierarchical VQ-VAE architecture (Razavi
+1Richard Feynmann famously said, "What I cannot create, I do not understand"
+
+Jukebox: A Generative Model for Music
+
+et al., 2019) to compress audio into a discrete space, with a loss function designed to retain the maximum amount of musical information, while doing so at increasing levels of compression. We use an autoregressive Sparse Transformer (Child et al., 2019; Vaswani et al., 2017) trained with maximum-likelihood estimation over this compressed space, and also train autoregressive upsamplers to recreate the lost information at each level of compression. We show that our models can produce songs from highly diverse genres of music like rock, hip-hop, and jazz. They can capture melody, rhythm, long-range composition, and timbres for a wide variety of instruments, as well as the styles and voices of singers to be produced with the music. We can also generate novel completions of existing songs. Our approach allows the option to influence the generation process: by swapping the top prior with a conditional prior, we can condition on lyrics to tell the singer what to sing, or on midi to control the composition. We release our model weights and training and sampling code at https://github.com/openai/jukebox.
+
+2. Background
+We consider music in the raw audio domain represented as a continuous waveform x  [-1, 1]T , where the number of samples T is the product of the audio duration and the sampling rate typically ranging from 16 kHz to 48 kHz. For music, CD quality audio, 44.1 kHz samples stored in 16 bit precision, is typically enough to capture the range of frequencies perceptible to humans. As an example, a fourminute-long audio segment will have an input length of 10 million, where each position can have 16 bits of information. In comparison, a high-resolution RGB image with 1024 × 1024 pixels has an input length of 3 million, and each position has 24 bits of information. This makes learning a generative model for music extremely computationally demanding with increasingly longer durations; we have to capture a wide range of musical structures from timbre to global coherence while simultaneously modeling a large amount of diversity.
+
+2.1. VQ-VAE
+
+To make this task feasible, we use the VQ-VAE (Oord et al.,
+
+2017; Dieleman et al., 2018; Razavi et al., 2019) to compress
+
+raw audio to a lower-dimensional space. A one-dimensional
+
+VQ-VAE learns to encode an input sequence x =
+
+xt
+
+T t=1
+
+using a sequence of discrete tokens z =
+
+zs
+
+
+
+[K ]
+
+S s=1
+
+,
+
+where K denotes the vocabulary size and we call the ratio
+
+T /S the hop length. It consists of an encoder E(x) which
+
+encodes x into a sequence of latent vectors h =
+
+hs
+
+S s=1
+
+,
+
+a bottleneck that quantizes hs  ezs by mapping each hs
+
+to its nearest vector ezs from a codebook C = {ek}kK=1,
+
+and a decoder D(e) that decodes the embedding vectors
+
+back to the input space. It is thus an auto-encoder with a discretization bottleneck. The VQ-VAE is trained using the following objective:
+
+L = Lrecons + Lcodebook + Lcommit
+
+(1)
+
+Lrecons
+
+=
+
+1 T
+
+xt - D(ezt )
+
+2 2
+
+(2)
+
+t
+
+Lcodebook
+
+=
+
+1 S
+
+sg [hs] - ezs
+
+2 2
+
+(3)
+
+s
+
+Lcommit
+
+=
+
+1 S
+
+hs - sg [ezs ]
+
+2 2
+
+(4)
+
+s
+
+where sg denotes the stop-gradient operation, which passes zero gradient during backpropagation. The reconstruction loss Lrecons penalizes for the distance between the input x and the reconstructed output x = D(ez), and Lcodebook penalizes the codebook for the distance between the encodings h and their nearest neighbors ez from the codebook. To stabilize the encoder, we also add Lcommit to prevent the encodings from fluctuating too much, where the weight  controls the amount of contribution of this loss. To speed up training, the codebook loss Lcodebook instead uses EMA updates over the codebook variables. Razavi et al. (2019) extends this to a hierarchical model where they train a single encoder and decoder but break up the latent sequence h into a multi-level representation [h(1), · · · , h(L)] with decreasing sequence lengths, each learning its own codebook C(l). They use non-autoregressive encoder-decoders and jointly train all levels with a simple mean-squared loss.
+
+3. Music VQ-VAE
+Inspired by the results from the hierarchical VQ-VAE model (Razavi et al., 2019) for images, we consider applying the same technique to model raw audio using three different levels of abstraction, as illustrated in Figure 1. At each level, we use residual networks consisting of WaveNet-style noncausal 1-D dilated convolutions, interleaved with downsampling and upsampling 1-D convolutions to match different hop lengths. A detailed description of the architecture is provided in Appendix B.1. We make a number of modifications to our VQ-VAE compared to the ones in (Oord et al., 2017; Razavi et al., 2019), as described in the following subsections.
+3.1. Random restarts for embeddings VQ-VAEs are known to suffer from codebook collapse, wherein all encodings get mapped to a single or few embedding vectors while the other embedding vectors in the codebook are not used, reducing the information capacity of the bottleneck. To prevent this, we use random restarts: when the mean usage of a codebook vector falls below a threshold, we randomly reset it to one of the encoder outputs from the current batch. This ensures all vectors in the
+
+

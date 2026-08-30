@@ -1,0 +1,513 @@
+                                            A Generalization of Transformer Networks to Graphs
+
+                                                             Vijay Prakash Dwivedi,¶ Xavier Bresson¶
+
+                                        ¶ School of Computer Science and Engineering, Nanyang Technological University, Singapore
+                                                         vijaypra001@e.ntu.edu.sg, xbresson@ntu.edu.sg
+
+arXiv:2012.09699v2 [cs.LG] 24 Jan 2021                                Abstract                              et al. 2017) in graph neural networks (GNNs), this process
+                                                                                                            of learning word feature representations by combining fea-
+                                           We propose a generalization of transformer neural network        ture information from other words in a sentence can alter-
+                                           architecture for arbitrary graphs. The original transformer      natively be viewed as a case of a GNN applied on a fully
+                                           was designed for Natural Language Processing (NLP), which        connected graph of words (Joshi 2020). Transformers based
+                                           operates on fully connected graphs representing all connec-      models have led to state-of-the-art performance on several
+                                           tions between the words in a sequence. Such architecture does    NLP applications (Devlin et al. 2018; Radford et al. 2018;
+                                           not leverage the graph connectivity inductive bias, and can      Brown et al. 2020). On the other hand, graph neural net-
+                                           perform poorly when the graph topology is important and          works (GNNs) are shown to be the most effective neural
+                                           has not been encoded into the node features. We introduce a      network architectures on graph datasets and have achieved
+                                           graph transformer with four new properties compared to the       significant success on a wide range of applications, such
+                                           standard model. First, the attention mechanism is a function     as in knowledge graphs (Schlichtkrull et al. 2018; Chami
+                                           of the neighborhood connectivity for each node in the graph.     et al. 2020), in social sciences (Monti et al. 2019), in physics
+                                           Second, the positional encoding is represented by the Lapla-     (Cranmer et al. 2019; Sanchez-Gonzalez et al. 2020), etc.
+                                           cian eigenvectors, which naturally generalize the sinusoidal     In particular, GNNs exploit the given arbitrary graph struc-
+                                           positional encodings often used in NLP. Third, the layer         ture while learning the feature representations for nodes and
+                                           normalization is replaced by a batch normalization layer,        edges and eventually the learned representations are used for
+                                           which provides faster training and better generalization per-    downstream tasks. In this work, we explore inductive biases
+                                           formance. Finally, the architecture is extended to edge feature  at the convergence of these two active research areas in deep
+                                           representation, which can be critical to tasks s.a. chemistry    learning towards presenting an improved version of Graph
+                                           (bond type) or link prediction (entity relationship in knowl-    Transformer (see Figure 1) which extends the key design
+                                           edge graphs). Numerical experiments on a graph benchmark         components of the NLP transformers to arbitrary graphs.
+                                           demonstrate the performance of the proposed graph trans-
+                                           former architecture. This work closes the gap between the        1.1 Related Work
+                                           original transformer, which was designed for the limited case
+                                           of line graphs, and graph neural networks, that can work with    As a preliminary, we highlight the most recent research
+                                           arbitrary graphs. As our architecture is simple and generic,     works which attempt to develop graph transformers (Li et al.
+                                           we believe it can be used as a black box for future applica-     2019; Nguyen, Nguyen, and Phung 2019; Zhang et al. 2020)
+                                           tions that wish to consider transformer and graphs.1             with few focused on specialized cases such as on heteroge-
+                                                                                                            neous graphs, temporal networks, generative modeling, etc.
+                                                           1 Introduction                                   (Yun et al. 2019; Xu, Joshi, and Bresson 2019; Hu et al.
+                                                                                                            2020; Zhou et al. 2020).
+                                        There has been a tremendous success in the field of nat-
+                                        ural language processing (NLP) since the development of                The model proposed in Li et al. (2019) employs attention
+                                        Transformers (Vaswani et al. 2017) which are currently the          to all graph nodes instead of a node's local neighbors for
+                                        best performing neural network architectures for handling           the purpose of capturing global information. This limits the
+                                        long-term sequential datasets such as sentences in NLP.             efficient exploitation of sparsity which we show is a good in-
+                                        This is achieved by the use of attention mechanism (Bah-            ductive bias for learning on graph datasets. For the purpose
+                                        danau, Cho, and Bengio 2014) where a word in a sentence             of global information, we argue that there are other ways to
+                                        attends to each other word and combines the received in-            incorporate the same instead of letting go sparsity and local
+                                        formation to generate its abstract feature representations.         contexts. For example, the use of graph-specific positional
+                                        From a perspective of message-passing paradigm (Gilmer              features (Zhang et al. 2020), or node Laplacian position
+                                                                                                            eigenvectors (Belkin and Niyogi 2003; Dwivedi et al. 2020),
+                                        AAAI'21 Workshop on Deep Learning on Graphs: Methods and            or relative learnable positional information (You, Ying, and
+                                        Applications (DLG-AAAI'21). Copyright © 2021, Association for       Leskovec 2019), virtual nodes (Li et al. 2015), etc. Zhang
+                                        the Advancement of Artificial Intelligence (www.aaai.org). All      et al. (2020) propose Graph-BERT with an emphasis on pre-
+                                        rights reserved.
+
+                                            1https://github.com/graphdeeplearning/graphtransformer.
+   Add&Norm                                                       Add&Norm                 Add&Norm
+   Add&Norm                                                       Add&Norm                 Add&Norm
+
++                        +                                     +            +
+
+Graph Transformer Layer     Laplacian EigVecs as                  Graph Transformer Layer
+                            Positional Encoding                       with edge features
+
+Figure 1: Block Diagram of Graph Transformer with Laplacian Eigvectors () used as positional encoding (LapPE). LapPE
+is added to input node embeddings before passing the features to the first layer. Left: Graph Transformer operating on node
+embeddings only to compute attention scores; Right: Graph Transformer with edge features with designated feature pipeline to
+maintain layer wise edge representations. In this extension, the available edge attributes in a graph is used to explicitly modify
+the corresponding pairwise attention scores.
+
+training and parallelized learning using a subgraph batch-     preting the generated meta-paths. There is another trans-
+ing scheme that creates fixed-size linkless subgraphs to be    former based approach developed for heterogeneous in-
+passed to the model instead of the original graph. Graph-      formation networks, namely Heterogeneous Graph Trans-
+BERT employs a combination of several positional encod-        former (HGT) by Hu et al. (2020). Apart from its ability
+ing schemes to capture absolute node structural and rela-      of handling arbitrary number of node and edge types, HGT
+tive node positional information. Since the original graph is  also captures the dynamics of information flow in the hetero-
+not used directly in Graph-BERT and the subgraphs do not       geneous graphs in the form of relative temporal positional
+have edges between the nodes (i.e., linkless), the proposed    encoding which is based on the timestamp differences of the
+combination of positional encodings attempts at retaining      central node and the message-passing nodes. Furthermore,
+the original graph structure information in the nodes. We      Zhou et al. (2020) proposed a transformer based generative
+perform detailed analysis of Graph-BERT positional encod-      model which generates temporal graphs by directly learn-
+ing schemes, along with experimental comparison with the       ing from dynamic information in networks. The architecture
+model we present in this paper in Section 4.1.                 presented in Nguyen, Nguyen, and Phung (2019) somewhat
+                                                               proceeds along our goal to develop graph transformer for ar-
+   Yun et al. (2019) developed Graph Transformer Networks      bitrary homogeneous graphs with a coordinate embedding
+(GTN) to learn on heterogeneous graphs with a target to        based positional encoding scheme. However, their experi-
+transform a given heterogeneous graph into a meta-path         ments show that the coordinate embeddings are not universal
+based graph and then perform convolution. Notably, their       in performance and only helps in a couple of unsupervised
+focus behind the use of attention framework is for inter-
+learning experiments among all evaluations.                         feasibility and large transformer models can be trained on
+                                                                    such fully connected graphs of words.
+1.2 Contributions
+                                                                       In case of actual graph datasets, graphs have arbitrary con-
+Overall, we find that the most fruitful ideas from the trans-       nectivity structure available depending on the domain and
+formers literature in NLP can be applied in a more efficient        target of application, and have node sizes in ranges of up
+way and posit that sparsity and positional encodings are two        to millions, or billions. The available structure presents us
+key aspects in the development of a Graph Transformer. As           with a rich source of information to exploit as an inductive
+opposed to designing a best performing model for specific           bias in a neural network, whereas the node sizes practically
+graph tasks, our work attempts for a generic, competitive           makes it impossible to have a fully connected graph for such
+transformer model which draws ideas together from the do-           datasets. On these accounts, it is ideal and practical to have
+mains of NLP and GNNs. For an overview, this paper brings           a Graph Transformer where a node attends to local node
+the following contributions:                                        neighbors, same as in GNNs (Defferrard, Bresson, and Van-
+                                                                    dergheynst 2016; Kipf and Welling 2017; Monti et al. 2017;
+· We put forward a generalization of transformer networks           Gilmer et al. 2017; Velickovic´ et al. 2018; Bresson and Lau-
+   to homogeneous graphs of arbitrary structure, namely             rent 2017; Xu et al. 2019).
+   Graph Transformer, and an extended version of Graph
+   Transformer with edge features that allows the usage of          2.2 On Positional Encodings
+   explicit domain information as edge features.
+                                                                    In NLP, transformer based models are, in most cases, sup-
+· Our method includes an elegant way to fuse node po-               plied with a positional encoding for each word. This is criti-
+   sitional features using Laplacian eigenvectors for graph         cal to ensure unique representation for each word, and even-
+   datasets, inspired from the heavy usage of positional en-        tually preserve distance information. For graphs, the design
+   codings in NLP transformer models and recent research            of unique node positions is challenging as there are sym-
+   on node positional features in GNNs. The comparison              metries which prevent canonical node positional informa-
+   with literature shows Laplacian eigenvectors to be well-         tion (Murphy et al. 2019). In fact, most of the GNNs which
+   placed than any existing approaches to encode node posi-         are trained on graph datasets learn structural node informa-
+   tional information for arbitrary homogeneous graphs.             tion that are invariant to the node position (Srinivasan and
+                                                                    Ribeiro 2020). This is a critical reason why simple attention
+· Our experiments demonstrate that the proposed model               based models, such as GAT (Velickovic´ et al. 2018), where
+   surpasses baseline isotropic and anisotropic GNNs. The           the attention is a function of local neighborhood connectiv-
+   architecture simultaneously emerges as a better attention        ity, instead full-graph connectivity, do not seem to achieve
+   based GNN baseline as well as a simple and effective             competitive performance on graph datasets. The issue of po-
+   Transformer network baseline for graph datasets for fu-          sitional embeddings has been explored in recent GNN works
+   ture research at the intersection of attention and graphs.       (Murphy et al. 2019; You, Ying, and Leskovec 2019; Srini-
+                                                                    vasan and Ribeiro 2020; Dwivedi et al. 2020; Li et al. 2020)
+             2 Proposed Architecture                                with a goal to learn both structural and positional features.
+                                                                    In particular, Dwivedi et al. (2020) make the use of avail-
+As stated earlier, we take into account two key aspects to          able graph structure to pre-compute Laplacian eigenvectors
+develop Graph Transformers ­ sparsity and positional en-            (Belkin and Niyogi 2003) and use them as node positional
+codings which should ideally be used in the best possible           information. Since Laplacian PEs are generalization of the
+way for learning on graph datasets. We first discuss the mo-        PE used in the original transformers (Vaswani et al. 2017)
+tivations behind these using a transition from NLP to graphs,       to graphs and these better help encode distance-aware in-
+and then introduce the architecture proposed.                       formation (i.e., nearby nodes have similar positional fea-
+                                                                    tures and farther nodes have dissimilar positional features),
+2.1 On Graph Sparsity                                               we use Laplacian eigenvectors as PE in Graph Transformer.
+                                                                    Although these eigenvectors have multiplicity occuring due
+In NLP transformers, a sentence is treated as a fully con-          to the arbitrary sign of eigenvectors, we randomly flip the
+nected graph and this choice can be justified for two reasons       sign of the eigenvectors during training, following Dwivedi
+­ a) First, it is difficult to find meaningful sparse interactions  et al. (2020).We pre-compute the Laplacian eigenvectors of
+or connections among the words in a sentence. For instance,         all graphs in the dataset. Eigenvectors are defined via the
+the dependency of a word in a sentence on another word can          factorization of the graph Laplacian matrix;
+vary with context, perspective of a user and specific applica-
+tion. There can be numerous plausible ground truth connec-           = I - D-1/2AD-1/2 = U T U,  (1)
+tions among words in a sentence and therefore, text datasets
+of sentences do not have explicit word interactions available.      where A is the n × n adjacency matrix, D is the degree
+It thereby makes sense to have each word attending to each          matrix, and , U correspond to the eigenvalues and eigen-
+other word in a sentence, as followed by the Transformer            vectors respectively. We use the k smallest non-trivial eigen-
+architecture (Vaswani et al. 2017). ­ b) Next, the so-called        vectors of a node as its positional encoding and denote by i
+graph considered in an NLP transformer often has less than          for node i. Finally, we refer to Section 4.1 for a comparison
+tens or hundreds of nodes (i.e. sentences are often less than       of Laplacian PE with existing Graph-BERT PEs.
+tens or hundreds of words). This makes for computationally
+2.3 Graph Transformer Architecture                                           Graph Transformer Layer with edge features The
+                                                                             Graph Transformer with edge features is designed for bet-
+We now introduce the Graph Transformer Layer and Graph                       ter utilization of rich feature information available in several
+Transformer Layer with edge features. The layer archi-                       graph datasets in the form of edge attributes. See Figure 1
+tecture is illustrated in Figure 1. The first model is de-                   (Right) for a reference to the building block of a layer. Since
+signed for graphs which do not have explicit edge attributes,                our objective remains to better use the edge features which
+whereas the second model maintains a designated edge fea-                    are pairwise scores corresponding to a node pair, we tie these
+ture pipeline to incorporate the available edge information                  available edge features to implicit edge scores computed by
+and maintain their abstract representations at every layer.                  pairwise attention. In other words, say an intermediate at-
+                                                                             tention score before softmax, w^ij, is computed when a node
+Input First of all, we prepare the input node and edge em-                   i attends to node j after the multiplication of query and key
+                                                                             feature projections, see the expression inside the brackets in
+beddings to be passed to the Graph Transformer Layer. For                    Equation 5. Let us treat this score w^ij as implicit information
+                                                                             about the edge < i, j >. We now try to inject the available
+a graph G with node features i  Rdn×1 for each node i                        edge information for the edge < i, j > and improve the al-
+and edge features ij  Rde×1 for each edge between node                       ready computed implicit attention score w^ij. It is done by
+                                                                             simply multiplying the two values w^ij and eij, see Equa-
+i and node j, the input node features i and edge features                    tion 12. This kind of information injection is not seen to be
+                                                                             explored much, or applied in NLP Transformers as there is
+ij are passed via a linear projection to embed these to d-                   usually no available feature information between two words.
+dimensional hidden features h0i and ei0j.                                    However, in graph datasets such as molecular graphs, or
+                                                                             social media graphs, there is often some feature informa-
+            h^0i = A0i + a0 ; ei0j = B0ij + b0,                         (2)  tion available on the edge interactions and it becomes nat-
+                                                                             ural to design an architecture to use this information while
+where A0  Rd×dn , B0  Rd×de and a0, b0  Rd are the                           learning. For the edges, we also maintain a designated node-
+                                                                             symmetric edge feature representation pipeline for propagat-
+parameters of the linear projection layers. We now embed                     ing edge attributes from one layer to another, see Figure 1.
+                                                                             We now proceed to define the layer update equations for a
+the pre-computed node positional encodings of dim k via a                    layer .
+
+linear projection and add to the node features h^i0.
+
+            i0 = C0i + c0 ; hi0 = h^i0 + i0,                            (3)
+
+where C0  Rd×k and c0  Rd. Note that the Laplacian po-
+
+sitional encodings are only added to the node features at the
+
+input layer and not during intermediate Graph Transformer
+
+layers.
+
+Graph Transformer Layer The Graph Transformer is                                          H
+closely the same transformer architecture initially proposed
+in (Vaswani et al. 2017), see Figure 1 (Left). We now pro-                   h^i+1 = Oh                   wikj, V k, hj ,   (9)
+ceed to define the node update equations for a layer .                                                                     (10)
+
+                          H                                                               k=1 jNi
+
+            h^i+1 = Oh             wikj, V k, hj ,                      (4)               H
+
+                          k=1 jNi                                            e^ij+1 = Oe       w^ikj, , where,
+
+         where, wikj,  = softmaxj  Qk, hi· Kk, hj               ,       (5)               k=1
+                                             dk
+                                                                             wikj, = softmaxj (w^ikj, ),
+and Qk, , Kk, , V k,  Rdk×d, Oh  Rd×d, k = 1 to H de-                                                                      (11)
+
+notes the number of attention heads, and denotes concate-                              Qk, hi· Kk, hj
+                                                                                                 dk
+nation. For numerical stability, the outputs after taking expo-              w^ikj, =                     · Ek, eij ,      (12)
+
+nents of the terms inside softmax is clamped to a value be-
+
+tween -5 to +5. The attention outputs h^i+1 are then passed                  and Qk, , Kk, , V k, , Ek,  Rdk×d, Oh, Oe  Rd×d,
+to a Feed Forward Network (FFN) preceded and succeeded                       k = 1 to H denotes the number of attention head, and de-
+
+by residual connections and normalization layers, as:                        notes concatenation. For numerical stability, the outputs af-
+
+            h^^i+1 = Norm hi + h^i+1 ,                                  (6)  ter taking exponents of the terms inside softmax is clamped
+                                                                             to a value between -5 to +5. The outputs h^i+1 and e^ij+1 are
+            h^^^i+1    =  W2  ReLU(W1    h^^i  +1                       (7)  then passed to separate Feed Forward Networks preceded
+
+                                                  ),                         and succeeded by residual connections and normalization
+
+            hi+1 = Norm h^^i+1 + h^^^i+1 ,                                   layers, as:
+
+                                                                        (8)  h^^i+1 = Norm hi + h^i+1 ,
+
+                                         h^^i  +1    h^^^i  +1                                                             (13)
+
+where    W1 ,   R2d×d,    W2 ,   Rd×2d,           ,             denote  in-  h^^^i+1 = Wh,2ReLU(Wh,1h^^i+1),
+
+termediate representations, and Norm can either be Layer-                                                                  (14)
+
+Norm(Ba, Kiros, and Hinton 2016) or BatchNorm (Ioffe and
+
+Szegedy 2015). The bias terms are omitted for clarity of pre-                hi+1 = Norm h^^i+1 + h^^^i+1 ,
+
+sentation.                                                                                                                 (15)
+where  Wh,1,   R2d×d,  Wh,2,   Rd×2d,  h^^i  +1    h^^^i+1  denote  the learning rate reaches to a value of 1 × 10-6. We run each
+                                                                    experiment with 4 different seeds and report the mean and
+                                                ,                   average performance measure of the 4 runs. The results are
+                                                                    reported in Table 1 and comparison in Table 2.
+intermediate representations,
+                                                                                4 Analysis and Discussion
+       ^e^ij+1 = Norm eij + e^ij+1 ,                        (16)
+                                                                    We now present the analysis of our experiments on the pro-
+       ^^e^ij+1 = We,2ReLU(We,1^e^ij+1),                    (17)    posed Graph Transformer Architecture, see Tables 1 and 2.
+
+       eij+1 = Norm ^e^ij+1 + ^^e^ij+1 ,                    (18)    · The generalization of transformer network on graphs is
+                                                                       best when Laplacian PE are used for node positions and
+where We,1,  R2d×d, We,2,  Rd×2d, ^e^ij+1, ^^e^ij+1 denote             Batch Normalization is selected instead of Layer Normal-
+intermediate representations.                                          ization. For all three benchmark datasets, the experiments
+                                                                       score the highest performance in this setting, see Table 1.
+Task based MLP Layers The node representations ob-
+tained at the final layer of Graph Transformer are passed           · The proposed architecture performs significantly better
+to a task based MLP network for computing task-dependent               than baseline isotropic and anisotropic GNNs (GCN and
+outputs, which are then fed to a loss function to train the            GAT respectively), and helps close the gap between the
+parameters of the model. The formal definitions of the task            original transformer and transformer for graphs. Notably,
+based layers that we use can be found in Appendix A.1.                 our architecture emerges as a fresh and improved attention
+                                                                       based GNN baseline surpassing GAT (see Table 2), which
+            3 Numerical Experiments                                    employs multi-headed attention inspired by the original
+                                                                       transformer (Vaswani et al. 2017) and have been often
+We evaluate the performance of proposed Graph Trans-                   used in the literature as a baseline for attention-based
+former on three benchmark graph datasets­ ZINC (Irwin                  GNN models.
+et al. 2012), PATTERN and CLUSTER (Abbe 2017) from
+a recent GNN benchmark (Dwivedi et al. 2020).                       · As expected, sparse graph connectivity is a critical in-
+                                                                       ductive bias for datasets with arbitrary graph structure, as
+ZINC, Graph Regression ZINC (Irwin et al. 2012) is a                   demonstrated by comparing sparse vs. full graph experi-
+molecular dataset with the task of graph property regres-              ments.
+sion for constrained solubility. Each ZINC molecule is rep-
+resented as a graph of atoms as nodes and bonds as edges.           · Our proposed extension of Graph Transformer with edge
+Since this dataset have rich feature information in terms of           features reaches close to the best performing GNN,
+bonds as edge attributes, we use the `Graph Transformer                i.e., GatedGCN, on ZINC. This architecture specifically
+with edge features' for this task. We use the 12K subset of            brings exciting promise to datasets where domain infor-
+the data as in Dwivedi et al. (2020).                                  mation along pairwise interactions can be leveraged for
+                                                                       maximum learning performance.
+PATTERN, Node Classification PATTERN is a node
+classification dataset generated using the Stochastic Block         4.1 Comparison to PEs used in Graph-BERT
+Models (SBM) (Abbe 2017). The task is classify the nodes
+into 2 communities. PATTERN graphs do not have explicit             In addition to the reasons underscored in Sections 1.1 and
+edge features and hence we use the simple `Graph Trans-             2.2, we demonstrate the usefulness of Laplacian eigenvec-
+former' for this task. The size of this dataset is 14K graphs.      tors as a suitable candidate PE for Graph Transformer in
+                                                                    this section, by its comparison with different PE schemes ap-
+CLUSTER, Node Classification CLUSTER is also a                      plied in Graph-BERT (Zhang et al. 2020).2 In Graph-BERT,
+synthetically generated dataset using SBM model. The task           which operates on fixed size sampled subgraphs, a node at-
+is to assign a cluster label to each node. There are total 6        tends to every other node in a subgraph. For a given graph
+cluster labels. Similar to PATTERN, CLUSTER graphs do               G = (V, E) with V nodes and E edges, a subgraph gi of size
+not have explicit edge features and hence we use the simple         k + 1 is created for every node i in the graph, which means
+`Graph Transformer' for this task. The size of this dataset is      the original single graph G is converted to V subgraphs. For
+12K graphs. We refer the readers to (Dwivedi et al. 2020)           a subgraph gi corresponding to node ui, the k other nodes
+for additional information, inlcuding preparation, of these         are the ones which have the top k intimacy scores with node
+datasets.                                                           ui based on a pre-computed intimacy matrix that maps every
+                                                                    edge in the graph G to an intimacy score. While the sampling
+Model Configurations For experiments, we follow the                 is great for parallelization and efficiency, the original graph
+benchmarking protocol introduced in Dwivedi et al. (2020)           structure is not directly used in the layers. Graph-BERT uses
+based on PyTorch (Paszke et al. 2019) and DGL (Wang et al.
+2019). We use 10 layers of Graph Transformer layers with                2Note that we do not perform empirical comparison with other
+each layer having 8 attention heads and arbitrary hidden di-        PEs in Graph Transformer literature except Graph-BERT, because
+mensions such that the total number of trainable parameters         of two reasons: i) Some existing Graph Transformer methods do
+is in the range of 500k. We use learning rate decay strategy        not use PEs, ii) If PEs are used, they are usually specialised; for
+to train the models where the training stops at a point when        instance, Relative Temporal Encoding (RTE) for encoding dynamic
+                                                                    information in heterogeneous graphs in (Hu et al. 2020).
+                                   Sparse Graph                                                    Full Graph
+
+Dataset LapPE L #Param Test Perf.±s.d. Train Perf.±s.d. #Epoch Epoch/Total Test Perf.±s.d. Train Perf.±s.d. #Epoch Epoch/Total
+
+                                   Batch Norm: False; Layer Norm: True
+
+ZINC     x  10 588353 0.278±0.018  0.027±0.004     274.75 26.87s/2.06hr   0.741±0.008  0.431±0.013               196.75 37.64s/2.09hr
+            10 588929 0.284±0.012  0.031±0.006     263.00 26.64s/1.98hr   0.735±0.006  0.442±0.031               196.75 31.50s/1.77hr
+
+CLUSTER  x  10 523146 70.879±0.295 86.174±0.365 128.50 202.68s/7.32hr 19.596±2.071 19.570±2.053 103.00 512.34s/15.15hr
+            10 524026 70.649±0.250 86.395±0.528 130.75 200.55s/7.43hr 27.091±3.920 26.916±3.764 139.50 565.13s/22.37hr
+
+PATTERN  x  10 522742 73.140±13.633 73.070±13.589 184.25 276.66s/13.75hr 50.854±0.111 50.906±0.005 108.00 540.85s/16.77hr
+            10 522982 71.005±11.831 71.125±11.977 192.50 294.91s/14.79hr 56.482±3.549 56.565±3.546 124.50 637.55s/22.69hr
+
+                                   Batch Norm: True; Layer Norm: False
+
+ZINC     x  10 588353 0.264±0.008  0.048±0.006     321.50 28.01s/2.52hr   0.724±0.013  0.518±0.013               192.25 50.27s/2.72hr
+            10 588929 0.226±0.014  0.059±0.011     287.50 27.78s/2.25hr   0.598±0.049  0.339±0.123               273.50 45.26s/3.50hr
+
+CLUSTER  x  10 523146 72.139±0.405 85.857±0.555 121.75 200.85s/6.88hr 21.092±0.134 21.071±0.037 100.25 595.24s/17.10hr
+            10 524026 73.169±0.622 86.585±0.905 126.50 201.06s/7.20hr 27.121±8.471 27.192±8.485 133.75 552.06s/20.72hr
+
+PATTERN  x  10 522742 83.949±0.303 83.864±0.489 236.50 299.54s/19.71hr 50.889±0.069 50.873±0.039 104.50 621.33s/17.53hr
+            10 522982 84.808±0.068 86.559±0.116 145.25 309.95s/12.67hr 54.941±3.739 54.915±3.769 117.75 683.53s/22.77hr
+
+Table 1: Results of GraphTransformer (GT) on all datasets. Performance Measure for ZINC is MAE, for PATTERN and CLUS-
+TER is Acc. Results (higher is better for all except ZINC) are averaged over 4 runs with 4 different seeds. Bold: the best
+performing model for each dataset. We perform each experiment with given graphs (Sparse Graph) and (Full Graph) in
+which we create full connections among all nodes; For ZINC full graphs, edge features are discarded given our motive of the
+full graph experiments without any sparse structure information.
+
+Model ZINC  CLUSTER PATTERN                                                                                                    Sparse Graph
+                                                              Dataset PE #Param Test Perf.±s.d. Train Perf.±s.d. #Epoch Epoch/Total
+
+GNN BASELINE SCORES from (Dwivedi et al. 2020)                            Batch Norm: True; Layer Norm: False; L = 10
+
+       GCN 0.367±0.011 68.498±0.976 71.892±0.334                    ZINC   x 588353  0.264±0.008   0.048±0.006   321.50   28.01s/2.52hr
+        GAT 0.384±0.007 70.587±0.447 78.271±0.186             CLUSTER      L 588929  0.226±0.014   0.059±0.011   287.50   27.78s/2.25hr
+GatedGCN 0.214±0.013 76.082±0.196 86.508±0.085                PATTERN     W 590721   0.267±0.012   0.059±0.010   263.25   27.04s/2.00hr
+
+            OUR RESULTS                                                    x 523146  72.139±0.405  85.857±0.555  121.75  200.85s/6.88hr
+                                                                           L 524026  73.169±0.622  86.585±0.905  126.50  201.06s/7.20hr
+                                                                          W 531146   70.790±0.537  86.829±0.745  119.00  196.41s/6.69hr
+
+GT (Ours) 0.226±0.014 73.169±0.622 84.808±0.068                            x 522742  83.949±0.303  83.864±0.489  236.50  299.54s/19.71hr
+                                                                           L 522982  84.808±0.068  86.559±0.116  145.25  309.95s/12.67hr
+                                                                          W 530742   75.489±0.216  97.028±0.104  109.25  310.11s/9.73hr
+
+Table 2: Comparison of our best performing scores (from       Table 3: Analysis of GraphTransformer (GT) using different
+Table 1) on each dataset against the GNN baselines (GCN       PE schemes. Notations x: No PE; L: LapPE (ours); W: WL-
+(Kipf and Welling 2017), GAT (Velickovic´ et al. 2018), Gat-  PE (Zhang et al. 2020). Bold: the best performing model for
+edGCN(Bresson and Laurent 2017)) of 500k model param-         each dataset.
+eters. Note: Only GatedGCN and GT models use the avail-
+able edge attributes in ZINC.
+
+a combination of node PE schemes to inform the model on                           5 Conclusion
+node structural, positional, and distance information from
+original graph­ i) Intimacy based relative PE, ii) Hop based  This work presented a simple yet effective approach to gen-
+relative distance encoding, and iii) Weisfeiler Lehman based  eralize transformer networks on arbitrary graphs and intro-
+absolute PE (WL-PE). The intimacy based PE and the hop        duced the corresponding architecture. Our experiments con-
+based PE are variant to the sampled subgraphs, i.e., these    sistently showed that the presence of ­ i) Laplacian eigen-
+PEs for a node in a subgraph gi depends on the node ui w.r.t  vectors as node positional encodings and ­ ii) batch normal-
+which it is sampled, and cannot be directly used in other     ization, in place of layer normalization, around the trans-
+cases unless we use similar sampling strategy. The WL-PE      former feed forward layers enhanced the transformer univer-
+which are absolute structural roles of nodes in the original  sally on all experiments. Given the simple and generic na-
+graph computed using WL algorithm (Zhang et al. 2020;         ture of our architecture and competitive performance against
+Niepert, Ahmed, and Kutzkov 2016), are not variant to the     standard GNNs, we believe the proposed model can be used
+subgraphs and can be easily used as a generic PE mecha-       as baseline for further improvement across graph applica-
+nism. On that account, we swap Laplacian PE in our experi-    tions employing node attention. In future works, we are in-
+ments for an ablation analysis and use WL-PE from Graph-      terested in building upon the graph transformer along as-
+BERT, see Table 3. As Laplacian PE capture better struc-      pects such as efficient training on single large graphs, ap-
+tural and positional information about the nodes, which es-   plicability on heterogeneous domains, etc., and perform ef-
+sentially is the objective behind using the three Graph-BERT  ficient graph representation learning keeping in account the
+PEs, they outperform the WL-PE. Besides, WL-PEs tend to       recent innovations in graph inductive biases.
+overfit SBM datasets and lead to poor generalization.
+                                                                                Acknowledgments
+
+                                                              XB is supported by NRF Fellowship NRFF2017-10.
+                       References                               Li, P.; Wang, Y.; Wang, H.; and Leskovec, J. 2020. Dis-
+                                                                tance Encoding­Design Provably More Powerful GNNs
+Abbe, E. 2017. Community detection and stochastic block         for Structural Representation Learning. arXiv preprint
+models: recent developments. The Journal of Machine             arXiv:2009.00142 .
+Learning Research 18(1): 6446­6531.
+                                                                Li, Y.; Liang, X.; Hu, Z.; Chen, Y.; and Xing, E. P. 2019.
+Ba, J. L.; Kiros, J. R.; and Hinton, G. E. 2016. Layer nor-     Graph Transformer. URL https://openreview.net/forum?id=
+malization. NeurIPS workshop on Deep Learning .                 HJei-2RcK7.
+
+Bahdanau, D.; Cho, K.; and Bengio, Y. 2014. Neural ma-          Li, Y.; Tarlow, D.; Brockschmidt, M.; and Zemel, R. 2015.
+chine translation by jointly learning to align and translate.   Gated graph sequence neural networks. arXiv preprint
+arXiv preprint arXiv:1409.0473 .                                arXiv:1511.05493 .
+
+Belkin, M.; and Niyogi, P. 2003. Laplacian eigenmaps for        Monti, F.; Boscaini, D.; Masci, J.; Rodola, E.; Svoboda, J.;
+dimensionality reduction and data representation. Neural        and Bronstein, M. M. 2017. Geometric Deep Learning on
+computation 15(6): 1373­1396.                                   Graphs and Manifolds Using Mixture Model CNNs. 2017
+                                                                IEEE Conference on Computer Vision and Pattern Recogni-
+Bresson, X.; and Laurent, T. 2017. Residual gated graph         tion (CVPR) doi:10.1109/cvpr.2017.576.
+convnets. arXiv preprint arXiv:1711.07553 .
+                                                                Monti, F.; Frasca, F.; Eynard, D.; Mannion, D.; and Bron-
+Brown, T. B.; Mann, B.; Ryder, N.; Subbiah, M.; Kaplan, J.;     stein, M. M. 2019. Fake news detection on social
+Dhariwal, P.; Neelakantan, A.; Shyam, P.; Sastry, G.; Askell,   media using geometric deep learning. arXiv preprint
+A.; et al. 2020. Language models are few-shot learners.         arXiv:1902.06673 .
+arXiv preprint arXiv:2005.14165 .
+                                                                Murphy, R.; Srinivasan, B.; Rao, V.; and Ribeiro, B. 2019.
+Chami, I.; Wolf, A.; Juan, D.-C.; Sala, F.; Ravi, S.; and Re´,  Relational Pooling for Graph Representations. In Interna-
+C. 2020. Low-Dimensional Hyperbolic Knowledge Graph             tional Conference on Machine Learning, 4663­4673.
+Embeddings. arXiv preprint arXiv:2005.00545 .
+                                                                Nguyen, D. Q.; Nguyen, T. D.; and Phung, D. 2019. Univer-
+Cranmer, M. D.; Xu, R.; Battaglia, P.; and Ho, S. 2019.         sal Self-Attention Network for Graph Classification. arXiv
+Learning Symbolic Physics with Graph Networks. arXiv            preprint arXiv:1909.11855 .
+preprint arXiv:1909.05862 .
+                                                                Niepert, M.; Ahmed, M.; and Kutzkov, K. 2016. Learning
+Defferrard, M.; Bresson, X.; and Vandergheynst, P. 2016.        convolutional neural networks for graphs. In International
+Convolutional Neural Networks on Graphs with Fast Local-        conference on machine learning, 2014­2023.
+ized Spectral Filtering. In Advances in Neural Information
+Processing Systems 29, 3844­3852.                               Paszke, A.; Gross, S.; Massa, F.; Lerer, A.; Bradbury, J.;
+                                                                Chanan, G.; Killeen, T.; Lin, Z.; Gimelshein, N.; Antiga, L.;
+Devlin, J.; Chang, M.-W.; Lee, K.; and Toutanova, K. 2018.      Desmaison, A.; Ko¨pf, A.; Yang, E.; DeVito, Z.; Raison, M.;
+Bert: Pre-training of deep bidirectional transformers for lan-  Tejani, A.; Chilamkurthy, S.; Steiner, B.; Fang, L.; Bai, J.;
+guage understanding. arXiv preprint arXiv:1810.04805 .          and Chintala, S. 2019. PyTorch: An Imperative Style, High-
+                                                                Performance Deep Learning Library.
+Dwivedi, V. P.; Joshi, C. K.; Laurent, T.; Bengio, Y.; and
+Bresson, X. 2020. Benchmarking graph neural networks.           Radford, A.; Narasimhan, K.; Salimans, T.; and Sutskever,
+arXiv preprint arXiv:2003.00982 .                               I. 2018. Improving language understanding by generative
+                                                                pre-training.
+Gilmer, J.; Schoenholz, S. S.; Riley, P. F.; Vinyals, O.; and
+Dahl, G. E. 2017. Neural message passing for quantum            Sanchez-Gonzalez, A.; Godwin, J.; Pfaff, T.; Ying, R.;
+chemistry. In Proceedings of the 34th International Confer-     Leskovec, J.; and Battaglia, P. W. 2020. Learning to sim-
+ence on Machine Learning-Volume 70, 1263­1272. JMLR.            ulate complex physics with graph networks. arXiv preprint
+org.                                                            arXiv:2002.09405 .
+
+Hu, Z.; Dong, Y.; Wang, K.; and Sun, Y. 2020. Heteroge-         Schlichtkrull, M.; Kipf, T. N.; Bloem, P.; Van Den Berg, R.;
+neous graph transformer. In Proceedings of The Web Con-         Titov, I.; and Welling, M. 2018. Modeling relational data
+ference 2020, 2704­2710.                                        with graph convolutional networks. In European Semantic
+                                                                Web Conference, 593­607. Springer.
+Ioffe, S.; and Szegedy, C. 2015. Batch normalization: Accel-
+erating deep network training by reducing internal covariate    Srinivasan, B.; and Ribeiro, B. 2020. On the Equivalence
+shift. arXiv preprint arXiv:1502.03167 .                        between Node Embeddings and Structural Graph Represen-
+                                                                tations. International Conference on Learning Representa-
+Irwin, J. J.; Sterling, T.; Mysinger, M. M.; Bolstad, E. S.;    tions .
+and Coleman, R. G. 2012. ZINC: a free tool to discover
+chemistry for biology. Journal of chemical information and      Vaswani, A.; Shazeer, N.; Parmar, N.; Uszkoreit, J.; Jones,
+modeling 52(7): 1757­1768.                                      L.; Gomez, A. N.; Kaiser, L.; and Polosukhin, I. 2017. At-
+                                                                tention is all you need. In Advances in neural information
+Joshi, C. 2020. Transformers are Graph Neural Networks.         processing systems, 5998­6008.
+The Gradient .
+
+Kipf, T. N.; and Welling, M. 2017. Semi-Supervised Clas-
+sification with Graph Convolutional Networks. In Interna-
+tional Conference on Learning Representations (ICLR).
+Velickovic´, P.; Cucurull, G.; Casanova, A.; Romero, A.; Lio`,                       A Appendix
+P.; and Bengio, Y. 2018. Graph Attention Networks. Inter-
+national Conference on Learning Representations .               A.1 Task based MLP layer equations
+
+Wang, M.; Yu, L.; Zheng, D.; Gan, Q.; Gai, Y.; Ye, Z.; Li,      Graph prediction layer For graph prediction task, the fi-
+M.; Zhou, J.; Huang, Q.; Ma, C.; Huang, Z.; Guo, Q.; Zhang,     nal layer node features of a graph is averaged to get a d-
+H.; Lin, H.; Zhao, J.; Li, J.; Smola, A. J.; and Zhang, Z.      dimensional graph-level feature vector yG.
+2019. Deep Graph Library: Towards Efficient and Scalable
+Deep Learning on Graphs. ICLR Workshop on Representa-                          1  V
+tion Learning on Graphs and Manifolds .                                 yG = V
+                                                                                       hiL,       (19)
+Xu, K.; Hu, W.; Leskovec, J.; and Jegelka, S. 2019. How
+Powerful are Graph Neural Networks? In International Con-                         i=0
+ference on Learning Representations.
+                                                                The graph feature vector is then passed to a MLP to obtain
+Xu, K.; Li, C.; Tian, Y.; Sonobe, T.; Kawarabayashi, K.-
+i.; and Jegelka, S. 2018. Representation learning on            the un-normalized prediction score for each class, ypred 
+graphs with jumping knowledge networks. arXiv preprint          RC for each class:
+arXiv:1806.03536 .
+                                                                        ypred = P ReLU (Q yG) ,   (20)
+Xu, P.; Joshi, C. K.; and Bresson, X. 2019. Multi-graph
+transformer for free-hand sketch recognition. arXiv preprint    where P  Rd×C , Q  Rd×d, C is the number of task la-
+arXiv:1912.11258 .                                              bels (classes) to be predicted. Since we perform single-target
+                                                                graph regression in ZINC, C = 1, and the L1-loss between
+You, J.; Ying, R.; and Leskovec, J. 2019. Position-aware        the predicted and groundtruth values is minimized during
+graph neural networks. International Conference on Ma-          training.
+chine Learning .
+                                                                Node prediction layer For node prediction task, each
+Yun, S.; Jeong, M.; Kim, R.; Kang, J.; and Kim, H. J. 2019.
+Graph transformer networks. In Advances in Neural Infor-        node's feature vector is passed to a MLP for computing
+mation Processing Systems, 11983­11993.                         the un-normalized prediction scores yi,pred  RC for each
+
+Zhang, J.; Zhang, H.; Sun, L.; and Xia, C. 2020. Graph-Bert:    class:  yi,pred = P ReLU Q hLi ,
+Only Attention is Needed for Learning Graph Representa-
+tions. arXiv preprint arXiv:2001.05140 .                                                          (21)
+
+Zhou, D.; Zheng, L.; Han, J.; and He, J. 2020. A Data-          where P  Rd×C , Q  Rd×d. During training, the cross-
+Driven Graph Generative Model for Temporal Interaction          entropy loss weighted inversely by the class size is used.
+Networks. In Proceedings of the 26th ACM SIGKDD Inter-
+national Conference on Knowledge Discovery & Data Min-             As a note, these task based layers can be modified as
+ing, 401­411.                                                   per the requirements of the dataset, and or the prediction to
+                                                                be done. For example, the Graph Transformer edge outputs
+                                                                (Figure 1 (Right)) can be used for edge prediction tasks and
+                                                                the task based MLP layers can be defined in similar fashion
+                                                                as we do for node prediction. Besides, different styles of us-
+                                                                ing final and/or intermediate Graph Transformer layers can
+                                                                be used as inputs to the task based MLP layers, such as JK
+                                                                Readout (Jumping Knowledge) (Xu et al. 2018), etc. used
+                                                                often in GNNs.
+
+                                                                A.2 Hardware Information
+
+                                                                All experiments are run on Intel Xeon CPU E5-2690 v4
+                                                                server with 4 Nvidia 1080Ti GPUs. At a given time, 4 exper-
+                                                                iments were run on the server with each single GPU running
+                                                                1 experiment. The maximum training time for an experiment
+                                                                is limited to 24 hours.
+

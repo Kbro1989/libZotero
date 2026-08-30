@@ -1,0 +1,1158 @@
+                                        TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+                                        Abdulhady Abas 1 Fatemeh Daneshfar 2 Seyedali Mirjalili 3 4 Mourad Oussalah 5
+
+arXiv:2605.00224v1 [cs.AI] 30 Apr 2026                          Abstract                                      1. Introduction
+
+                                              Aligning large language models (LLMs) with hu-                  Preference-based alignment has become a pragmatic route
+                                              man preferences is commonly done via reinforce-                 for steering LLMs toward human-desired behaviors. The
+                                              ment learning from human feedback (RLHF) with                   conventional pipeline, RLHF with a learned reward model
+                                              Proximal Policy Optimization (PPO) or, more sim-                and PPO, delivers strong results but is complex and fragile:
+                                              ply, via Direct Preference Optimization (DPO).                  it requires online rollouts, a separate value head, reward
+                                              While DPO is stable and RL-free, it treats prefer-              shaping, and careful KL control (Schulman et al., 2017).
+                                              ences as flat winner vs. loser signals and is sen-              Prior empirical work documents strong PPO-based RLHF re-
+                                              sitive to noisy or brittle preferences arising from             sults on summarization and dialogue (Stiennon et al., 2020)
+                                              fragile chains of thought. We propose TUR-DPO,                  and large-scale instruction-following improvements (Bai
+                                              a topology- and uncertainty-aware variant of DPO                et al., 2022). Figure 1 (a) sketches this baseline.
+                                              that rewards how answers are derived, not only
+                                              what they say, by eliciting lightweight reasoning               DPO simplifies this stack by optimizing a single, RL-free
+                                              topologies and combining semantic faithfulness,                 objective that increases the log-odds of preferred over dispre-
+                                              utility, and topology quality into a calibrated un-             ferred responses relative to a reference policy, matching or
+                                              certainty signal. A small learnable reward is fac-              surpassing PPO-based RLHF on several benchmarks while
+                                              torized over these signals and incorporated into an             avoiding explicit reward modeling and on-policy sampling
+                                              uncertainty-weighted DPO objective that remains                 (Rafailov et al., 2023). This is summarized in Figure 1 (b).
+                                              RL-free and relies only on a fixed or moving refer-             Yet, in its standard form, DPO treats each comparison as
+                                              ence policy. Empirically, across open 7­8B mod-                 a flat label over whole sequences and provides no mecha-
+                                              els and benchmarks spanning mathematical rea-                   nism to reward how an answer is derived, the structure of
+                                              soning, factual question answering, summariza-                  its reasoning, or to modulate learning pressure when prefer-
+                                              tion, and helpful/harmless dialogue, TUR-DPO                    ences are noisy or brittle. These limitations matter most on
+                                              improves judge win-rates, faithfulness, and cali-               reasoning- and factuality-sensitive tasks.
+                                              bration relative to DPO while preserving training
+                                              simplicity and avoiding online rollouts. We fur-                Recent work suggests a way forward by inspecting uncer-
+                                              ther observe consistent gains in multimodal and                 tainty and structure in explanations; however, these ideas
+                                              long-context settings, and show that TUR-DPO                    have not been integrated directly into preference-based op-
+                                              matches or exceeds PPO on reasoning-centric                     timization objectives. Reasoning can be elicited using a
+                                              tasks while maintaining operational simplicity.                 lightweight topology graph of sub-claims and support rela-
+                                                                                                              tions so that uncertainty is estimated not only from output
+                                           Accepted as a Regular Paper at the International Conference on     semantics but also from the stability and redundancy of the
+                                        Machine Learning (ICML 2026). 1Artificial Intelligence and In-        reasoning graph (Da et al., 2025). Black-box uncertainty
+                                        novation Centre, University of Kurdistan, Erbil, Iraq 2Department     estimators based on semantic entropy have been sharpened
+                                        of Computer Engineering, University of Kurdistan, Iran 3Centre        by correcting for finite-sample biases, improving coverage
+                                        for Artificial Intelligence Research and Optimisation, Torrens        while preserving interpretability (McCabe et al., 2025).
+                                        University Australia, Brisbane, Australia 4Research and Innova-
+                                        tion Center, Obuda University, Budapest 1034, Hungary 5Center         This paper introduces TUR-DPO, a topology- and
+                                        for Machine Vision and Signal Analysis (CMVS), University of          uncertainty-aware extension of DPO. Specifically, for each
+                                        Oulu, Finland. Correspondence to: Abdulhady Abas <abdul-              candidate response, TUR-DPO elicits a reasoning topology
+                                        hady.abas@ukh.edu.krd>.                                               and computes semantic quality, topology quality (coherence,
+                                                                                                              acyclicity, minimal valid paths), and a calibrated uncertainty
+                                        Preprint. May 4, 2026.                                                score. These signals are aggregated into a shaped reward
+                                                                                                              that augments the DPO logit, while a per-pair weight down-
+                                                                                                              weights uncertain comparisons (Figure 1 (c)). Theoreti-
+                                                                                                              cally, we establish connections between instance-weighted
+
+                                                                                                           1
+                 TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+Self-supervised          Supervised    (c) TUR-DPO                                         58.7
+  Pre-training           Fine-tuning                                                           62.8
+                                                                                                                                                            61.2
+   Unlabeled                                                                                                                                                     64.8
+                                                                                                                                                                             65.5
+                                                                                                                                                                                 67.9
+                                                                                           LLM Judge (Baseline,TUR-DPO)
+                                                     Preference                            Human Eval (Baseline,TUR-DPO)
+                                       Training
+                         Labeled      (a) RLHF
+
+Preference       Reward    Policy              Uncertainty          Semantic     Topology  33.4
+                  Model    Model                                                               36
+   MLE                                                                                                     43.9
+                                                                                                                46.7
+                                                                                                                           41.8
+                                                                                                                                45.1
+
+                                               Estimation Faithfulness           Quality   EM (%) EM (%) Acc. (%)                     EM/F1  Win-rate   Win-rate
+                                                                                                                                    Open QA
+                                      (b) DPO                                              GSM8K MATH mini BBH                                Summ     HH single-
+Preference                                                                                                                  subset             TLDR        turn
+
+   MLE           Policy                         MLE              Shaped  Policy            (d) Performance improvement of TUR-DPO
+                 Model                                           Reward  Model                               over baseline
+
+Figure 1. Overview of RLHF, DPO, and TUR-DPO. RLHF trains a reward model from preference data and optimizes the policy via
+PPO with KL regularization. DPO replaces this pipeline with a direct, RL-free preference objective relative to a reference policy ref.
+TUR-DPO augments DPO by incorporating lightweight reasoning topology, semantic, and uncertainty signals into a shaped reward and
+uncertainty-weighted DPO loss; the reference policy ref may be updated via an exponential moving average (EMA). Right: Performance
+improvement of TUR-DPO across representative benchmarks, measured against baseline using LLM judges and under human evaluation.
+
+Bradley­Terry (Huang et al., 2006) estimation and consis-             tended to multimodal and long-context tasks.
+tent preference recovery under standard assumptions and
+that TUR-DPO optimizes a KL-regularized policy under a              · We further compare TUR-DPO against recent RL-free
+shaped reward, clarifying its relation to vanilla DPO.                preference optimization methods (ORPO (Hong et al.,
+                                                                      2024), SimPO (Meng et al., 2024), KTO (Ethayarajh et al.,
+In this work, we evaluate TUR-DPO across a range of rea-              2024), and IPO (Azar et al., 2023)), and show consistent
+soning, factual QA, summarization, and dialogue bench-                improvements across head-to-head evaluations.
+marks, including multimodal and long-context settings. We
+focus on assessing whether incorporating structure and un-          Unlike prior reward-model-based or PPO-style approaches,
+certainty into preference optimization improves win-rates,          TUR-DPO operates entirely within a preference optimiza-
+faithfulness, and calibration, while preserving the opera-          tion framework without online rollouts or policy-gradient
+tional simplicity of DPO and avoiding online rollouts. We           updates. Rather than serving as a universal replacement for
+additionally include evaluations in multimodal and long-            preference-based alignment methods, TUR-DPO is intended
+context settings. We empirically compare TUR-DPO with               as a complementary approach that is most effective when
+PPO-based RLHF on reasoning-centric and stylistic dia-              preferences reflect multi-step reasoning or factual ground-
+logue tasks, analyzing settings in which each approach is           ing, and when supervision is noisy or brittle. A more de-
+most effective. The result preserves DPO simplicity while           tailed discussion of related work is provided in Appendix A.
+explicitly rewarding structurally coherent and semantically
+sound solutions (1). TUR-DPO sits alongside recent RL-              2. Methodology and Theoretical Foundations
+free objectives including ORPO (Hong et al., 2024), KTO
+(Ethayarajh et al., 2024), and RRHF (Yuan et al., 2023), but        TUR-DPO is designed to preserve the simplicity and sta-
+differs in how it injects structured reasoning and calibrated       bility of direct preference optimization while injecting two
+uncertainty directly into a DPO-style objective.                    missing signals: explicit reasoning structure and calibrated
+                                                                    uncertainty. The training loop mirrors DPO. We maintain a
+The most important contributions of this paper are:                 supervised policy  and a reference ref that is either fixed
+                                                                    or updated slowly by EMA. The data consist of pairwise
+· We introduce TUR-DPO, a structure- and uncertainty-               preferences D = {(xi, yi+, yi-)}iN=1, where x is a prompt
+  aware framework for preference-based alignment that               and y+, y- are responses labeled preferred and dispreferred.
+  incorporates lightweight reasoning topologies and                 In contrast to PPO-based pipelines, there are no online roll-
+  uncertainty-weighted preference losses to reduce sensitiv-        outs, no value head, and no reward model trained to conver-
+  ity to noisy or brittle comparisons.                              gence. Crucially, the shaped reward in TUR-DPO does not
+                                                                    define a separate optimization objective, but only modifies
+· We propose an RL-free logit-level augmentation of DPO             the preference margin within the DPO loss, preserving the
+  that integrates a learned, factorized reward over struc-          closed-form, rollout-free optimization structure.
+  tural and semantic signals, and we provide theoretical
+  connections to instance-weighted Bradley-Terry models             TUR-DPO introduces a lightweight reasoning topology per
+  and KL-regularized policy optimization.                           candidate and derives semantic, structural, and uncertainty
+                                                                    signals from this topology. These signals shape the prefer-
+· We conduct an empirical study of reasoning, QA, sum-              ence margin and modulate the per-pair learning rate through
+  marization, and dialogue that is validated with both au-          instance weighting. The design aims to be practical in
+  tomated and human evaluations and, furthermore, is ex-
+
+                                                                 2
+TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+compute-constrained environments, robust to noisy or brittle        numerically stable during training.
+pairs, and easy to ablate or disable component-wise. The
+method is agnostic to the underlying transformer architec-          stopo(G) = 1qpath - 2ccycle - 3ddangling - 4qcontradict.
+ture. It operates on tokenized responses and only requires                                                                             (1)
+log probabilities from the policy and the reference. All ad-
+ditional costs are confined to eliciting small graphs, running      The weights j  0 are selected on a validation split to
+a local verifier, and computing simple statistics such as vari-     reach a target structural coherence distribution, rather than
+ances and divergences. This makes the approach compatible           to optimize a task-specific objective, and to avoid collapsing
+with existing DPO code paths and datasets without changing          graphs to trivial structures. We emphasize small graphs
+the core infrastructure. The guiding principle is minimal-          to keep overhead low. In practice, graphs with three to six
+ity: introduce just enough structure and uncertainty to steer       nodes and a handful of edges suffice to detect common struc-
+the optimization, but keep parameterization small so that           tural failures such as unsupported leaps or self reference.
+training remains stable and reproducible. We empirically            The score is normalized per dataset so that its range aligns
+evaluate computational overhead, stability, and ablations for       with the semantic score scale used later in the shaped reward.
+each component in Section 3 and Appendix.
+                                                                    Semantic score. The semantic score balances task success
+Problem notation. For each prompt response pair (x, y),             and faithfulness against hallucination penalties. It is com-
+we elicit a small directed graph G = (V, E) that captures           puted from node level verification and task specific metrics.
+the internal reasoning. Nodes V are atomic subclaims or             We use a linear combination for transparency and stability:
+steps, and edges E encode support or dependency relations.
+From (x, y, G) we compute three scalar signals. The se-              ssem(x, y) = 1qfact(x, y) + 2qtask(x, y) - 3qhall(x, y).
+mantic score ssem(x, y) summarizes task utility and faith-                                                                             (2)
+fulness. The topology score stopo(G) summarizes structural
+well formedness. The uncertainty score u(G) aggregates              Here qfact aggregates correctness of atomic claims, qtask
+epistemic dispersion across re elicited graphs and aleatoric        is a standard metric such as exact match for mathemat-
+ambiguity in node correctness. These quantities feed a              ics or Recall-Oriented Understudy for Gisting Evaluation
+compact shaped reward r(x, y, G) and a per pair weight              (ROUGE) for summarization, and qhall penalizes unsup-
+w  (0, 1]. The reward alters the preference margin used             ported or contradicted entities. Coefficients j  0 are
+inside a DPO style logistic loss, and the weight scales the         tuned on a held out set to match desired calibration and
+contribution of each pair to the objective. The notation fol-       faithfulness targets. A linear form avoids overfitting and re-
+lows DPO conventions for policy and reference margins.              duces the risk of gradient explosions that can occur with ag-
+We write f  f (x, y+) - f (x, y-) for brevity and use               gressive nonlinearities. If a domain lacks reliable automatic
+(z) = 1/(1 + exp(-z)) for the logistic function. The                metrics, qtask can be replaced by scores from a calibrated
+method is intentionally modular. If a dataset lacks reliable        LLM judge or dropped entirely. The score is standardized
+graph extraction, the topology branch can be disabled by            per domain to a common numerical range so that it mixes
+setting its coefficient to zero. If uncertainty signals are         predictably with the topology score in the shaped reward.
+unavailable, the weight can be set to a constant. This modu-
+larity allows a path from DPO to the TUR-DPO system.                Uncertainty and pair weighting. Uncertainty integrates
+                                                                    epistemic dispersion from re elicited graphs and aleatoric
+2.1. Topology, semantic, and uncertainty signals                    ambiguity in node verification. The top level combination
+                                                                    is:
+Topology elicitation and score. Given a response y, we
+extract a graph by decomposing the text into atomic state-               u(G) = epiuepi(G) + aleuale(G), epi, ale  0. (3)
+ments, linking supports, and sanitizing cycles and duplicates.
+The score aggregates simple indicators that correlate with          Epistemic uncertainty samples K perturbed extractions and
+coherent multi-step reasoning. Minimal valid path qpath, cov-       measures dispersion in structure and scores.
+erage measures how many nodes and edges participate in at
+least one acyclic path from premises to the final claim (Fig-        uepi(G) = Var {stopo(G(k))}Kk=1 + JSD {P(k)}Kk=1 ,
+ure 2). Cycles ccycle, capture circular justification. Dangling                                                                        (4)
+nodes ddangling, capture unsupported claims. A contradiction
+signal qcontradict, summarizes local logical conflicts along        where P(k) is a normalized path or edge distribution for
+edges. We combine these into a linear score that remains            sample k and JSD is Jensen-Shannon divergence between
+
+                                                                    the graph distributions. Aleatoric uncertainty averages a
+
+                                                                    coverage corrected entropy across nodes.
+
+                                                                                  1               - p~v log p~v - (1 - p~v) log(1 - p~v) ,
+                                                                    uale(G) = |V |                                                         (5)
+
+                                                                                              vV
+
+                                                                    p~v  =  pv +  .
+                                                                            1 + 2
+
+                                                                 3
+                  TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+Figure 2. Overview of the TUR-DPO framework. TUR-DPO extracts sub-claims from each response, builds a reasoning topology, and
+verifies claim-level factuality. Semantic, topology, and uncertainty signals (derived from perturbed reasoning graphs and node-level
+verification probabilities) are combined into a shaped reward r and an uncertainty-based weight that modulate the DPO loss for robust
+preference optimization.
+
+where pv is a correctness probability for each node v and            penalizes uncertainty directly to discourage reliance on
+p~v is the smoothed version using a small prior  . We map           fragile explanations. This reward enters the DPO logit as a
+average pair uncertainty for each preference pair G+, G-            margin term, not as a standalone objective, which preserves
+                                                                    DPO stability and avoids introducing a separate critic.
+to a weight that attenuates noisy updates while keeping a
+
+floor to avoid discarding data.
+
+w = clip   w ,    wmin,  1  ,  u¯ =  u(G+) + u(G-)      .           Loss and inference variants. TUR-DPO modifies the
+          1 + u¯                                                    DPO margin by adding a shaped reward difference and
+                                         2                          scales the loss with the per pair weight.
+
+                                                        (6)
+
+This weight acts like a per-example learning rate multiplier,       LTUR-DPO = -w · log   [ log  - log ref]+r ,
+                                                                                                                                       (9)
+reducing the effect of brittle pairs while preserving learning
+
+from moderately uncertain examples. The role of uncer-              where  log  = log (y+ | x) - log (y- | x) and
+                                                                    r = r(x, y+, G+) - r(x, y-, G-). Temperature 
+tainty here is not to estimate calibrated probabilities per se,     controls sharpness and  controls reward strength. When
+
+but to attenuate updates from unstable comparisons while            multiple candidates are available, a listwise objective uses
+
+preserving signal from moderately uncertain pairs.                  Plackett Luce utilities,
+
+2.2. Objective formulation and training
+
+Shaped reward. We combine semantic, structural, and                 Llist = -w log         exp(zi)         ,
+uncertainty signals into a compact reward that shapes the
+preference margin without introducing a parametric model.                              iP  k    exp(zj  )
+                                                                                           j=1
+
+r(x, y, G) =a fsem ssem(x, y)                                       zi =  log (yi | x) - log ref(yi | x) + r(x, yi, Gi).
+                 + (1 - a) ftopo stopo(G) -  u(G). (7)                                                                                (10)
+
+We use linear calibrators to keep optimization stable.              The listwise form makes fuller use of data when more than
+                                                                    two candidates are produced, and it reduces variance by
+fsem(z) = semz + bsem,      ftopo(z) = topoz + btopo. (8)           aggregating comparisons within a prompt. We find that
+                                                                    the pair weight computed from the top two items provides
+                                                                    adequate robustness and can be reused for the list.
+
+The parameter set  is intentionally small, which simplifies         2.3. Theoretical Analysis
+early stopping and prevents reward hacking through overfit-
+ting of the calibrators. The mixing parameter a controls the        Theoretical foundations. We view TUR-DPO through
+balance between semantic quality and structural quality, and        two lenses. First, as a weighted Bradley-Terry model on
+
+                                                                 4
+TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+pairwise preferences with a shaped margin. Define:                 Additional theoretical analysis of instance weighting, and
+                                                                   detailed descriptions of models, datasets, pair construction,
+          m =  [ log  -  log ref] +  r. (11)                       and scoring procedures, are provided in Appendix B and C.
+
+Under a Bradley-Terry likelihood, the negative log likeli-         3. Experiments
+hood with instance weight w equals the loss in Equation
+(9). For fixed features and fixed , minimizing this loss           3.1. Overall Performance
+is weighted logistic regression in the margin. If weights
+are independent of the label given the pair, the estimator is      In this section, we connect metrics to underlying mecha-
+Fisher consistent for the conditional preference probability.      nisms. The premise is that structure and uncertainty can
+                                                                   shift learning away from brittle but fluent responses and
+Sensitivity to weight-label dependence. In practice,               toward coherent solutions. We therefore analyze structural
+weights may correlate with label difficulty when hard items        features, calibration, human agreement, error types, sam-
+produce fragile graphs and are more likely to be mis-labeled       ple efficiency, statistical significance, decoding robustness,
+by a judge. Let wi = g(u¯i) depend on pair uncertainty             and PPO stability. For each perspective, we include con-
+and suppose E[wi | yi] = E[wi]. The bias in the weighted           crete tables and narrative interpretations intended to inform
+estimator is bounded by supi |wi - E[wi]| · P(label error).        practitioners considering the adoption of TUR-DPO.
+Our clipping w  [wmin, 1] limits the first factor, while the
+judge calibration and side-flip protocol (Section B.4) aim         Key Findings. Table 1 summarizes the main results across
+to reduce and diagnose the second. Empirically, we ob-             tasks using both LLM-judge and human evaluations. TUR-
+serve that hyperparameter sweeps over w and  yield wide            DPO consistently improves over DPO across all tasks, with
+plateaus in win-rate (Appendix), suggesting that moderate          the largest gains on GSM8K, MATH, BBH, and QA--tasks
+misspecification of the weight function does not destabilize       that benefit most from structural and uncertainty-aware sig-
+training. Covariate balancing (e.g., stratifying updates by        nals. We also include the Bradley-Terry family baseline
+difficulty quantiles) or importance-weight correction can          IPO (Azar et al., 2023) under matched compute to represent
+further reduce bias, but we find the simple clipped schedule       classification-style preference training; TUR-DPO outper-
+adequate for typical noise levels encountered in LLM-judge         forms IPO while remaining RL-free. Human evaluation
+and human annotation scenarios.                                    (200 examples per task with double annotation) confirms
+                                                                   the trends observed with LLM judges.
+Lemma 2.1 (Bias bound under weight label dependence).
+Let weights wi satisfy wmin  wi  1 and suppose a                   PPO-based RLHF remains competitive, particularly on HH,
+fraction  of labels are incorrect (label-flip noise). Then         where reward shaping and careful KL tuning aid stylistic
+the absolute bias in the weighted pairwise logit estimator         alignment and safety. However, PPO requires online roll-
+induced by label-noise satisfies                                   outs, value learning, and explicit KL scheduling, whereas
+                                                                   TUR-DPO attains comparable or higher win-rates using a
+|E[w] - E[]|  (1 - wmin) ,  (12)                                   simpler training stack. TUR-DPO's gains are correlated
+                                                                   with higher topology coherence and lower entity and claim
+up to bounded constants depending on the curvature of              error rates, which is consistent with the hypothesis that
+the logistic link; intuitively, clipping forces the worst-case     coarse structural signals improve reasoning quality. Im-
+multiplicative downweight to be at most 1 - wmin.                  provements on TLDR are smaller and primarily reflect re-
+                                                                   ductions in hallucination. On HH, PPO retains a slight
+Sketch. Write the weighted loss as a mixture of clean and          advantage on judge-based metrics, while TUR-DPO nar-
+corrupted pairs. The corrupted fraction  contributes at most       rows the gap on human evaluation. Overall, TUR-DPO per-
+a factor of supi |wi - E[wi]|  1 - wmin to the difference          forms best on reasoning-centric tasks, while PPO maintains
+in expected gradients between the clean-weighted and un-           a modest edge on stylistic HH. Table 2 further shows that
+weighted objectives. Integrating this gradient perturbation        TUR-DPO's relative improvements over DPO increase with
+gives the stated bound up to a constant determined by the          output length. Analyses on robustness to label noise and
+curvature of the logistic loss (which is bounded). Thus            preference corruption are reported in Appendix Table 17.
+clipping the weights reduces the worst-case bias linearly in
+1 - wmin and the noise rate .
+
+This lemma clarifies why a conservative wmin and judge
+calibration are practical mitigations: they limit the contri-
+bution of mislabeled hard items while preserving learning
+signal from moderately uncertain pairs.
+
+                                                                5
+                               TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+Table 1. Main results: TUR-DPO vs. DPO, PPO across reasoning, QA, summarization, and dialogue (IPO is not evaluated under human
+evaluation due to annotation budget).
+
+              Task                         Metric              LLM judge                 Human eval
+
+              GSM8K                        EM (%)       DPO IPO TUR-DPO         DPO PPO TUR-DPO
+              MATH mini                    EM (%)
+              BBH subset                  Acc. (%)      58.7 58.9         62.8  59.2 62.0        63.1
+              Open QA                      EM/F1
+              Summ TLDR                 Win-rate (%)    33.4 33.8         36.0  34.1 35.5        36.4
+              HH single-turn            Win-rate (%)
+                                                        43.9 44.3         46.7  44.5 46.0        47.2
+
+                                                        41.8 42.5         45.1  45.0 45.4        45.7
+
+                                                        61.2 61.9         64.8  60.5 63.7        64.1
+
+                                                        65.5 66.1         67.9  64.7 67.9        67.2
+
+      Table 2. Relative gains by output length quartile.                a theoretically grounded alternative. Table 4 reports re-
+                                                                        sults on structure-sensitive tasks. TUR-DPO outperforms
+    Task                 Q1 short    Q2     Q3        Q4 long           all baselines, with gains of 3.4 EM points over ORPO, 2.7
+                                                                        over SimPO, 4.1 over KTO, and 3.9 over IPO. These im-
+    GSM8K EM rel gain     +1.2%    +2.4%  +6.1%       +7.8%             provements indicate that the shaped reward and uncertainty
+    Open QA EM rel gain   +1.1%    +2.8%  +5.2%       +6.4%             weighting provide benefits beyond architectural differences
+    BBH Acc rel gain      +0.9%    +2.0%  +4.4%       +5.1%             (reference-free vs. reference-based) and arise from explic-
+                                                                        itly rewarding reasoning topology while down-weighting
+Per task detail and structural signals. Structural statis-              brittle preference pairs. Reference-free methods (ORPO,
+tics align with the observed performance trends. Table 3                SimPO) exhibit reduced calibration (higher expected calibra-
+shows that TUR-DPO reduces cycles and dangling nodes                    tion error) and weaker structural coherence, while KTO and
+while increasing minimal path coverage on both GSM8K                    IPO achieve moderate gains but do not incorporate explicit
+and QA. The median pair weight decreases due to higher un-              structural signals. We further analyze training stability and
+certainty discounts on ambiguous pairs. Exact match (EM)                runtime behavior of PPO-style RLHF in Appendix Table 20,
+gains are largest when path coverage improves without an in-            highlighting practical differences between RL-based and
+crease in graph size, suggesting that structure quality rather          RL-free approaches. Multimodal and long-context evalua-
+than verbosity drives the effect. We also observe a reduction           tions are reported in Appendix F.
+in the variance of path coverage, indicating more consistent
+reasoning patterns. In residual error cases, graphs often omit                  Table 4. Comparison with RL-free baselines
+a necessary bridging claim or reuse an earlier subclaim in-
+correctly at the final step, motivating further improvements                    Method   EM (%)  ECE    Struct. score
+in graph extraction and node-level verification.
+                                                                                SFT        52.3  0.112       52.1
+Table 3. Per-task structural breakdown: GSM8K and QA exact                      DPO        58.7  0.101       60.8
+match and topology statistics. Note: SFT = Supervised Fine-                     ORPO       59.4  0.108       58.3
+Tuning                                                                          SimPO      60.1  0.106       59.7
+                                                                                KTO        58.7  0.104       61.2
+Task  Method  EM         Steps  Cycles  Dangling    Path    Median              IPO        58.9  0.102       60.5
+              (%)                                 coverage  weight              TUR-DPO    62.8  0.087       70.4
+
+                                                     (%)
+
+GSM8K SFT     52.3 3.9 12.1               18.7    58.2         0.71
+
+      DPO     58.7 4.2 10.3               16.9    61.5         0.73     3.2. Component and Contribution Analysis
+
+      TUR-DPO 62.8 4.4 7.6                12.2    69.3         0.69     Topology components and contribution analysis. We
+                                                                        regress normalized task success on topology features pooled
+QA    SFT     38.5 2.6 9.7                15.3    54.1         0.72     across tasks. Table 5 shows that cycle count and contra-
+                                                                        diction score have the largest negative coefficients, while
+      DPO     41.8 2.8 8.4                13.2    58.7         0.74     minimal path coverage has a positive coefficient; raw graph
+                                                                        size is not statistically significant. These results indicate
+      TUR-DPO 45.1 2.9 6.1                10.4    65.2         0.70     that naive verbosity does not explain the observed gains.
+                                                                        To control for confounding, we also include semantic score
+Comparison with RL-free objectives. To isolate the con-                 and reference margin in the regression. Topology features
+tribution of structural and uncertainty signals, we compare             remain significant under this model, although coefficients
+TUR-DPO with several recent preference optimization meth-               shrink, suggesting that structural information contributes
+ods: ORPO (Hong et al., 2024), a reference-free objective               beyond semantics and difficulty. In practice, these find-
+that optimizes odds ratios directly; SimPO (Meng et al.,
+2024), a simplified reference-free method with an implicit
+reward; KTO (Ethayarajh et al., 2024), which incorporates
+prospect-theoretic weighting; and IPO (Azar et al., 2023),
+
+                                                                     6
+                     TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+ings support prioritizing cycle detection and contradiction                  Table 7. Human evaluation summary
+checking over encouraging longer rationales without struc-
+tural validation. Additional ablations examining topology            Metric                 SFT DPO PPO TUR-DPO
+re-elicitation depth and extractor strength are provided in
+Appendix Tables 15 and 18.                                           HH human Win-rate (%)  58.2 64.7 67.9       67.2
+
+  Table 5. Regression of topology features against task success.     TLDR human Win-rate (%) 55.9 60.5 63.7      64.1
+
+                                                                     Inter rater agreement kappa 0.63 0.66 0.69  0.71
+
+                                                                     Kendall tau judge vs human 0.57 0.61 0.66   0.68
+
+      Feature                Coefficient  p-value                    Statistical significance. We perform 10k paired bootstrap
+                                                                     replicates for win-rates and report Cohen's d for task metrics.
+      Minimal path coverage      0.28      0.001                     Table 8 shows small to medium effect sizes with statistically
+      Cycle count               -0.34      0.000                     significant improvements on TLDR, HH, GSM8K, and QA.
+      Dangling nodes            -0.21      0.007                     Applying a Benjamini-Hochberg (Ferreira & Zwinderman,
+      Contradiction score       -0.29      0.000                     2006) correction across tasks to control the false discovery
+      Graph size                 0.05      0.24                      rate leaves these conclusions unchanged.
+
+Error taxonomy and post-processing. We manually cat-                 Table 8. Statistical significance of key comparisons.
+egorize 100 errors per dataset into five types. Table 6 shows
+that TUR-DPO most substantially reduces logical leaps                Comparison             p-value  Cohen's d  Interpretation
+and contradictions, consistent with its structural incentives.                               0.004      0.29
+Arithmetic errors decrease slightly, reflecting improved step        TUR-DPO vs DPO          0.018      0.22      significant
+scaffolding. Hallucinated entity errors decline on QA and            (TLDR Win-rate)         0.011      0.34     small effect
+GSM8K, aligning with penalties on unsupported nodes. For-            TUR-DPO vs DPO          0.006      0.31      significant
+matting errors increase, as presentation is not explicitly           (HH Win-rate)                               small effect
+optimized; however, a lightweight post-processing step that                                                       significant
+enforces output formats mitigates these errors without af-           GSM8K EM score                             small-medium
+fecting upstream training. Bootstrap significance tests and                                                       significant
+effect sizes are summarized in Table 8.                              Open QA EM score                           small-medium
+
+Table 6. Error type breakdown for QA and GSM8K.                      3.4. Calibration and Robustness
+
+Type                         SFT DPO PPO TUR-DPO                     Calibration study. Calibration is important for down-
+                                                                     stream safety, abstention, and tool use. We evaluate ex-
+Arithmetic mistake           26 23 21              20                pected calibration error (ECE) and Brier score using node-
+                                                                     level verifier probabilities and judge confidence signals,
+Logical leap                 31 28 24              19                where available. Table 9 reports averages across tasks
+                                                                     for SFT, DPO, and TUR-DPO. TUR-DPO consistently re-
+Hallucinated entity          18 16 14              13                duces both ECE and Brier score, indicating that uncertainty-
+                                                                     weighted updates avoid overconfident learning from brittle
+Contradiction                12 10 9               7                 pairs. Reliability diagrams (Appendix Figure 4) show re-
+                                                                     duced miscalibration in high-confidence bins.
+Formatting/missing final answer 13 23 32           41
+                                                                     We additionally report ECE with 95% bootstrap confidence
+3.3. Human Evaluation                                                intervals (10k resamples, stratified by task) and decompose
+                                                                     calibration by confidence bin. As shown in Table 10, TUR-
+Human evaluation and judge correlation. We conduct                   DPO improves calibration across all bins, with the largest
+human evaluations on 200 items per domain using two                  gains in the highest-confidence regime. This behavior is
+raters with adjudication. Table 7 reports win-rates against a        consistent with uncertainty weighting suppressing large gra-
+strong LLM baseline, inter-rater agreement, and Kendall's            dient updates on unstable pairs. Under prompt perturbations
+ (Brossart et al., 2018) between judge and human prefer-             that introduce benign distractors, TUR-DPO maintains ECE
+ences. TUR-DPO improves both agreement and correla-                  within 0.01 of the base condition, whereas DPO degrades by
+tion, suggesting that structural and uncertainty-aware train-        0.02, indicating greater robustness to surface-level variation.
+ing aligns more closely with human judgments than DPO
+alone. Analysis of judge­human disagreements indicates               Faithfulness and structural coherence. We assess fac-
+that judges occasionally reward fluent but weakly supported          tual faithfulness using entity and claim verification and mea-
+claims that humans penalize, particularly for rare entities;         sure structural coherence using the topology score from Sec-
+uncertainty-weighted training reduces the influence of such          tion 2. Figure 3 shows that TUR-DPO reduces entity and
+pairs. We release annotation guidelines and sampling scripts
+to facilitate replication.
+
+                                                                  7
+                                                 TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+Table 9. Calibration metrics: average ECE and Brier score.                                                                                                                                   Compute and environmental cost. Training to a 65%
+                                                                                                                                                                                             HH win-rate on eight NVIDIA A100 80GB GPUs (400W
+                                 Metric          SFT            DPO                                                                                  TUR-DPO                                 TDP) requires approximately 42 GPU-hours for TUR-DPO,
+                                                                                                                                                                                             48 GPU-hours for DPO, and 67 GPU-hours for PPO-RLHF
+                                 ECE             0.112          0.101                                                                                   0.087                                (including rollouts). Assuming a power usage effective-
+                                 Brier           0.211          0.198                                                                                   0.189                                ness (PUE) of 1.3 and a grid carbon intensity of 0.4 kg
+                                                                                                                                                                                             CO2e/kWh, this corresponds to roughly 8.736 kg CO2e for
+Table 10. Absolute ECE by confidence bin, averaged across tasks.                                                                                                                             TUR-DPO, 20.0 kg CO2e for DPO, and 28.0 kg CO2e for
+                                                                                                                                                                                             PPO. The approximately 15% overhead relative to DPO
+Bin                              DPO     PPO RLHF               TUR-DPO                                                                                      Reduction vs DPO                stems from graph elicitation and verifier forward passes,
+                                                                                                                                                                                             which are parallelizable and cached across epochs. These
+0.0-0.5                           1.8         1.6                   1.5                                                                                               0.3                    results support the claim that TUR-DPO preserves the opera-
+0.5-0.7                           3.1         2.8                   2.3                                                                                               0.8                    tional simplicity of DPO while improving sample efficiency
+0.7-0.9                           5.6         4.7                   3.7                                                                                               1.9                    and calibration. Additional details on reference strategies
+0.9-1.0                           9.2         7.9                   6.4                                                                                               2.8                    and their efficiency are in Appendix Tables 15 and 22.
+
+claim error rates relative to DPO while increasing topology                                                                                                                                  4. Conclusion
+coherence. The largest structural gains arise from fewer cy-
+cles and dangling nodes, consistent with the shaped reward                                                                                                                                   TUR-DPO addresses a fundamental challenge in preference-
+favoring minimal valid paths. We also observe a positive                                                                                                                                     based alignment: the sensitivity of direct optimization to
+correlation between structural coherence and task success                                                                                                                                    logically brittle or noisy comparisons. By integrating a
+on reasoning benchmarks. Additional component ablations                                                                                                                                      topology score to reward structural reasoning and an un-
+supporting these trends are reported in Appendix Figure 4. )DLWKIXOQHVVDQG6WUXFWXUDO&RKHUHQFH*60. 2SHQ4$                                                                                    certainty weight to calibrate learning pressure, TUR-DPO
+                                                                                                                                                                                             moves beyond "flat" sequence-level signals while remain-
+                                                        )DLWKIXOQHVVDQG6WUXFWXUDO&RKHUHQFH*60. 2SHQ4$                                                                                       ing entirely RL-free. Our empirical findings across six
+                                                                                                                                                                                             distinct domains indicate that TUR-DPO consistently en-
+((UUUURRUU55DWDWHH D)DLWKIXOQHVV(UURU5DWH                                                                                                                                                 hances accuracy, fidelity, and calibration, surpassing exist-
+                                                                                                                           7RSRORJ\6FRUH1RUPDOL]HG                                          ing state-of-the-art RL-free benchmarks, including SimPO
+                                                                                                                          7RSRORJ\6FRUH1RUPDOL]HG /RZHULV%HWWHU                            and ORPO. Moreover, our theoretical examination con-
+                                                                                                                                                                                             firms TUR-DPO as a reliable estimator within the instance-
+                                                                                                                                                                                             weighted Bradley­Terry framework, offering a robust basis
+                                                                                                                                                                                             for structure-aware alignment.
+                                       
+                                                                                                                                                                                             Even with these improvements, TUR-DPO still has some
+                                                                                                                                                                                             problems that could be the subject of future research. Be-
+                                                                                                                                                                                             cause the method depends on graph extraction, missing or
+                                                                                                                                                                                             logically merging parts of the elicited topology can change
+                                                                                                                                                                                             the reward signal. Our uncertainty estimator helps reduce
+                                                                                                                                                                                             label noise, but because it only works with a limited num-
+                                                                                                                                                                                             ber of re-elicitations, it may not catch all edge-case fail-
+                                                                                                                                                                                             ures. Also, the method still needs to be fully stress-tested
+                                                                                                                                                                                             in long conversations and very long situations. In the fu-
+                                                                                                                                                                                             ture, we will work on making topology extraction more
+                                         ''3322  778855' '3322                                                                                       6)67)7        '3'232  78758'53' 232     reliable by using cross-model validation and looking into
+                                                                                                                                                                                             more advanced ways to measure uncertainty, like conformal
+                      6 6) )7 7                                                                                                                                                              prediction. Adding TUR-DPO to multimodal settings like
+                                                                                                                                                                                             video-language models and combining it with mixture-of-
+                                          0HWKRG                (b) Structural coherence metrics                                                                                             experts (MoE) architectures is a good way to make large
+                                                                ''3322                                                                               787585'3'232                            language models that are truly reliable and clear.
+  (a) Faithfulness metrics
+
+                                   66))77
+
+Figure 3. Faithfulness (Lower is Better) and structural coherence
+(Higher is Better). TUR-DPO improves entity/claim error rates
+and normalized topology scores over SFT and DPO.
+
+3.5. Sample efficiency and compute
+
+We measure the number of preference tokens required to
+reach target HH win-rates on identical hardware. Table 11
+shows that TUR-DPO is more token-efficient than DPO and
+approaches PPO at higher targets without incurring rollout
+overhead. We attribute these gains to uncertainty weighting,
+which suppresses noisy updates, and to shaped rewards
+that provide additional gradient signal on hard pairs. We
+also track GPU hours, peak memory usage, and throughput.
+TUR-DPO operates within a modest factor of DPO and
+requires substantially less memory and time than PPO.
+
+Table 11. Preference tokens required to reach HH win-rate targets.
+
+                                 Target  DPO            PPO RLHF                                                                                     TUR-DPO                                 Impact Statement
+
+                                 60%     2.0 B             2.1 B                                                                                        1.7 B                                This paper presents a framework for preference-based align-
+                                 65%     3.6 B             3.3 B                                                                                        3.1 B                                ment aimed at enhancing the reliability of LLMs in tasks
+                                 67%     5.0 B             4.7 B                                                                                        4.8 B
+
+                                                                                                                                                                                          8
+TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+that require intensive reasoning. Our method adds structural       Chen, D. and Yih, W.-t. Open-domain question answering.
+topology and calibrated uncertainty to the training goal.             In Proceedings of the 58th annual meeting of the associa-
+This leads to models that are not only more accurate, but             tion for computational linguistics: tutorial abstracts, pp.
+also clearer about how they come to their conclusions.                34­37, 2020.
+
+The primary positive impact that could come from this work         Cobbe, K., Kosaraju, V., Bavarian, M., Chen, M., Jun, H.,
+is that language models will be more reliable and trust-              Kaiser, L., Plappert, M., Tworek, J., Hilton, J., Nakano,
+worthy when it comes to tasks like answering questions,               R., et al. Training verifiers to solve math word problems.
+summarizing, and having conversations. Focusing on how                arXiv preprint arXiv:2110.14168, 2021.
+answers are reached instead of just their final form might
+also lead to more understandable and stable model behavior.        Da, L., Liu, X., Dai, J., Cheng, L., Wang, Y., and
+Also, the proposed training method's simplicity could make           Wei, H. Understanding the uncertainty of llm expla-
+it easier to reproduce and build on alignment research.               nations: A perspective based on reasoning topology.
+                                                                      https://arxiv.org/abs/2502.17026, 2025.
+But there are still some ethical issues to think about. Be-
+cause TUR-DPO uses elicited topologies, any biases that            Ethayarajh, K., Xu, W., Muennighoff, N., Jurafsky, D., and
+are already in the parsers or the preference data may get             Kiela, D. Kto: Model alignment as prospect theoretic
+worse during alignment. If the structural rewards are based           optimization. https://arxiv.org/, 2024.
+on bad or culturally biased logic, the model could become
+"confidently wrong," giving wrong information through a            Ferreira, J. and Zwinderman, A. On the benjamini­hochberg
+reasoning structure that seems to make sense. So, we advise           method. 2006.
+against using models trained this way in situations where
+safety is important, like medical diagnosis or legal advice,       Gupta, A. Evaluating spatial reasoning in language models.
+where logical mistakes can have serious real-world effects.           In The 5th Workshop on Mathematical Reasoning and AI
+                                                                      at NeurIPS 2025, 2025.
+This paper ultimately helps with the bigger goal of mak-
+ing machine learning systems that better understand what           Hendrycks, D. et al. Measuring massive multitask lan-
+people want. It doesn't get rid of the risks that come with           guage understanding. In Proceedings of the International
+using LLMs, like the chance of misuse or spreading false             Conference on Learning Representations (ICLR), 2021.
+information, but it does give you tools to make these models         Available: https: //arxiv.org/abs/2009.03300, 2021.
+more logically sound and easier to understand.
+                                                                   Hong, J., Lee, N., and Thorne, J. Orpo: Mono-
+References                                                            lithic preference optimization without reference model.
+                                                                      https://arxiv.org/abs/2403.07691, 2024.
+Azar, M. et al. A general theoretical paradigm
+   to understand learning from human preferences.                  Huang, T.-K., Weng, R. C., Lin, C.-J., and Ridgeway, G.
+   https://arxiv.org/abs/2310.12036, 2023.                            Generalized bradley-terry models and multi-class proba-
+                                                                      bility estimates. Journal of Machine Learning Research,
+Bai, Y. et al. Training a helpful and harmless assis-                7(1), 2006.
+   tant with reinforcement learning from human feedback.
+   https://arxiv.org/abs/2204.05862, 2022.                         Kazemi, M., Fatemi, B., Bansal, H., Palowitch, J., Anasta-
+                                                                      siou, C., Mehta, S. V., Jain, L. K., Aglietti, V., Jindal, D.,
+Besta, M., Blach, N., Kubicek, A., Gerstenberger, R., Pod-            Chen, P., Dikkala, N., Tyen, G., Liu, X., Shalit, U., Chi-
+   stawski, M., Gianinazzi, L., Gajda, J., Lehmann, T.,               appa, S., Olszewska, K., Tay, Y., Tran, V. Q., Le, Q. V.,
+   Niewiadomski, H., Nyczyk, P., et al. Graph of thoughts:            and Firat, O. BIG-bench extra hard. In Che, W., Nabende,
+   Solving elaborate problems with large language models.            J., Shutova, E., and Pilehvar, M. T. (eds.), Proceedings of
+   In Proceedings of the AAAI conference on artificial intel-         the 63rd Annual Meeting of the Association for Computa-
+   ligence, volume 38, pp. 17682­17690, 2024.                         tional Linguistics (Volume 1: Long Papers), pp. 26473­
+                                                                      26501, July 2025. doi: 10.18653/v1/2025.acl-long.1285.
+Brossart, D. F., Laird, V. C., and Armstrong, T. W. Interpret-
+   ing kendall's tau and tau-u for single-case experimental        Lamb, T. A., Ivanova, D. R., Torr, P., and Rudner, T. G.
+   designs. Cogent Psychology, 5(1):1518687, 2018.                    Semantic-level confidence calibration of language models
+                                                                     via temperature scaling. In ICLR Workshop: Quantify
+Cachola, I., Lo, K., Cohan, A., and Weld, D. S. Tldr:                Uncertainty and Hallucination in Foundation Models:
+   Extreme summarization of scientific documents. arXiv              The Next Frontier in Reliable AI, 2025.
+   preprint arXiv:2004.15011, 2020.
+                                                                   Liang, J. E. From entropy rate to redundancy: Informa-
+                                                                      tion dynamics in large language models. In NeurIPS
+
+                                                                9
+                 TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+2025 Workshop on Structured Probabilistic Inference and              (Meng et al., 2024) and ORPO (Hong et al., 2024) show that
+Generative Modeling, 2025.                                           reference-free penalties or odds-ratio objectives can further
+                                                                     simplify training. Despite their differences, these methods
+McCabe, L. H., Melamed, R., Hartvigsen, T., and Huang,               share a common abstraction: responses are treated as flat
+   H. H. Estimating semantic alphabet size for llm uncer-            sequences. TUR-DPO departs from this trend by leveraging
+   tainty quantification. https://arxiv.org/abs/2509.14478,          the internal reasoning topology of a response to shape the
+   2025.                                                             optimization margin.
+
+Meng, Y., Xia, M., and Yogatama, D. Simpo: Simple                    Structured Reasoning and Topologies. To improve LLM
+   preference optimization with a reference-free reward.             performance on reasoning-based tasks, it is often necessary
+   https://arxiv.org/abs/2405, 2024.                                 to get intermediate steps, which is what CoT (Wei et al.,
+                                                                     2022) made popular. Recent advancements have progressed
+Rafailov, R., Dong, X., Mitchell, E., Ermon, S.,                     from linear strings to more intricate structures, including
+   Manning, C. D., and Finn, C. Direct prefer-                       Tree-of-Thought (ToT) (Yao et al., 2023) and Graph-of-
+   ence optimization: Your language model is se-                     Thought (GoT) (Besta et al., 2024), facilitating backtracking
+   cretly a reward model. In Advances in Neural                      and cross-thought verification. Recent work models expla-
+  Information Processing Systems (NeurIPS). 2023.                    nations as `reasoning topologies', directed graphs of claims
+   https://proceedings.neurips.cc/paper files/paper/2023/file/.      and support relations to analyze coherence and consistency
+                                                                     (Gupta, 2025). Nonetheless, the majority of these structural
+Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and             methodologies are utilized during inference or as post-hoc
+   Klimov, O. Proximal policy optimization algorithms.               evaluative metrics. TUR-DPO directly incorporates topo-
+   https://arxiv.org/abs/1707.06347, 2017.                           logical properties (such as acyclicity and support density)
+                                                                     into a preference optimization objective. This means that
+Stiennon, N. et al. Learning to summarize from human                 the solution's structural integrity is more important than just
+   feedback. In Advances in Neural Information Processing            the final answer string.
+  Systems (NeurIPS). 2020. https://proceedings.neurips.
+                                                                     Uncertainty and Strength in Alignment. Data on human
+Wei, J., Wang, X., Schuurmans, D., Bosma, M., Xia, F., Chi,          preferences is noisy, and it often has "brittle" comparisons
+   E., Le, Q. V., Zhou, D., et al. Chain-of-thought prompting        where the judge isn't sure or the model's reasoning is made
+   elicits reasoning in large language models. Advances in           up. Early RLHF research looked into reward-shaping as a
+   neural information processing systems, 35:24824­24837,            way to deal with noise, but more recent work has looked
+   2022.                                                             into estimating uncertainty. Semantic entropy (Liang, 2025)
+                                                                     and finite-sample bias corrections (Lamb et al., 2025) offer
+Yao, S., Yu, D., Zhao, J., Shafran, I., Griffiths, T., Cao, Y.,      methodologies to quantify the distinction between a model
+   and Narasimhan, K. Tree of thoughts: Deliberate problem           that is "hallucinating" and one that is simply "creative."
+   solving with large language models. Advances in neural            Instance weighting is a well-known statistical method for
+   information processing systems, 36:11809­11822, 2023.             robust estimation in the presence of label noise when it
+                                                                     comes to optimization (Huang et al., 2006). TUR-DPO
+Yuan, Z. et al.  Rrhf: Rank responses to                             combines these fields by using calibrated uncertainty from
+                                                                     the reasoning graph to weight the DPO loss. This down-
+align language models with human feedback.                           weights updates from preference pairs that are highly noisy
+                                                                     or logically weak.
+https://arxiv.org/abs/2304.05302, 2023.
+                                                                     Factuality and Alignment in Context. A major problem
+A. Related Work                                                      in LLM alignment is making sure that factual QA and sum-
+                                                                     marization are accurate. RRHF (Yuan et al., 2023) and other
+RL-Free Preference Optimization. The paradigm of                     RAG-alignment strategies try to punish hallucinations by
+aligning LLMs with human preferences has transitioned                comparing outputs to outside evidence. TUR-DPO adds to
+from operationally intricate RLHF pipelines based on PPO             these efforts by adding a semantic faithfulness score, which
+(Schulman et al., 2017; Stiennon et al., 2020) to more               is based on the nodes in our topology, to the reward signal.
+straightforward, closed-form objectives. DPO (Rafailov               This design helps explain TUR-DPO's strong performance
+et al., 2023) introduced a closed-form, RL-free objective            in long-context and multimodal settings, where the input is
+that directly optimizes preferences relative to a reference          more likely to drift logically because it is more complicated.
+policy. Since then, several extensions have been proposed
+to improve stability and performance. IPO (Azar et al.,
+2023) introduces a root-finding formulation to mitigate over-
+optimization, while KTO (Ethayarajh et al., 2024) lever-
+ages prospect theory to accommodate binary feedback with-
+out explicit pairwise comparisons. More recently, SimPO
+
+                                                                 10
+TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+B. Additional Theoretical Analysis                                   with a shaped reward
+
+B.1. Validity Conditions for Instance Weighting                            J () =Ex Ey(·|x)[ r(x, y, G) ]
+
+Several conditions help ensure instance weights remain a                                 1
+valid control for noisy comparisons. Independence of the                             -  Ex KL (· | x)  ref(· | x) . (13)
+weight from the observed label (conditional on the pair fea-
+tures) is the ideal: weights should depend only on ancillary         The parameters  and  interact to set an effective KL
+signals (elicited topology stability, verifier scores, or ex-        penalty. Small  weakens the KL constraint and can drown
+ternal calibration data) that are not themselves optimized           out the shaped reward, while large  risks over-sharpening
+during the same update. Boundedness (wmin  w  1),                    the policy. The product  determines the effective reward
+monotonicity with respect to an externally validated un-             scale relative to the entropy regularization, allowing prac-
+certainty score, and calibration on a held-out split further         titioners to balance exploration and exploitation by tuning
+limit worst-case bias. In practice we enforce these by (i)           these jointly. The pointwise maximizer is a Gibbs policy
+using small, low-capacity calibrators for semantic/topology
+mapping, (ii) fitting any temperature or scalar on a disjoint             (y | x)  ref(y | x) exp   r(x, y, G) , (14)
+calibration fold, and (iii) clipping and flooring weights to a
+conservative range.                                                  whose pairwise log odds match the target margins, so mini-
+                                                                     mizing Equation (9) performs a mirror descent step toward
+If weights become dependent on the model outputs that                . Updating the reference by EMA implements a soft
+are also being updated (for example by deriving weights              trust region centered near the previous iterate without ex-
+from the online policy's own logits or from a verifier that          plicit constraints, which provides intuition for the observed
+is co-trained), then feedback loops can emerge. Output-              stability relative to reference free alternatives.
+dependent weights can amplify spurious patterns: items               The linear calibrators fsem and ftopo in Equation (8) enforce
+the model already favors may receive larger weights, caus-           monotonicity under sem, topo  0, ensuring that higher se-
+ing a positive-feedback loop that increases overconfidence           mantic or topology scores never decrease the shaped reward.
+and can reinforce incorrect behaviors (a form of reward              This design avoids reward hacking via learned nonlinear-
+hacking). From a statistical perspective, dependence be-             ities while preserving expressiveness for domain-specific
+tween weights and the estimator breaks the independence              calibration.
+assumptions used for consistency and unbiasedness and can
+introduce asymptotic bias and inflated variance.                     B.3. Training protocol and defaults
+
+B.2. Mitigations and diagnostics                                     Each batch executes a short pipeline. First, elicit graphs for
+                                                                     the positive and negative candidates using a deterministic
+To prevent or detect output-dependent failure modes we               prompt template with minor perturbations for uncertainty
+recommend: (a) decouple weight computation from online               estimation. Second, compute the semantic and topology
+updates by computing weights using a frozen reference                scores, then compute epistemic and aleatoric uncertainties
+or on a delayed/EMA copy of the model; (b) restrict cal-             and map them to a pair weight. Third, update the optional
+ibrator capacity and prefer simple linear mappings fit on            calibrator parameters  with a weighted Bradley-Terry step
+held-out calibration data; (c) run side-control experiments          on the shaped reward difference. Fourth, update the policy
+where weights are randomized or derived from alternative,            parameters  by minimizing the weighted loss in Equation
+exogenous estimators (judge-only, ensemble) to quantify              (9). Finally, optionally update the reference by EMA with
+sensitivity; (d) monitor distributional drift of weights vs.         decay   [0.99, 0.997]. Typical hyperparameters are  
+label outcomes and track statistics such as Spearman corre-          [1, 4],   [0.5, 2], a  [0.4, 0.7],   [0.1, 1.0], w 
+lation between weight and contemporary model confidence              [0.5, 2.0], and wmin = 0.05. Early stopping monitors judge
+a rising correlation is a warning sign; and (e) routinely            win-rate, factual error rate, and a structural coherence score.
+perform the validation checks (re-annotation correlation,            This protocol preserves DPO throughput while adding only
+noise-injection, perturbation stability) so that elevated un-        modest overhead for graph and verifier computations.
+certainty reliably predicts noisy labels rather than reflecting
+model-induced artifacts.                                             B.4. Calibration and evaluation metrics
+
+Second, we connect TUR-DPO to KL regularized control                 Expected Calibration Error (ECE). We compute ECE by
+                                                                     binning predictions into M = 10 equal-width confidence in-
+                                                                     tervals [0, 0.1), [0.1, 0.2), . . . , [0.9, 1.0]. For each bin Bm,
+                                                                     we calculate the absolute difference between the average
+
+                                                                 11
+                        TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+predicted  confidence   p¯m  =    1    iBm pi and the empir-       C.1. Model scale considerations
+                                |Bm |
+                                                                   We focus on 7­8B models for controlled comparison and
+ical  accuracy  a¯m  =    1     iBm [predi = labeli]. ECE          compute efficiency, as these scales are widely accessible and
+                        |Bm |                                      permit multiple seed runs with full ablations. The method
+                                                                   is architecturally agnostic and is expected to carry over to
+is the weighted average:                                           larger models: topology elicitation and scoring are inde-
+                                                                   pendent of model size, and the overhead (graph extraction,
+                        M       |Bm|                               verifier forward passes) depends on sequence length and
+                                 N                                 graph size rather than parameter count. We do not report
+                ECE =                  |p¯m  -  a¯m|.  (15)        results beyond 7­8B in this work (Table 12); validating
+                                                                   scaling behavior at 13B­70B+ is left to future work and
+                        m=1                                        will require targeted hyperparameter tuning and additional
+                                                                   compute.
+where N is the total number of examples. We report ECE
+averaged across all evaluation datasets.                           Table 12. Model configurations: two 7­8B families and reference
+                                                                   strategies (frozen or EMA).
+Brier Score. The Brier score measures the mean squared
+error between predicted probabilities and binary outcomes:
+
+                           1    N                      (16)
+                Brier = N
+                                   (pi - yi)2,
+
+                                i=1
+
+where pi is the predicted probability for the positive class       Family    Policy size  Reference size  Reference type
+and yi  {0, 1} is the true label. Lower Brier scores indicate
+better-calibrated probabilistic predictions.                       Family A     7.0 B          7.0 B      frozen or EMA
+                                                                   Family B     8.0 B          8.0 B      frozen or EMA
+Verifier Calibration. Node-level correctness probabilities
+from the verifier are calibrated using temperature scaling.        C.2. Datasets and tasks
+We fit a single scalar temperature parameter T on a held-out
+calibration set by minimizing the negative log-likelihood          We evaluate on six workloads spanning multi-step reason-
+of the true labels. Calibrated probabilities are computed as       ing, factuality, and dialogue (see Table 13). Each dataset re-
+pcal = (logit/T ), where  is the sigmoid function. For             serves 2% of training pairs for calibration. GSM8K (Cobbe
+domains with non-monotonic miscalibration, we option-              et al., 2021) and MATH (Hendrycks et al., 2021) emphasize
+ally use isotonic regression, which fits a piecewise-constant      arithmetic reasoning. BBH (Kazemi et al., 2025) covers
+monotone function mapping raw scores to calibrated prob-           seven compositional tasks. Open-domain QA (Chen & Yih,
+abilities. We find temperature scaling sufficient for most         2020) uses NQ-like distribution. TLDR (Cachola et al.,
+tasks and report it as the default method.                         2020) measures summarization faithfulness. HH single-turn
+                                                                   tests helpfulness/harmlessness (Bai et al., 2022). We disable
+B.5. Complexity and stability notes                                few-shot exemplars to rely on model's internal reasoning.
+                                                                   The full corpus comprises 614k preference pairs.
+Relative to vanilla DPO, overhead comes from graph elicita-
+tion and verification (O(KLgen) tokens with K  {2, 3, 4}           Table 13. Datasets: statistics of the 614k preference-pair corpus
+re-elicitations, and O(|V | + |E|) scoring). Core forward          across six domains.
+passes for policy and reference are unchanged. Training
+remains stable through per-pair weighting rather than hard         Task             Train   Eval   Avg      Avg
+filtering, EMA reference as a soft trust region, and normal-                        pairs    size  in tok  out tok
+ization of scores before calibrators. The method avoids data       GSM8K            64,000  1,319
+starvation and destructive updates while maintaining DPO           MATH mini        80,000    500     38        85
+simplicity.                                                        BBH subset                         74      142
+                                                                   (7 tasks)        90,000  1,400
+C. Models, data, and scoring                                       Open QA                            52      120
+                                                                   (NQ style)      120,000  3,000
+We use two open 7­8B model families with identical tok-            Summ TLDR       100,000  2,000     28        32
+enizers and 4k context length. Reference policy is frozen or       HH single-turn  160,000  2,000    160        28
+updated by EMA ( = 0.995). Full fine-tuning: AdamW,                                                   48        75
+cosine lr, 2k warmup, weight decay 0.1, bf16, batch size 128.
+All methods share supervised initialization. PPO-RLHF              C.3. Pair construction and labels
+uses a learned reward model with value head. TUR-DPO de-
+faults:  = 2.0,  = 1.0, a = 0.6,  = 0.5. We checkpoint             HH and TLDR datasets use human labeled pairs from pub-
+every 2k steps, select best by judge win-rate and calibration      lic style sources. For GSM8K, MATH, BBH, and QA we
+coherence on validation set. To reduce variance: fixed seeds,
+cached graphs/verifier calls, three seeds per setting.
+
+                                                               12
+                    TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+synthesize four candidates per prompt using nucleus sam-                 minimal path coverage, cycle count, dangling nodes, contra-
+pling with temperature 0.7 and top p 0.95. A calibrated                  diction score from a local natural language inference (NLI)
+LLM judge ranks candidates with side flipping and chain of               verifier, and graph size. The topology score is a nonnega-
+thought hidden during judging. A small verifier suite checks             tive linear combination tuned to match a target distribution
+arithmetic consistency, facts against Wikipedia snapshots,               on the calibration split. Uncertainty has two components.
+and contradiction on paraphrase pairs. We form one pair                  Epistemic uncertainty samples K = 3 re elicited graphs per
+per prompt by selecting the top judged candidate and a hard              candidate under minor prompt or temperature perturbations.
+negative with minimal reference log probability gap, which               We compute variance of the topology score and JSD across
+increases training signal near the decision boundary. To                 path distributions. Aleatoric uncertainty uses node level
+calibrate the judge we sample 200 examples per domain                    correctness probabilities from a calibrated verifier and a
+and collect double human labels with adjudication, measure               coverage corrected binary entropy with prior strength 0.05.
+Cohen's kappa and Kendall's tau against the judge, and fit a             Pair uncertainty is averaged across the two candidates and
+temperature to improve probabilistic calibration. Ties and               mapped to a weight with w = 1.2 and wmin = 0.05. Table
+uncertain pairs are kept but will receive smaller weights later.         15 shows the effect of the number of re elicited graphs on
+We deduplicate pairs by exact match and by near duplicate                calibration and throughput. We find K = 3 balances quality
+detection on embeddings to prevent leakage across splits.                and speed.
+
+C.4. Decoupling verifier roles (circularity check)                       Table 15. Topology re-elicitation (K) effects: EM, ECE, and
+                                                                         throughput trade-offs (We use K = 3 by default in all experi-
+To mitigate potential circularity when the same veri-                    ments).
+fier family contributes to both pair construction (arith-
+metic/fact/contradiction checks) and training-time weight-               K EM (%) ECE Throughput Relative time
+ing (node correctness for uncertainty), we run two controls:
+(a) remove verifier checks from pair construction, relying               1 61.7 0.101 25.2k                  1.00
+solely on the calibrated LLM judge for selection; (b) keep
+verifier checks for pair construction but swap to an indepen-            2 62.3 0.093 24.0k                  1.05
+dent verifier (different model/data) for node-level correct-
+ness during training. Qualitatively, (a) increases variance              3 62.8 0.087 23.1k                  1.09
+(harder negatives, slightly noisier pairs) but preserves the
+relative gains of TUR-DPO; (b) yields a small calibration                4 62.9 0.086 21.7k                  1.16
+shift that is corrected by per-domain temperature scaling,
+with win-rate and ECE trends matching the main results.                  D. Additional Experimental Details
+
+Table 14 reports pair difficulty quartiles by reference margin           D.1. Inference-time guardrails
+and by judged confidence, showing that training data cover a
+wide range of margins, which is important for stable logistic            Because formatting errors increase under TUR-DPO, we
+updates.                                                                 deploy a lightweight answer validator at inference time.
+                                                                         The validator uses regular expressions to detect missing
+Table 14. Pair difficulty quartiles: reference margin, judge confi-      boxed answers in GSM8K/MATH and missing short-form
+dence, and human agreement across tasks.                                 answers in QA. When validation fails, we either re-sample
+                                                                         with temperature 0.3 or apply a simple rule-based extraction
+Percentile    Ref   Judge   Human     Share of                           (e.g., extracting the final numeric value for arithmetic tasks).
+            margin  conf   agreement    pairs                            Table 16 reports metrics with and without post-processing.
+P25                                                                      Post-processing fully mitigates the formatting deficit and
+P50          0.08   0.61      0.72      25%                              yields a net improvement of 2.1 EM points on GSM8K
+P75          0.16   0.69      0.78      25%                              and 1.4 EM points on QA relative to vanilla DPO without
+P90          0.33   0.79      0.84      25%                              post-processing, indicating that the structural gains from
+             0.55   0.88      0.90      10%                              TUR-DPO are orthogonal to surface-form issues.
+
+                                                                         Table 16. Post-processing guardrails: effect on GSM8K/QA EM
+                                                                         with lightweight format validation/extraction.
+
+C.5. Topology and uncertainty                                            Method   GSM8K   GSM8K        QA       QA
+                                                                                  raw EM  +postproc  raw EM  +postproc
+For each candidate we elicit a small directed graph of sub-              DPO
+claims and support links with a deterministic template. Sani-            TUR-DPO    58.7     59.2      41.8     42.1
+tization removes self loops, merges paraphrases, and breaks                         62.8     65.3      45.1     46.7
+cycles by minimal edge cut. Structural features include
+
+                                                                     13
+                       TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+D.2. Judge noise sensitivity                                            D.4. Decoding robustness
+
+To isolate the effect of uncertainty weighting under noisy su-          We sweep the decoding temperature and observe that TUR-
+pervision, we synthetically corrupt a fraction of preference            DPO preserves win-rate more effectively at higher tempera-
+labels by randomly flipping winner and loser assignments.               tures. Table 19 shows stable performance across tempera-
+Table 17 reports win-rate and ECE on GSM8K as the cor-                  tures from 0.3 to 0.9. We additionally test prompt perturba-
+ruption rate increases from 0% to 30%. TUR-DPO degrades                 tions using paraphrases and filler tokens. Relative to DPO,
+more gracefully than vanilla DPO, exhibiting smaller drops              TUR-DPO exhibits smaller accuracy degradation under such
+in both win-rate and calibration at all corruption levels. At           noising, which is consistent with training that emphasizes
+20% corruption, TUR-DPO retains 89% of its clean-data                   structural signals rather than surface-level patterns. This
+win-rate, whereas DPO retains only 81%. These results in-               robustness is relevant for deployment scenarios involving
+dicate that uncertainty-weighted updates attenuate the influ-           diverse user prompts or noisy upstream inputs.
+ence of brittle or mislabeled pairs under realistic annotation
+noise.                                                                  Table 19. Decoding robustness: HH win-rate across sampling
+                                                                        temperatures.
+
+Table 17. Label-noise robustness: GSM8K win-rate and ECE                Temperature 0.3 0.5 0.7 0.9
+under increasing random label flips; retention ratios compare TUR-
+DPO vs DPO.                                                             DPO              64.9 65.5 63.8 61.2
+                                                                        PPO RLHF         67.7 68.5 66.9 64.0
+Corruption   DPO                  TUR-DPO            Retention          TUR-DPO          67.3 67.9 66.8 65.1
+
+0% (clean)   Win-rate  ECE  Win-rate  ECE        TUR-DPO / DPO
+10%             (%)            (%)
+20%                                                  1.00 / 1.00
+30%          58.7 0.101           62.8 0.087         0.97 / 0.96        D.5. PPO stability and tuning cost
+             56.2 0.118           60.9 0.095         0.89 / 0.81
+             47.6 0.139           55.9 0.108         0.82 / 0.72        Table 20 summarizes the frequency of crashes or man-
+             42.1 0.162           51.3 0.124                            ual restarts and the per-update runtime. While PPO-based
+                                                                        RLHF can achieve strong performance, it requires careful
+D.3. Topology extractor fidelity                                        tuning and may fail due to KL spikes or numerical instabil-
+                                                                        ity. TUR-DPO avoids these issues by eliminating the value
+To verify that performance gains are driven by topology                 head and rollout buffer, and by relying on the reference
+quality rather than superficial features, we compare three              policy to induce a soft trust region. For teams without spe-
+graph extraction configurations: (1) a weak extractor that              cialized RL infrastructure, this stability and simplicity may
+produces smaller, less-structured graphs via simpler prompt-            outweigh small performance differences on certain dialogue
+ing or weaker parsing; (2) the default extractor described              benchmarks.
+in Section 2; and (3) a strong extractor that uses chain-of-
+thought prompting and cross-validation to produce more                  Table 20. PPO stability summary: crash rate and per-update tim-
+complete and accurate graphs. Table 18 shows that win-rate              ings on HH over 10 runs; contrasts PPO-RLHF with TUR-DPO.
+and structural coherence track extractor quality. The weak
+extractor yields only modest gains over vanilla DPO, while              Metric           Value   Notes
+the strong extractor achieves the best results. Importantly,
+these improvements are not explained by graph size alone:               Crash rate       2 KL spikes or NaN
+the weak extractor produces graphs with comparable node                 over 10 runs
+counts but lower path coverage and higher contradiction
+rates, resulting in weaker performance.                                 Median time      1.41 s   includes rollout
+                                                                        per update               and value updates
+
+                                                                        Median time per  0.88 s  forward and
+                                                                        update TUR-DPO            loss only
+
+Table 18. Topology extractor fidelity: GSM8K performance and
+structural metrics for weak/default/strong extractors.
+
+Extractor    Win-rate  Avg nodes  Path coverage   Cycles    Struct      D.6. When PPO still wins
+                (%)                     (%)      (per 100)  score
+Vanilla DPO                3.7                                          On open-ended stylistic tasks such as single-turn HH dia-
+Weak           58.7        4.4         55.2        14.3     58.1        logue, PPO-RLHF retains a small advantage (0.6% points
+Default        59.8        4.9         69.3         7.6     70.4        in our experiments; Table 1). This advantage arises when
+Strong         62.8                    74.8         5.2     75.6        extensive reward shaping captures nuanced preference gra-
+               64.1                                                     dients (e.g., tone, hedging, or refusal calibration) that are
+                                                                        difficult to encode using lightweight topology and semantic
+
+                                                                    14
+                          TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+scores. TUR-DPO substantially narrows this gap relative to            though TUR-DPO with a fixed reference remains competi-
+vanilla DPO, but practitioners deploying on safety-critical or        tive and preserves the canonical simplicity of DPO. Table 22
+highly stylistic tasks may prefer PPO when the required RL            summarizes these results.
+infrastructure is available. Conversely, on reasoning-heavy
+tasks (GSM8K, MATH, BBH, QA), TUR-DPO matches or                      Table 22. Reference strategy ablation: fixed vs. EMA reference
+exceeds PPO while preserving the operational simplicity of            effects on win-rate and ECE for 7-8B models.
+DPO. The appropriate choice depends on task characteris-
+tics and available engineering resources.                             Task        Ref strategy  Win-rate  ECE         Notes
+                                                                                                   (%)     ()
+D.7. Reproducibility and artifacts                                    GSM8K       Fixed (SFT)                    canonical DPO
+                                                                      GSM8K    EMA ( = 0.995)     62.4    0.094     reference
+We release topology elicitation templates, parsing rules, and         Open QA                                       +0.4 pts,
+reference implementations in the accompanying repository.             Open QA     Fixed (SFT)     62.8    0.087
+Configuration files specify exact model identifiers, hyper-                    EMA ( = 0.995)     44.7    0.102  smoother loss
+parameters, and random seeds. The environment setup is                                            45.1    0.096      baseline
+documented in requirements.txt with deterministic                                                                   +0.4 EM,
+seeding enabled. Raw graphs and evaluation metrics are
+provided for audit, and the full pipeline can be reproduced                                                        lower ECE
+using the supplied scripts.
+                                                                      Figure 4 visualizes ablation results alongside calibration
+E. Ablation and sensitivity analyses                                  analysis. The left panel shows that TUR-DPO achieves im-
+                                                                      proved calibration, as measured by ECE and Brier score,
+Table 21 isolates the contribution of each component. Re-             relative to baseline methods. The right panel illustrates
+moving uncertainty weighting while retaining the topology             the contribution of individual components to overall perfor-
+reward degrades win-rate and increases ECE. Removing                  mance, highlighting that the components operate synergisti-
+the topology reward while retaining uncertainty weighting             cally.
+preserves some stability benefits but yields smaller improve-
+ments in faithfulness. Setting the shaped reward weight to            E.2. Hyperparameter sensitivity
+zero reduces TUR-DPO to weighted DPO, which improves
+calibration but produces weaker structural gains. Replacing           We analyze sensitivity to the temperature parameter , re-
+the topology score with graph size confirms that perfor-              ward mixing coefficient , uncertainty penalty , and the
+mance is not explained by a trivial length prior. A listwise          weight-mapping parameter w. Figure 5 shows that perfor-
+extension using four candidates per prompt yields an addi-            mance is robust over broad parameter ranges. Increasing 
+tional, modest improvement.                                           sharpens the policy and can reduce win-rate if set too high.
+                                                                      Moderate values of  provide the best trade-off between
+Table 21. Component ablation: GSM8K and QA performance                faithfulness and diversity. Larger values of  down-weight
+when removing TUR-DPO components.                                     uncertain pairs more aggressively and improve calibration
+                                                                      up to a point, after which learning slows. The EMA refer-
+                                                                      ence decay parameter  controls training stability; values
+                                                                      between 0.99 and 0.997 perform well.
+
+Variant                   GSM8K EM   QA EM   ECE    Struct score      F. Multimodal evaluation
+
+TUR-DPO full                   62.8    45.1  0.087      70.4          F.1. Multimodal deployment considerations
+No uncertainty weighting       60.3    43.4  0.105      68.7
+No topology reward             59.6    42.8  0.093      62.1          Extending TUR-DPO to multimodal systems requires three
+Shaped reward off  = 0         58.9    42.1  0.091      60.8          practical components: (1) a vision-grounding verifier that
+Graph size only                57.7    41.2  0.098      58.9          maps textual claims to image regions (e.g., fine-tuned CLIP
+Listwise k = 4                 63.5    45.6  0.088      70.1          or OWL-ViT), (2) a prompt template that elicits visual obser-
+                                                                      vations and reasoning steps (e.g., "First describe what you
+E.1. Fixed vs. moving reference (canonical DPO control)               see, then explain"), and (3) topology parsing that supports
+                                                                      mixed text-image references (e.g., nodes annotated with
+Canonical DPO uses a fixed SFT reference or an SFT-fitted             region pointers). Computational overhead remains mod-
+proxy. Because TUR-DPO often employs an EMA-updated                   est, as grounding verification is parallelizable and cached
+reference as a soft trust region, we include a head-to-head           per image­question pair. TUR-DPO is modality-agnostic
+comparison with a strictly frozen reference. Across tasks             in the sense that it requires only (i) a mechanism to elicit
+(GSM8K, Open QA, BBH, TLDR, HH), EMA updating                         structured rationales and (ii) a verifier for node correct-
+provides modest but consistent improvements in stability              ness. We evaluate generalization along two dimensions:
+and calibration, while win-rate differences remain small.             multimodal reasoning (vision-language) and long-context
+We therefore recommend EMA updating when available,
+
+                                                                  15
+TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+reasoning (2­4k token inputs). Future work may explore             sary supporting facts (72.3%) compared to DPO (61.7%).
+richer multimodal topologies (e.g., temporal reasoning for         These results indicate that topology-aware signals remain
+video QA or spatial graphs for embodied agents) and further        effective as context length increases.
+study structural signals under visual ambiguity.
+                                                                   G. Practical Notes for Practitioners
+F.2. Visual question-answering with LVLMs
+                                                                   TUR-DPO is most appropriate when preference labels are
+In visual question answering and chart-based QA, nodes rep-        noisy and tasks require multi-step reasoning or factual
+resent captions, regions, or grounded factual claims, while        grounding. We recommend keeping graph extraction con-
+edges encode entailment, spatial relations, or grounding           cise and stable rather than verbose, calibrating verifiers
+links between textual and visual evidence. For example,            carefully, and using a conservative minimum weight to
+when answering "How many red bars exceed the threshold?"           avoid discarding informative but difficult pairs. A fixed
+in a bar chart, a topology may include nodes such as {"The         SFT reference preserves the canonical simplicity of DPO
+chart shows five bars", "Three bars are red", "Two red bars        and performs competitively, while an EMA-updated refer-
+exceed 50%"}, with directed edges capturing the inference          ence (e.g.,  = 0.995) provides modest improvements in
+steps. The topology score (Equation 1) applies directly: path      stability and calibration at negligible overhead (Table 22).
+coverage measures completeness from visual observation to          Finally, we encourage reporting structural and calibration
+answer, cycles detect circular reasoning, and dangling nodes       metrics alongside win-rates to facilitate transparent diagno-
+identify unsupported visual claims. Uncertainty estimation         sis of improvements.
+extends naturally: re-eliciting captions under prompt per-
+turbations yields epistemic dispersion, while a CLIP-based
+verifier provides node-level grounding scores for aleatoric
+uncertainty.
+
+Evaluation. We evaluate on 1,000 examples from
+ChartQA and ScienceQA-IMG using an open-weight 7B
+LVLM (LLaVA-7B architecture) fine-tuned with DPO and
+TUR-DPO. A CLIP ViT-L/14 verifier scores node-level
+grounding between textual claims and image regions. Ta-
+ble 23 reports accuracy, judge win-rate, path coverage, and
+grounding accuracy. TUR-DPO achieves 4.2 percentage-
+point higher accuracy than DPO on ChartQA and 3.6 points
+on ScienceQA-IMG, along with corresponding improve-
+ments in structural coherence (5.8 and 4.9 points, respec-
+tively). Human evaluation (100 examples per dataset, dou-
+ble annotation) confirms these trends: TUR-DPO wins
+68.5% vs. DPO on ChartQA (59.2% for DPO over SFT)
+and 66.7% on ScienceQA-IMG (61.4%). These results sug-
+gest that explicit reasoning topology transfers to multimodal
+settings and improves both task accuracy and structural
+faithfulness.
+
+F.3. Long-context multi-hop reasoning
+
+We evaluate TUR-DPO on long-context multi-hop QA using
+HotpotQA-Long (2.1k average input tokens) and MuSiQue-
+Long (3.2k average input tokens). Graphs are elicited from
+model-generated reasoning chains that reference relevant
+passages by index. Table 24 reports EM, F1, and struc-
+tural metrics. TUR-DPO improves EM by 3.8 points on
+HotpotQA-Long and 4.1 points on MuSiQue-Long relative
+to DPO, with corresponding gains in path coverage and
+reductions in cycles, indicating more coherent multi-hop
+reasoning. Human evaluation (150 examples per dataset)
+shows that TUR-DPO more frequently includes all neces-
+
+                                                               16
+                                           TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+                                                                                       )XOO785'32                                 (0
+                                                                                   )XOO785'32                               (0
+
+                                                                                                                       (0
+                                                                                                                 (0
+(UURU6FRUH/RZHULV%HWWHU                                                           1R8QFHUWDLQW\:HLJKWLQJ
+     (UURU6FRUH/RZHULV%HWWHU
+                                                                             1R8QFHUWDLQW\:HLJKWLQJ
+
+                                                                                        1R7RSRORJ\5HZDUG                  (0
+                                                                                   1R7RSRORJ\5HZDUG                 (0
+                                 
+                                                                                         6KDSHG5HZDUG2II               (0
+                                                                                    6KDSHG5HZDUG2II              (0
+                                           
+                                                                
+                                                         
+
+
+                                                                                        *UDSK6L]H2QO\                  (0
+                                                                                   *UDSK6L]H2QO\                 (0
+
+                                                                                          /LVWZLVHN                                 (0
+
+                                      6)7           '32         785'32             /LVWZLVHN                                      (0
+                                               '320HWKRG 785'32                                 
+                                 6)7                                                                      :LQUDWH                 
+                                 (a) Calibrati0o(Hn&WK(qRuGality %ULHU6FRUH                                        :LQUDWH          
+
+                                                                                                         (b) Component ablation
+
+                                      (&(           %ULHU6FRUH
+
+Figure 4. Calibration and ablation studies. (a) Calibration quality measured by ECE and Brier score across SFT, DPO, and TUR-DPO
+
+(lower is better). (b) Component ablation results showing win-rate degradation when individual components are removed, indicating that
+
+both topology-aware rewards and uncertainty weighting contribute to improved performance.
+
+Table 23. Multimodal evaluation: ChartQA and ScienceQA-IMG accuracy, path coverage, and grounding accuracy for LVLMs.
+
+                                 Method                      ChartQA                                       ScienceQA-IMG
+
+                                 SFT       Acc. (%)      Path cov. (%)             Ground. (%)  Acc. (%)   Path cov. (%) Ground. (%)
+                                 DPO
+                                 TUR-DPO     54.2             48.5                      62.3      61.8     51.2                64.7
+                                             59.7             53.1                      67.8      66.3
+                                             63.9             58.9                      73.6      69.9     56.4                69.2
+
+                                                                                                           61.3                74.1
+
+Table 24. Long-context multi-hop evaluation: HotpotQA-Long and MuSiQue-Long EM and structural metrics for TUR-DPO vs DPO.
+
+                                      Method             HotpotQA-Long (2.1k tok)                    MuSiQue-Long (3.2k tok)
+
+                                      SFT           EM (%) Path cov. (%) Cycles                 EM (%) Path cov. (%) Cycles
+                                      DPO
+                                      TUR-DPO       34.7                     52.3  16.2              28.9  48.7  18.5
+
+                                                    39.5                     58.6  12.4              33.6  54.2  14.1
+
+                                                    43.3                     66.1  8.7               37.7  61.8           9.3
+
+                                                                                   17
+                                                                                     TUR-DPO: Topology- and Uncertainty-Aware Direct Preference Optimization
+
+                                                                                     :LQUDWH&,                                                                                  )DLWKIXOQHVV&,
+                                                                                                                                                                                'LYHUVLW\&,
+                                                          2SWLPDO                                                                                                             '))'DLYLDLWHYKLUWHIVKXULIWOVXQ\LHWOQ\VHVV')VDLYL&WHK,UIV&X&LWO,Q\,H&V,V&, &,
+                                                                                                                                                  
+                                                                                     :LQUD:WH:LQLQUDWUHDWH&, &, &,                                                       %DODQFH3RLQW
+                                                          2 SWLPD2OSW2LPSWDLPODO                                                                                           
+                                       :LQUDWH:LQUDWH                                                                                6FRUH 6FRUH 
+                                           :LQUDWH                                                                                                                       %DODQFH3RLQW
+                                                                                                                                         6FRUH     
+                                                :LQUDWH                                                                                                  5HZDUG0 L[%LDQODJQFH3R%LQDWODQFH3R LQW
+                                                                                                                                             6FRUH 
+                                                                                                                                                           5HZDUG0L[LQJ
+                                                             
+                                                                                                                                                          5HZDUG50HLZ[LDQUJG0L[LQJ  
+                                                          
+
+                                                          
+
+                                                                       
+                                                                   7HPSHUDWXUH   
+
+                                                                         7HPSHUDWXUH
+                                                             7HPS7HHUDPWXSUHHUDWXUH  
+
+                                                                   (a) Effect of temperature                                                        (b) Faithfulness vs Diversity Trade-off
+
+                                       
+                                                                                     &(&RQ(Y6(ES&HH(WHWHGUEHWWHU&&,,&,                                       5REXVWQHVV&,
+                                                                                                                                                              56RWEDXEVLWOQLWH\VV&&, ,
+                                                                                            &RQY6SHHG&,                                                       6WDELOLW\&,
+                                                                                                 &RQYHUJ&HRQQFYHHU6JSHQHFGH6SHHG                
+(&(&DO(L&EU(DWL&RDQOL(EUUDWRLURQ(UURU                                              (&&RQ(Y6E(&SHH&RWHQW(HGYU6ESHHWHWHG&U&,,&&, ,                           65WRDEEXLOVLWW\QHV56VWRDEEXL&OVLW,W\QH&V,V&, &,
+    (&(&DOLEUDWLRQ(UURU                                                                            &RQYHUJHQFH6SHHG                              
+                                                                                                                                                   
+         (&(&DOLEUDWLRQ(UURU                                                                          &RQYHUJHQFH6SHHG
+                                                                                                         6FRUH 6FRUH                               
+                                                                                                                                                   
+                                       %H VW(&(%HVW(&(                                                     6FRUH                                 
+                                                                                                                                                          22SSWWLLPPDDOO BBZZ 
+                                                                                                                6FRUH
+Fmiigxuirneg5%.HVSiWlel(un&%ss(Hti(rtVcia88Wv)t(iiQQCtn&yFFag(HlHtiotUUb8hWWr8hDeDQayLLQtFQfQipFaoHWWeiHn\\UtrUhWpvW3D3fDasuLHHrLQQlaCQQnWWmoD\e\DnsOeO3WW3svt\\e­HeHrdrQsQgiD.veDO(enWOa\rWc)\seiEtSyfpfteerceatddoef-oteffm,pweirtahtuarebalaonncewdino-preartea,tiwngithp(doa)inbEtrfofnaeedcat::ro:opHHfHtLLWi2LJJJm=SKKKeWuLWWiWP1gm:000D.h0OtDaDDH.rMSSSLB2oJS(ZSSuacSKLLLpQn)WQQLWPpdJUJJ0iDnnOBDgcBB=ZSeBZZrZSwt2aLQ.i0nJ.ty(bBp)ZeRnaewltyard
+                                                                                                                                                                                                                                                                                                                                                                                                                                                          
+
+                                                          improving calibration (lower ECE) up to  = 0.5. (d) Effect of the weight-mapping parameter w on robustness and stability. Across all
+
+                                                          panels, performance remains stable over wide ranges, indicating that TUR-DPO is not overly sensitive to hyperparameter tuning.
+
+                                                                                                                             18
+

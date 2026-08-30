@@ -1,0 +1,44 @@
+arXiv:2211.01095v3 [cs.LG] 19 May 2025
+
+Preprint
+DPM-SOLVER++: FAST SOLVER FOR GUIDED SAMPLING OF DIFFUSION PROBABILISTIC MODELS
+Cheng Lu, Yuhao Zhou, Fan Bao, Jianfei Chen, Chongxuan Li, Jun Zhu Dept. of Comp. Sci. & Tech., Institute for AI, BNRist Center, THBI Lab Tsinghua-Bosch Joint ML Center, Tsinghua University, Beijing, 100084 China Gaoling School of Artificial Intelligence, Renmin University of China, Beijing Key Laboratory of Big Data Management and Analysis Methods, Beijing, China {lucheng.lc15, yuhaoz.cs}@gmail.com; bf19@mails.tsinghua.edu.cn chongxuanli@ruc.edu.cn; {jianfeic, dcszj}@tsinghua.edu.cn
+ABSTRACT
+Diffusion probabilistic models (DPMs) have achieved impressive success in highresolution image synthesis, especially in recent large-scale text-to-image generation applications. An essential technique for improving the sample quality of DPMs is guided sampling, which usually needs a large guidance scale to obtain the best sample quality. The commonly-used fast sampler for guided sampling is DDIM, a first-order diffusion ODE solver that generally needs 100 to 250 steps for highquality samples. Although recent works propose dedicated high-order solvers and achieve a further speedup for sampling without guidance, their effectiveness for guided sampling has not been well-tested before. In this work, we demonstrate that previous high-order fast samplers suffer from instability issues, and they even become slower than DDIM when the guidance scale grows large. To further speed up guided sampling, we propose DPM-Solver++, a high-order solver for the guided sampling of DPMs. DPM-Solver++ solves the diffusion ODE with the data prediction model and adopts thresholding methods to keep the solution matches training data distribution. We further propose a multistep variant of DPM-Solver++ to address the instability issue by reducing the effective step size. Experiments show that DPM-Solver++ can generate high-quality samples within only 15 to 20 steps for guided sampling by pixel-space and latent-space DPMs.1
+1 INTRODUCTION
+Diffusion probabilistic models (DPMs) (Sohl-Dickstein et al., 2015; Ho et al., 2020; Song et al., 2021b) have achieved impressive success on various tasks, such as high-resolution image synthesis (Dhariwal & Nichol, 2021; Ho et al., 2022; Rombach et al., 2022), image editing (Meng et al., 2022; Saharia et al., 2022a; Zhao et al., 2022), text-to-image generation (Nichol et al., 2021; Saharia et al., 2022b; Ramesh et al., 2022; Rombach et al., 2022; Gu et al., 2022), voice synthesis (Liu et al., 2022a; Chen et al., 2021a;b), molecule generation (Xu et al., 2022; Hoogeboom et al., 2022; Wu et al., 2022) and data compression (Theis et al., 2022; Kingma et al., 2021). Compared with other deep generative models such as GANs (Goodfellow et al., 2014) and VAEs (Kingma & Welling, 2014), DPMs can even achieve better sample quality by leveraging an essential technique called guided sampling (Dhariwal & Nichol, 2021; Ho & Salimans, 2021), which uses additional guidance models to improve the sample fidelity and the condition-sample alignment. Through it, DPMs in text-to-image and image-to-image tasks can generate high-resolution photorealistic and artistic images which are highly correlated to the given condition, bringing a new trend in artificial intelligence art painting.
+The sampling procedure of DPMs gradually removes the noise from pure Gaussian random variables to obtain clear data, which can be viewed as discretizing either the diffusion SDEs (Ho et al., 2020; Song et al., 2021b) or the diffusion ODEs (Song et al., 2021b;a) defined by a parameterized noise prediction model or data prediction model (Ho et al., 2020; Kingma et al., 2021). Guided sampling
+Corresponding Author. 1Code is available at https://github.com/LuChengTHU/dpm-solver
+1
+
+Preprint
+
+DDIM (order = 1) (Song et al., 2021a)
+
+PNDM (order = 2) (Liu et al., 2022b)
+
+DEIS-1 (order = 2)
+
+DEIS-2 (order = 3)
+
+(Zhang & Chen, 2022) (Zhang & Chen, 2022)
+
+DPM-Solver (order = 2) DPM-Solver-3 (order = 3) DDIM (thresholding) DPM-Solver++ (order = 2)
+
+(Lu et al., 2022)
+
+(Lu et al., 2022)
+
+(Saharia et al., 2022b)
+
+(ours)
+
+Figure 1: Previous high-order solvers are unstable for guided sampling: Samples using the pre-trained DPMs (Dhariwal & Nichol, 2021) on ImageNet 256×256 with a classifier guidance scale 8.0, varying different samplers (and different solver orders) with only 15 function evaluations. : DDIM with the dynamic thresholding (Saharia et al., 2022b). Our proposed DPM-Solver++ (detailed in Algorithm 2) can generate better samples than the first-order DDIM, while other high-order samplers are worse than DDIM.
+
+of DPMs can also be formalized with such discretizations by combining an unconditional model with a guidance model, where a hyperparameter controls the scale of the guidance model (i.e. guidance scale). The commonly-used method for guided sampling is DDIM (Song et al., 2021a), which is proven as a first-order diffusion ODE solver (Salimans & Ho, 2022; Lu et al., 2022) and it generally needs 100 to 250 steps of large neural network evaluations to converge, which is time-consuming.
+Dedicated high-order diffusion ODE solvers (Lu et al., 2022; Zhang & Chen, 2022) can generate high-quality samples in 10 to 20 steps for sampling without guidance. However, their effectiveness for guided sampling has not been carefully examined before. In this work, we demonstrate that previous high-order solvers for DPMs generate unsatisfactory samples for guided sampling, even worse than the simple first-order solver DDIM. We identify two challenges of applying high-order solvers to guided sampling: (1) the large guidance scale narrows the convergence radius of high-order solvers, making them unstable; and (2) the converged solution does not fall into the same range with the original data (a.k.a. "train-test mismatch" (Saharia et al., 2022b)).
+Based on the observations, we propose DPM-Solver++, a training-free fast diffusion ODE solver for guided sampling. We find that the parameterization of the DPM critically impacts the solution quality. Subsequently, we solve the diffusion ODE defined by the data prediction model, which predicts the clean data given the noisy ones. We derive a high-order solver for solving the ODE with the data prediction parameterization, and adopt dynamic thresholding methods (Saharia et al., 2022b) to mitigate the train-test mismatch problem. Furthermore, we develop a multistep solver which uses smaller step sizes to address instability.
+As shown in Fig. 1, DPM-Solver++ can generate high-quality samples in only 15 steps, which is much faster than all the previous training-free samplers for guided sampling. Our additional experimental results show that DPM-Solver++ can generate high-fidelity samples and almost converge within only 15 to 20 steps, for a wide variety of guided sampling applications, including both pixel-space DPMs and latent-space DPMs.
+2
+
+

@@ -1,0 +1,578 @@
+                                        Graph U-Nets
+
+                                        Hongyang Gao 1 Shuiwang Ji 1
+
+arXiv:1905.05178v1 [cs.LG] 11 May 2019                          Abstract                                 vision (He et al., 2017; Huang et al., 2017) and natural lan-
+                                                                                                         guage processing (Bahdanau et al., 2015). One common
+                                              We consider the problem of representation learn-           property behind these tasks is that both images and texts
+                                              ing for graph data. Convolutional neural networks          have grid-like structures. Elements on feature maps have lo-
+                                              can naturally operate on images, but have sig-             cality and order information, which enables the application
+                                              nificant challenges in dealing with graph data.            of convolutional operations (Defferrard et al., 2016).
+                                              Given images are special cases of graphs with
+                                              nodes lie on 2D lattices, graph embedding tasks            In practice, many real-world data can be naturally repre-
+                                              have a natural correspondence with image pixel-            sented as graphs such as social and biological networks.
+                                              wise prediction tasks such as segmentation. While          Due to the great success of CNNs on grid-like data, apply-
+                                              encoder-decoder architectures like U-Nets have             ing them on graph data (Gori et al., 2005; Scarselli et al.,
+                                              been successfully applied on many image pixel-             2009) is particularly appealing. Recently, there have been
+                                              wise prediction tasks, similar methods are lack-           many attempts to extend convolutions to graph data (GNNs)
+                                              ing for graph data. This is due to the fact that           (Kipf & Welling, 2017; Velickovic´ et al., 2017; Gao et al.,
+                                              pooling and up-sampling operations are not nat-            2018). One common use of convolutions on graphs is to
+                                              ural on graph data. To address these challenges,           compute node representations (Hamilton et al., 2017; Ying
+                                              we propose novel graph pooling (gPool) and un-             et al., 2018). With learned node representations, we can
+                                              pooling (gUnpool) operations in this work. The             perform various tasks on graphs such as node classification
+                                              gPool layer adaptively selects some nodes to form          and link prediction.
+                                              a smaller graph based on their scalar projection
+                                              values on a trainable projection vector. We fur-           Images can be considered as special cases of graphs, in
+                                              ther propose the gUnpool layer as the inverse op-          which nodes lie on regular 2D lattices. It is this special
+                                              eration of the gPool layer. The gUnpool layer              structure that enables the use of convolution and pooling op-
+                                              restores the graph into its original structure us-         erations on images. Based on this relationship, node classi-
+                                              ing the position information of nodes selected             fication and embedding tasks have a natural correspondence
+                                              in the corresponding gPool layer. Based on our             with pixel-wise prediction tasks such as image segmenta-
+                                              proposed gPool and gUnpool layers, we develop              tion (Noh et al., 2015; Gao & Ji, 2017; Je´gou et al., 2017). In
+                                              an encoder-decoder model on graph, known as                particular, both tasks aim to make predictions for each input
+                                              the graph U-Nets. Our experimental results on              unit, corresponding to a pixel on images or a node in graphs.
+                                              node classification and graph classification tasks         In the computer vision field, pixel-wise prediction tasks
+                                              demonstrate that our methods achieve consistently          have achieved major advances recently. Encoder-decoder
+                                              better performance than previous models.                   architectures like the U-Net (Ronneberger et al., 2015) are
+                                                                                                         state-of-the-art methods for these tasks. It is thus highly
+                                        1. Introduction                                                  interesting to develop U-Net-like architectures for graph
+                                                                                                         data. In addition to convolutions, pooling and up-sampling
+                                        Convolutional neural networks (CNNs) (LeCun et al., 2012)        operations are essential building blocks in these architec-
+                                        have demonstrated great capability in various challenging        tures. However, extending these operations to graph data
+                                        artificial intelligence tasks, especially in fields of computer  is highly challenging. Unlike grid-like data such as images
+                                                                                                         and texts, nodes in graphs have no spatial locality and order
+                                            1Department of Computer Science & Engineering, Texas         information as required by regular pooling operations.
+                                        A&M University, TX, USA. Correspondence to: Hongyang Gao
+                                        <hongyang.gao@tamu.edu>, Shuiwang Ji <sji@tamu.edu>.             To bridge the above gap, we propose novel graph pool-
+                                                                                                         ing (gPool) and unpooling (gUnpool) operations in this
+                                        Proceedings of the 36 th International Conference on Machine     work. Based on these two operations, we propose U-Net-
+                                        Learning, Long Beach, California, PMLR 97, 2019. Copyright       like architectures for graph data. The gPool operation sam-
+                                        2019 by the author(s).                                           ples some nodes to form a smaller graph based on their
+                                         Graph U-Nets
+
+scalar projection values on a trainable projection vector. As    3. Graph U-Nets
+an inverse operation of gPool, we propose a corresponding
+graph unpooling (gUnpool) operation, which restores the          In this section, we introduce the graph pooling (gPool) layer
+graph to its original structure with the help of locations of    and graph unpooling (gUnpool) layer. Based on these two
+nodes selected in the corresponding gPool layer. Based on        new layers, we develop the graph U-Nets for node classifi-
+the gPool and gUnpool layers, we develop graph U-Nets,           cation tasks.
+which allow high-level feature encoding and decoding for
+network embedding. Experimental results on node classifi-        3.1. Graph Pooling Layer
+cation and graph classification tasks demonstrate the effec-
+tiveness of our proposed methods as compared to previous         Pooling layers play important roles in CNNs on grid-like
+methods.                                                         data. They can reduce sizes of feature maps and enlarge
+                                                                 receptive fields, thereby giving rise to better generaliza-
+2. Related Work                                                  tion and performance (Yu & Koltun, 2016). On grid-like
+                                                                 data such as images, feature maps are partitioned into non-
+Recently, there has been a rich line of research on graph        overlapping rectangles, on which non-linear down-sampling
+neural networks (Gilmer et al., 2017). Inspired by the first     functions like maximum are applied. In addition to local
+order graph Laplacian methods, (Kipf & Welling, 2017)            pooling, global pooling layers (Zhao et al., 2015a) perform
+proposed graph convolutional networks (GCNs), which              down-sampling operations on all input units, thereby re-
+achieved promising performance on graph node classifi-           ducing each feature map to a single number. In contrast,
+cation tasks. The layer-wise forward-propagation operation       k-max pooling layers (Kalchbrenner et al., 2014) select the
+of GCNs is defined as:                                           k-largest units out of each feature map.
+
+X  +1  =  (D^ -  1  A^D^ -  1  X  W  ),  (1)                     However, we cannot directly apply these pooling operations
+                 2          2                                    to graphs. In particular, there is no locality information
+                                                                 among nodes in graphs. Thus the partition operation is not
+where A^ = A + I is used to add self-loops in the input          applicable on graphs. The global pooling operation will
+adjacency matrix A, X is the feature matrix of layer .           reduce all nodes to one single node, which restricts the
+The GCN layer uses the diagonal node degree matrix D^ to         flexibility of networks. The k-max pooling operation out-
+normalize A^. W is a trainable weight matrix that applies a      puts the k-largest units that may come from different nodes
+linear transformation to feature vectors. GCNs essentially       in graphs, resulting in inconsistency in the connectivity of
+perform aggregation and transformation on node features          selected nodes.
+without learning trainable filters. (Hamilton et al., 2017)
+tried to sample a fixed number of neighboring nodes to           In this section, we propose the graph pooling (gPool) layer
+keep the computational footprint consistent. (Velickovic´        to enable down-sampling on graph data. In this layer, we
+et al., 2017) proposed to use attention mechanisms to enable     adaptively select a subset of nodes to form a new but smaller
+different weights for neighboring nodes. (Schlichtkrull et al.,  graph. To this end, we employ a trainable projection vector
+2018) used relational graph convolutional networks for link      p. By projecting all node features to 1D, we can perform
+prediction and entity classification. Some studies applied       k-max pooling for node selection. Since the selection is
+GNNs to graph classification tasks (Duvenaud et al., 2015;       based on 1D footprint of each node, the connectivity in
+Dai et al., 2016; Zhang et al., 2018). (Bronstein et al., 2017)  the new graph is consistent across nodes. Given a node i
+discussed possible ways of applying deep learning on graph       with its feature vector xi, the scalar projection of xi on p is
+data. (Henaff et al., 2015) and (Bruna et al., 2014) proposed    yi = xip/ p . Here, yi measures how much information
+to use spectral networks for large-scale graph classification    of node i can be retained when projected onto the direction
+tasks. Some studies also applied graph kernels on traditional    of p. By sampling nodes, we wish to preserve as much
+computer vision tasks (Gama et al., 2019; Fey et al., 2018;      information as possible from the original graph. To achieve
+Monti et al., 2017).                                             this, we select nodes with the largest scalar projection values
+                                                                 on p to form a new graph.
+In addition to convolution, some studies tried to extend pool-
+ing operations to graphs. (Defferrard et al., 2016) proposed     Suppose there are N nodes in a graph G and each of which
+to use binary tree indexing for graph coarsening, which fixes    contains C features. The graph can be represented by two
+indices of nodes before applying 1-D pooling operations.         matrices; those are the adjacency matrix A  RN×N and
+(Simonovsky & Komodakis, 2017) used deterministic graph          the feature matrix X  RN×C . Each non-zero entry in
+clustering algorithm to determine pooling patterns. (Ying        the adjacency matrix A represents an edge between two
+et al., 2018) used an assignment matrix to achieve pooling       nodes in the graph. Each row vector xi in the feature matrix
+by assigning nodes to different clusters of the next layer.      X denotes the feature vector of node i in the graph. The
+                                                                 layer-wise propagation rule of the graph pooling layer is
+                                         Graph U-Nets
+                                                                sigmoid
+
+                        1
+
+%            ×          !           idx                                            
+
+                                                                         %$          #"  %'(
+
+                !          # top k
+
+*
+                                                                                                                              *'(
+
+   Inputs       Projection          Top k Node Selection                     Gate        Outputs
+
+Figure 1. An illustration of the proposed graph pooling layer with k = 2. × and denote matrix multiplication and element-wise product,
+
+respectively. We consider a graph with 4 nodes, and each node has 5 features. By processing this graph, we obtain the adjacency matrix
+A  R4×4 and the input feature matrix X  R4×5 of layer . In the projection stage, p  R5 is a trainable projection vector. By matrix
+
+multiplication and sigmoid(·), we obtain y that are scores estimating scalar projection values of each node to the projection vector. By
+
+using k = 2, we select two nodes with the highest scores and record their indices in the top-k-node selection stage. We use the indices to
+extract the corresponding nodes to form a new graph, resulting in the pooled feature map X~ and new corresponding adjacency matrix
+A +1. At the gate stage, we perform element-wise multiplication between X~ and the selected node scores vector y~, resulting in X +1.
+This graph pooling layer outputs A +1 and X +1.
+
+defined as:                                                      and 1  m < n  k. Note that the index selection pro-
+                                                                 cess preserves the position order information in the original
+             y=X p / p ,                                         graph. With indices idx, we extract the adjacency matrix
+                                                                 A  Rk×k and the feature matrix X~  Rk×C for the new
+             idx = rank(y, k),                                   graph. Finally, we employ a gate operation to control infor-
+                                                                 mation flow. With selected indices idx, we obtain the gate
+             y~ = sigmoid(y(idx)),                               vector y~  Rk by applying sigmoid to each element in the
+                                                                 extracted scalar projection vector. Using element-wise ma-
+             X~ = X (idx, :),            (2)                     trix product of X~ and y~1CT , information of selected nodes
+                                                                 is controlled. The ith row vector in X +1 is the product of
+             A +1 = A (idx, idx),                                the ith row vector in X and the ith scalar value in y~.
+
+             X +1 = X~     y~1CT ,                               Notably, the gate operation makes the projection vector p
+                                                                 trainable by back-propagation (LeCun et al., 2012). Without
+where k is the number of nodes selected in the new graph.        the gate operation, the projection vector p produces discrete
+rank(y, k) is the operation of node ranking, which returns       outputs, which makes it not trainable by back-propagation.
+indices of the k-largest values in y. The idx returned by        Figure 1 provides an illustration of our proposed graph
+rank(y, k) contains the indices of nodes selected for the new    pooling layer. Compared to pooling operations used in grid-
+graph. A (idx, idx) and X (idx, :) perform the row and/or        like data, our graph pooling layer employs extra training
+column extraction to form the adjacency matrix and the           parameters in projection vector p. We will show that the
+feature matrix for the new graph. y(idx) extracts values in y    extra parameters are negligible but can boost performance.
+with indices idx followed by a sigmoid operation. 1C  RC
+is a vector of size C with all components being 1, and           3.2. Graph Unpooling Layer
+represents the element-wise matrix multiplication.
+                                                                 Up-sampling operations are important for encoder-decoder
+X is the feature matrix with row vectors x1, x2, · · · , xN ,    networks such as U-Net. The encoders of networks usually
+each of which corresponds to a node in the graph. We first       employ pooling operations to reduce feature map size and
+compute the scalar projection of X on p , resulting in           increase receptive field. While in decoders, feature maps
+y = [y1, y2, · · · , yN ]T with each yi measuring the scalar
+projection value of each node on the projection vector p .
+Based on the scalar projection vector y, rank(·) operation
+ranks values and returns the k-largest values in y. Sup-
+pose the k-selected indices are i1, i2, · · · , ik with im < in
+                                    Graph U-Nets
+
+gPool                                                           gUnpool
+
+                                    GCN
+
+Figure 2. An illustration of the proposed graph unpooling (gUnpool) layer. In this example, a graph with 7 nodes is down-sampled using a
+gPool layer, resulting in a coarsened graph with 4 nodes and position information of selected nodes. The corresponding gUnpool layer
+uses the position information to reconstruct the original graph structure by using empty feature vectors for unselected nodes.
+
+need to be up-sampled to restore their original resolutions.    layers, we propose our graph U-Nets (g-U-Nets) architecture
+On grid-like data like images, there are several up-sampling    for node classification tasks.
+operations such as the deconvolution (Isola et al., 2017;
+Zhao et al., 2015b) and unpooling layers (Long et al., 2015).   In our graph U-Nets (g-U-Nets), we first apply a graph
+However, such operations are not currently available on         embedding layer to convert nodes into low-dimensional
+graph data.                                                     representations, since original inputs of some dataset like
+                                                                Cora (Sen et al., 2008) usually have very high-dimensional
+To enable up-sampling operations on graph data, we propose      feature vectors. After the graph embedding layer, we build
+the graph unpooling (gUnpool) layer, which performs the         the encoder by stacking several encoding blocks, each of
+inverse operation of the gPool layer and restores the graph     which contains a gPool layer followed by a GCN layer.
+into its original structure. To achieve this, we record the     gPool layers reduce the size of graph to encode higher-order
+locations of nodes selected in the corresponding gPool layer    features, while GCN layers are responsible for aggregating
+and use this information to place nodes back to their original  information from each node's first-order information. In the
+positions in the graph. Formally, we propose the layer-wise     decoder part, we stack the same number of decoding blocks
+propagation rule of graph unpooling layer as                    as in the encoder part. Each decoder block is composed of a
+                                                                gUnpool layer and a GCN layer. The gUnpool layer restores
+X +1 = distribute(0N×C , X , idx),  (3)                         the graph into its higher resolution structure, and the GCN
+                                                                layer aggregates information from the neighborhood. There
+where idx  Zk contains indices of selected nodes in the         are skip-connections between corresponding blocks of en-
+                                                                coder and decoder layers, which transmit spatial information
+corresponding gPool layer that reduces the graph size from      to decoders for better performance. The skip-connection
+N nodes to k nodes. X  Rk×C are the feature matrix of           can be either feature map addition or concatenation. Finally,
+the current graph, and 0N×C are the initially empty feature     we employ a GCN layer for final predictions before the soft-
+matrix for the new graph. distribute(0N×C , X , idx) is the     max function. Figure 3 provides an illustration of a sample
+operation that distributes row vectors in X into 0N×C fea-      g-U-Nets with two blocks in encoder and decoder. Notably,
+ture matrix according to their corresponding indices stored     there is a GCN layer before each gPool layer, thereby en-
+in idx. In X +1, row vectors with indices in idx are updated    abling gPool layers to capture the topological information
+                                                                in graphs implicitly.
+by row vectors in X , while other row vectors remain zero.
+                                                                3.4. Graph Connectivity Augmentation via Graph
+3.3. Graph U-Nets Architecture                                       Power
+
+It is well-known that encoder-decoder networks like U-Net       In our proposed gPool layer, we sample some important
+achieve promising performance on pixel-wise prediction          nodes to form a new graph for high-level feature encoding.
+tasks, since they can encode and decode high-level features     Since related edges are removed when removing nodes in
+while maintaining local spatial information. Similar to pixel-  gPool, the nodes in the pooled graph might become iso-
+wise prediction tasks (Gong et al., 2014; Ronneberger et al.,
+2015), node classification tasks aim to make a prediction for
+each input unit. Based on our proposed gPool and gUnpool
+                                 Graph U-Nets
+
+                  GCN                                                                                     GCN
+Inputs
+                       gPool                                                                     gUnpool
+                                     GCN
+                                                                                            GCN                Network Embedding
+                                                           gPool                gUnpool
+                                                                           GCN
+
+Figure 3. An illustration of the proposed graph U-Nets (g-U-Nets). In this example, each node in the input graph has two features. The
+input feature vectors are transformed into low-dimensional representations using a GCN layer. After that, we stack two encoder blocks,
+each of which contains a gPool layer and a GCN layer. In the decoder part, there are also two decoder blocks. Each block consists of a
+gUnpool layer and a GCN layer. For blocks in the same level, encoder block uses skip connection to fuse the low-level spatial features
+from the encoder block. The output feature vectors of nodes in the last layer are network embedding, which can be used for various tasks
+such as node classification and link prediction.
+
+lated. This may influence the information propagation in                        4. Experimental Study
+subsequent layers, especially when GCN layers are used to
+aggregate information from neighboring nodes. We need                           In this section, we evaluate our gPool and gUnpool layers
+to increase connectivity among nodes in the pooled graph.                       based on the g-U-Nets proposed in Section 3.3. We com-
+To address this problem, we propose to use the kth graph                        pare our networks with previous state-of-the-art models on
+power Gk to increase the graph connectivity. This operation                     node classification and graph classification tasks. Exper-
+builds links between nodes whose distances are at most k                        imental results show that our methods achieve new state-
+hops (Chepuri & Leus, 2016). In this work, we employ                            of-the-art results in terms of node classification accuracy
+k = 2 since there is a GCN layer before each gPool layer                        and graph classification accuracy. Some ablation studies
+to aggregate information from its first-order neighboring                       are performed to examine the contributions of the proposed
+nodes. Formally, we replace the fifth equation in Eq 2 by:                      gPool layer, gUnpool layer, and graph connectivity augmen-
+                                                                                tation to performance improvements. We conduct studies
+A2 = A A , A +1 = A2(idx, idx),  (4)                                            on the relationship between network depth and node classifi-
+                                                                                cation performance. We investigate if additional parameters
+where A2  RN×N is the 2nd graph power. Now, the graph                           involved in gPool layers can increase the risk of over-fitting.
+sampling is performed on the augmented graph with better
+connectivity.                                                                   4.1. Datasets
+
+3.5. Improved GCN Layer                                                         In experiments, we evaluate our networks on node classifi-
+                                                                                cation tasks under transductive learning settings and graph
+In Eq. 1, the adjacency matrix before normalization is com-                     classification tasks under inductive learning settings.
+puted as A^ = A + I in which a self-loop is added to each
+node in the graph. When performing information aggrega-                         Under transductive learning settings, unlabeled data are
+tion, the same weight is given to node's own feature vector                     accessible for training, which enables the network to learn
+and its neighboring nodes. In this work, we wish to give a                      about the graph structure. To be specific, only part of nodes
+higher weight to node's own feature vector, since its own                       are labeled while labels of other nodes in the same graph
+feature should be more important for prediction. To this                        remain unknown. We employ three benchmark datasets for
+end, we change the calculation to A^ = A + 2I by imposing                       this setting; those are Cora, Citeseer, and Pubmed (Kipf &
+larger weights on self loops in the graph, which is common                      Welling, 2017), which are summarized in Table 1. These
+in graph processing. All experiments in this work use this                      datasets are citation networks, with each node and each edge
+modified version of GCN layer for better performance.
+                              Graph U-Nets
+
+Table 1. Summary of datasets used in our node classification experiments (Yang et al., 2016; Zitnik & Leskovec, 2017). The Cora, Citeseer,
+
+and Pubmed datasets are used for transductive learning experiments.
+
+Dataset   Nodes  Features  Classes                                   Training Validation Testing                    Degree
+
+Cora      2708   1433      7                                         140  500          1000                               4
+
+Citeseer  3327   3703      6                                         120  500          1000                               5
+
+Pubmed    19717  500       3                                         60   500          1000                               6
+
+Table 2. Summary of datasets used in our inductive learning experiments. The D&D (Dobson & Doig, 2003), PROTEINS (Borgwardt
+
+et al., 2005), and COLLAB (Yanardag & Vishwanathan, 2015) datasets are used for inductive learning experiments.
+
+Dataset          Graphs       Nodes (max)                                 Nodes (avg)                            Classes
+
+D&D              1178               5748                                  284.32                                 2
+
+PROTEINS         1113               620                                   39.06                                  2
+
+COLLAB           5000               492                                   74.49                                  3
+
+representing a document and a citation, respectively. The            and feature matrices with keep rates of 0.8 and 0.08, respec-
+feature vector of each node is the bag-of-word representation        tively.
+whose dimension is determined by the dictionary size. We
+follow the same experimental settings in (Kipf & Welling,            For inductive learning tasks, we follow the same experi-
+2017). For each class, there are 20 nodes for training, 500          mental setups in (Zhang et al., 2018) using our g-U-Nets
+nodes for validation, and 1000 nodes for testing.                    architecture as described in transductive learning settings for
+                                                                     feature extraction. Since the sizes of graphs vary in graph
+Under inductive learning settings, testing data are not avail-       classification tasks, we sample proportions of nodes in four
+able during training, which means the training process               gPool layers; those are 90%, 70%, 60%, and 50%, respec-
+does not use graph structures of testing data. We evalu-             tively. The dropout keep rate imposed on feature matrices is
+ate our methods on relatively large graph datasets selected          0.3.
+from common benchmarks used in graph classification
+tasks (Ying et al., 2018; Niepert et al., 2016; Zhang et al.,        4.3. Performance Study
+2018). We use protein datasets including D&D (Dobson &
+Doig, 2003) and PROTEINS (Borgwardt et al., 2005), the               Under transductive learning settings, we compare our pro-
+scientific collaboration dataset COLLAB (Yanardag & Vish-            posed g-U-Nets with other state-of-the-art models in terms
+wanathan, 2015). These data are summarized in Table 2.               of node classification accuracy. We report node classifica-
+                                                                     tion accuracies on datasets Cora, Citeseer, and Pubmed, and
+4.2. Experimental Setup                                              the results are summarized in Table 3. We can observe from
+                                                                     the results that our g-U-Nets achieves consistently better
+We describe the experimental setup for both transductive             performance than other networks. For baseline values listed
+and inductive learning settings. For transductive learning           for node classification tasks, they are the state-of-the-art
+tasks, we employ our proposed g-U-Nets proposed in Sec-              on these datasets. Our proposed model is composed of
+tion 3.3. Since nodes in the three datasets are associated           GCN, gPool, and gUnpool layers without involving more
+with high-dimensional features, we employ a GCN layer                advanced graph convolution layers like GAT. When com-
+to reduce them into low-dimensional representations. In              pared to GCN directly, our g-U-Nets significantly improves
+the encoder part, we stack four blocks, each of which con-           performance on all three datasets by margins of 2.9%, 2.9%,
+sists of a gPool layer and a GCN layer. We sample 2000,              and 0.6%, respectively. Note that the only difference be-
+1000, 500, 200 nodes in the four gPool layers, respectively.         tween our g-U-Nets and GCN is the use of encoder-decoder
+Correspondingly, the decoder part also contains four blocks.         architecture containing gPool and gUnpool layers. These
+Each decoder block is composed of a gUnpool layer and a              results demonstrate the effectiveness of g-U-Nets in network
+GCN layer. We use addition operation in skip connections             embedding.
+between blocks of encoder and decoder parts. Finally, we
+apply a GCN layer for final prediction. For all layers in the        Under inductive learning settings, we compared our meth-
+model, we use identity activation function (Gao et al., 2018)        ods with other state-of-the-art models on graph classification
+after each GCN layer. To avoid over-fitting, we apply L2             tasks with datasets D&D, PROTEINS, and COLLAB, and
+regularization on weights with  = 0.001. Dropout (Sri-               the results are summarized in Table 4. We can observe from
+vastava et al., 2014) is applied to both adjacency matrices          the results that our proposed gPool method outperforms
+                                                   Graph U-Nets
+
+Table 3. Results of transductive learning experiments in terms of node classification accuracies on Cora, Citeseer, and Pubmed datasets.
+
+g-U-Nets denotes our proposed graph U-Nets model.
+
+Models                                             Cora            Citeseer     Pubmed
+
+DeepWalk (Perozzi et al., 2014)          67.2%                         43.2%        65.3%
+Planetoid (Yang et al., 2016)            75.7%                         64.7%        77.2%
+Chebyshev (Defferrard et al., 2016)      81.2%                         69.8%        74.4%
+GCN (Kipf & Welling, 2017)               81.5%                         70.3%        79.0%
+GAT (Velickovic´ et al., 2017)       83.0 ± 0.7%                   72.5 ± 0.7%  79.0 ± 0.3%
+g-U-Nets (Ours)                      84.4 ± 0.6%                   73.2 ± 0.5%  79.6 ± 0.2%
+
+Table 4. Results of inductive learning experiments in terms of graph classification accuracies on D&D, PROTEINS, and COLLAB datasets.
+
+g-U-Nets denotes our proposed graph U-Nets model.
+
+Models                                             D&D             PROTEINS     COLLAB
+
+PSCN (Niepert et al., 2016)                        76.27%          75.00%       72.60%
+DGCNN (Zhang et al., 2018)                         79.37%          76.26%       73.76%
+DiffPool-DET (Ying et al., 2018)                   75.47%          75.62%       82.13%
+DiffPool-NOLP (Ying et al., 2018)                  79.98%          76.22%       75.58%
+DiffPool (Ying et al., 2018)                       80.64%          76.25%       75.48%
+g-U-Nets (Ours)                                    82.43%          77.68%       77.56%
+
+DiffPool (Ying et al., 2018) by margins of 1.79% and 1.43%         architecture, g-U-Nets enable higher level feature encoding,
+on the D&D and PROTEINS datasets. Notably, the result ob-          thereby resulting in better generalization and performance.
+tained by DiffPool-DET on COLLAB is significantly higher
+than all other methods and the other two DiffPool models.          4.5. Graph Connectivity Augmentation Study
+On all three datasets, our model outperforms baseline mod-
+els including DiffPool. In addition, DiffPool claimed that         In the above experiments, we employ gPool layers with
+their training utilized auxiliary task of link prediction to sta-  graph connectivity augmentation by using the 2nd graph
+bilize model performance, which indicates the instability of       power in Section 3.4. Here, we conduct experiments on node
+DiffPool model. But in our experiments, we only use graph          classification tasks to investigate the benefits of graph con-
+labels for training without any auxiliary tasks to stabilize       nectivity augmentation based on g-U-Nets. We remove the
+training.                                                          graph connectivity augmentation from gPool layers while
+                                                                   keeping other settings the same for fairness of comparisons.
+4.4. Ablation Study of gPool and gUnpool layers                    Table 6 provides comparison results between g-U-Nets with
+                                                                   and without graph connectivity augmentation. The results
+Although GCNs have been reported to have worse perfor-             show that the absence of graph connectivity augmentation
+mance when the network goes deeper (Kipf & Welling,                will cause consistent performance degradation on all of
+2017), it may also be argued that the performance improve-         three datasets. This demonstrates that graph connectivity
+ment over GCN in Table 3 is due to the use of a deeper             augmentation via 2nd graph power can help with the graph
+network architecture. In this section, we investigate the          connectivity and information transfer among nodes in sam-
+contributions of gPool and gUnpool layers to the perfor-           pled graphs.
+mance of g-U-Nets. We conduct experiments by removing
+all gPool and gUnpool layers from our g-U-Nets, leading            4.6. Network Depth Study of Graph U-Nets
+to a network with only GCN layers with skip connections.
+Table 5 provides the comparison results between g-U-Nets           Since the network depth in terms of the number of blocks in
+with and without gPool or gUnpool layers. The results show         encoder and decoder parts is an important hyper-parameter
+that g-U-Nets have better performance over g-U-Nets with-          in the g-U-Nets, we conduct experiments to investigate the
+out gPool or gUnpool layers by margins of 2.3%, 1.6% and           relationship between network depth and performance in
+0.5% on Cora, Citeseer, and Pubmed datasets, respectively.         terms of node classification accuracy. We use different
+These results demonstrate the contributions of gPool and           network depths on node classification tasks and report the
+gUnpool layers to performance improvement. When con-               classification accuracies. The results are summarized in Ta-
+sidering the difference between the two models in terms of         ble 7. We can observe from the results that the performance
+                                                                   improves as network goes deeper until a depth of 4. The
+                                                    Graph U-Nets
+
+Table 5. Comparison of g-U-Nets with and without gPool or gUnpool layers in terms of node classification accuracy on Cora, Citeseer,
+
+and Pubmed datasets.                         Cora                 Citeseer     Pubmed
+ Models
+
+g-U-Nets without gPool or gUnpool      82.1 ± 0.6%                71.6 ± 0.5%  79.1 ± 0.2%
+g-U-Nets (Ours)                        84.4 ± 0.6%                73.2 ± 0.5%  79.6 ± 0.2%
+
+Table 6. Comparison of g-U-Nets with and without graph connectivity augmentation in terms of node classification accuracy on Cora,
+
+Citeseer, and Pubmed datasets.
+
+Models                                 Cora                       Citeseer     Pubmed
+
+g-U-Nets without augmentation          83.7 ± 0.7%                72.5 ± 0.6%  79.0 ± 0.3%
+g-U-Nets (Ours)                        84.4 ± 0.6%                73.2 ± 0.5%  79.6 ± 0.2%
+
+Table 7. Comparison of different network depths in terms of node classification accuracy on Cora, Citeseer, and Pubmed datasets. Based
+
+on g-U-Nets, we experiment with different network depths in terms of the number of blocks in encoder and decoder parts.
+
+        Depth                          Cora                       Citeseer     Pubmed
+
+        2                              82.6 ± 0.6%                71.8 ± 0.5%  79.1 ± 0.3%
+
+        3                              83.8 ± 0.7%                72.7 ± 0.7%  79.4 ± 0.4%
+
+        4                              84.4 ± 0.6%                73.2 ± 0.5%  79.6 ± 0.2%
+
+        5                              84.1 ± 0.5%                72.8 ± 0.6%  79.5 ± 0.3%
+
+Table 8. Comparison of the g-U-Nets with and without gPool or gUnpool layers in terms of the node classification accuracy and the
+
+number of parameters on Cora dataset.
+
+Models                                 Accuracy                   #Params      Ratio of increase
+
+g-U-Nets without gPool or gUnpool      82.1 ± 0.6%                75,643       0.00%
+g-U-Nets (Ours)                        84.4 ± 0.6%                75,737       0.12%
+
+over-fitting problem happens in deeper networks and pre-      5. Conclusion
+vents networks from improving when the depth goes beyond
+that. In image segmentation, U-Net models with depth 3 or     In this work, we propose novel gPool and gUnpool layers in
+4 are commonly used (Badrinarayanan et al., 2017; C¸ ic¸ek    g-U-Nets networks for network embedding. The gPool layer
+et al., 2016), which is consistent with our choice in exper-  implements the regular global k-max pooling operation on
+iments. This indicates the capacity of gPool and gUnpool      graph data. It samples a subset of important nodes to en-
+layers in receptive field enlargement and high-level feature  able high-level feature encoding and receptive field enlarge-
+encoding even working with very shallow networks.             ment. By employing a trainable projection vector, gPool
+                                                              layers sample nodes based on their scalar projection values.
+4.7. Parameter Study of Graph Pooling Layers                  Furthermore, we propose the gUnpool layer which applies
+                                                              unpooling operations on graph data. By using the position
+Since our proposed gPool layer involves extra parameters,     information of nodes in the original graph, gUnpool layer
+we compute the number of additional parameters based          performs the inverse operation of the corresponding gPool
+on our g-U-Nets. The comparison results between g-U-          layer and restores the original graph structure. Based on our
+Nets with and without gPool or gUnpool layers on dataset      gPool and gUnpool layers, we propose the graph U-Nets (g-
+Cora are summarized in Table 8. From the results, we can      U-Nets) architecture which uses a similar encoder-decoder
+observe that gPool layers in U-Net model only adds 0.12%      architecture as regular U-Net on image data. Experimental
+additional parameters but can promote the performance by      results demonstrate that our g-U-Nets achieve performance
+a margin of 2.3%. We believe this negligible increase of      improvements as compared to other GNNs on transductive
+extra parameters will not increase the risk of over-fitting.  learning tasks. To avoid the isolated node problem that may
+Compared to g-U-Nets without gPool or gUnpool layers, the     exist in sampled graphs, we employ the 2nd graph power
+encoder-decoder architecture with our gPool and gUnpool       to improve graph connectivity. Ablation studies indicate
+layers yields significant performance improvement.            the contributions of our graph connectivity augmentation
+                                                              approach.
+Graph U-Nets
+
+Acknowledgments                                                    Fey, M., Eric Lenssen, J., Weichert, F., and Mu¨ller, H.
+                                                                      SplineCNN: Fast geometric deep learning with continu-
+This work was supported in part by National Science Foun-             ous B-spline kernels. In Proceedings of the IEEE Con-
+dation grants IIS-1908166 and IIS-1908198.                            ference on Computer Vision and Pattern Recognition, pp.
+                                                                      869­877, 2018.
+References
+                                                                   Gama, F., Marques, A. G., Leus, G., and Ribeiro, A. Con-
+Badrinarayanan, V., Kendall, A., and Cipolla, R. Segnet: A           volutional neural network architectures for signals sup-
+   deep convolutional encoder-decoder architecture for im-            ported on graphs. IEEE Transactions on Signal Process-
+   age segmentation. IEEE Transactions on Pattern Analysis            ing, 67(4):1034­1049, 2019.
+   & Machine Intelligence, (12):2481­2495, 2017.
+                                                                   Gao, H. and Ji, S. Efficient and invariant convolutional
+Bahdanau, D., Cho, K., and Bengio, Y. Neural machine                  neural networks for dense prediction. In 2017 IEEE
+   translation by jointly learning to align and translate. Inter-    International Conference on Data Mining, pp. 871­876.
+   national Conference on Learning Representations, 2015.             IEEE, 2017.
+
+Borgwardt, K. M., Ong, C. S., Scho¨nauer, S., Vishwanathan,        Gao, H., Wang, Z., and Ji, S. Large-scale learnable graph
+   S., Smola, A. J., and Kriegel, H.-P. Protein function              convolutional networks. In Proceedings of the 24th ACM
+   prediction via graph kernels. Bioinformatics, 21(suppl 1):        SIGKDD International Conference on Knowledge Dis-
+   i47­i56, 2005.                                                     covery & Data Mining, pp. 1416­1424. ACM, 2018.
+
+Bronstein, M. M., Bruna, J., LeCun, Y., Szlam, A., and Van-        Gilmer, J., Schoenholz, S. S., Riley, P. F., Vinyals, O., and
+   dergheynst, P. Geometric deep learning: going beyond               Dahl, G. E. Neural message passing for quantum chem-
+   euclidean data. IEEE Signal Processing Magazine, 34(4):            istry. arXiv preprint arXiv:1704.01212, 2017.
+  18­42, 2017.
+                                                                   Gong, Y., Jia, Y., Leung, T., Toshev, A., and Ioffe, S. Deep
+Bruna, J., Zaremba, W., Szlam, A., and Lecun, Y. Spectral             convolutional ranking for multilabel image annotation. In
+   networks and locally connected networks on graphs. In             Proceedings of the International Conference on Learning
+   International Conference on Learning Representations,             Representations, 2014.
+   2014.
+                                                                   Gori, M., Monfardini, G., and Scarselli, F. A new model for
+Chepuri, S. P. and Leus, G. Subsampling for graph power               learning in graph domains. In 2005 IEEE International
+   spectrum estimation. In Sensor Array and Multichannel             Joint Conference on Neural Networks, volume 2, pp. 729­
+   Signal Processing Workshop, pp. 1­5. IEEE, 2016.                  734, 2005.
+
+C¸ ic¸ek, O¨ ., Abdulkadir, A., Lienkamp, S. S., Brox, T., and     Hamilton, W., Ying, Z., and Leskovec, J. Inductive repre-
+   Ronneberger, O. 3D U-Net: learning dense volumetric                sentation learning on large graphs. In Advances in Neural
+   segmentation from sparse annotation. In International             Information Processing Systems, pp. 1024­1034, 2017.
+   Conference on Medical Image Computing and Computer-
+  Assisted Intervention, pp. 424­432. Springer, 2016.              He, K., Gkioxari, G., Dolla´r, P., and Girshick, R. Mask r-
+                                                                      cnn. IEEE International Conference on Computer Vision,
+Dai, H., Dai, B., and Song, L. Discriminative embeddings of           2017.
+   latent variable models for structured data. In International
+   Conference on Machine Learning, pp. 2702­2711, 2016.            Henaff, M., Bruna, J., and LeCun, Y. Deep convolu-
+                                                                      tional networks on graph-structured data. arXiv preprint
+Defferrard, M., Bresson, X., and Vandergheynst, P. Con-               arXiv:1506.05163, 2015.
+   volutional neural networks on graphs with fast localized
+   spectral filtering. In Advances in Neural Information           Huang, G., Liu, Z., Weinberger, K. Q., and van der Maaten,
+   Processing Systems, pp. 3844­3852, 2016.                           L. Densely connected convolutional networks. IEEE
+                                                                     Conference on Computer Vision and Pattern Recognition,
+Dobson, P. D. and Doig, A. J. Distinguishing enzyme struc-            2017.
+   tures from non-enzymes without alignments. Journal of
+   molecular biology, 330(4):771­783, 2003.                        Isola, P., Zhu, J.-Y., Zhou, T., and Efros, A. A. Image-to-
+                                                                      image translation with conditional adversarial networks.
+Duvenaud, D. K., Maclaurin, D., Iparraguirre, J., Bombarell,          In 2017 IEEE Conference on Computer Vision and Pat-
+   R., Hirzel, T., Aspuru-Guzik, A., and Adams, R. P. Con-            tern Recognition, pp. 5967­5976. IEEE, 2017.
+   volutional networks on graphs for learning molecular fin-
+   gerprints. In Advances in Neural Information Processing
+   Systems, pp. 2224­2232, 2015.
+Graph U-Nets
+
+Je´gou, S., Drozdzal, M., Vazquez, D., Romero, A., and           graph convolutional networks. In European Semantic
+   Bengio, Y. The one hundred layers tiramisu: Fully con-       Web Conference, pp. 593­607. Springer, 2018.
+  volutional densenets for semantic segmentation. In Pro-
+   ceedings of the IEEE Conference on Computer Vision         Sen, P., Namata, G., Bilgic, M., Getoor, L., Galligher, B.,
+   and Pattern Recognition Workshops, pp. 11­19, 2017.           and Eliassi-Rad, T. Collective classification in network
+                                                                 data. AI magazine, 29(3):93, 2008.
+Kalchbrenner, N., Grefenstette, E., and Blunsom, P. A
+   convolutional neural network for modelling sentences.      Simonovsky, M. and Komodakis, N. Dynamic edge-
+   In Proceedings of the 52nd Annual Meeting of the As-          conditioned filters in convolutional neural networks on
+   sociation for Computational Linguistics, volume 1, pp.        graphs. In Proceedings of the IEEE Conference on Com-
+   655­665, 2014.                                                puter Vision and Pattern Recognition, pp. 3693­3702,
+                                                                 2017.
+Kipf, T. N. and Welling, M. Semi-supervised classifica-
+   tion with graph convolutional networks. International      Srivastava, N., Hinton, G., Krizhevsky, A., Sutskever, I.,
+  Conference on Learning Representations, 2017.                  and Salakhutdinov, R. Dropout: A simple way to prevent
+                                                                 neural networks from overfitting. Journal of Machine
+LeCun, Y., Bottou, L., Orr, G. B., and Mu¨ller, K.-R. Effi-     Learning Research, 15(1):1929­1958, 2014.
+   cient backprop. In Neural networks: Tricks of the trade,
+   pp. 9­48. Springer, 2012.                                  Velickovic´, P., Cucurull, G., Casanova, A., Romero, A.,
+                                                                 Lio`, P., and Bengio, Y. Graph attention networks. In
+Long, J., Shelhamer, E., and Darrell, T. Fully convolutional    International Conference on Learning Representations,
+   networks for semantic segmentation. In Proceedings of         2017.
+   the IEEE Conference on Computer Vision and Pattern
+  Recognition, pp. 3431­3440, 2015.                           Yanardag, P. and Vishwanathan, S. A structural smoothing
+                                                                 framework for robust graph comparison. In Advances in
+Monti, F., Boscaini, D., Masci, J., Rodola, E., Svoboda, J.,    Neural Information Processing Systems, pp. 2134­2142,
+   and Bronstein, M. M. Geometric deep learning on graphs        2015.
+   and manifolds using mixture model cnns. In Proceedings
+   of the IEEE Conference on Computer Vision and Pattern      Yang, Z., Cohen, W., and Salakhudinov, R. Revisiting
+  Recognition, pp. 5115­5124, 2017.                              semi-supervised learning with graph embeddings. In
+                                                                International Conference on Machine Learning, pp. 40­
+Niepert, M., Ahmed, M., and Kutzkov, K. Learning con-           48, 2016.
+  volutional neural networks for graphs. In International
+  Conference on Machine Learning, pp. 2014­2023, 2016.        Ying, Z., You, J., Morris, C., Ren, X., Hamilton, W., and
+                                                                 Leskovec, J. Hierarchical graph representation learning
+Noh, H., Hong, S., and Han, B. Learning deconvolution           with differentiable pooling. In Advances in Neural Infor-
+   network for semantic segmentation. In Proceedings of          mation Processing Systems, pp. 4800­4810, 2018.
+   the IEEE International Conference on Computer Vision,
+   pp. 1520­1528, 2015.                                       Yu, F. and Koltun, V. Multi-scale context aggregation by
+                                                                 dilated convolutions. In Proceedings of the International
+Perozzi, B., Al-Rfou, R., and Skiena, S. Deepwalk: Online       Conference on Learning Representations, 2016.
+   learning of social representations. In Proceedings of the
+  20th ACM SIGKDD International Conference on Knowl-          Zhang, M., Cui, Z., Neumann, M., and Chen, Y. An end-to-
+   edge Discovery and Data Mining, pp. 701­710. ACM,             end deep learning architecture for graph classification. In
+   2014.                                                        Thirty-Second AAAI Conference on Artificial Intelligence,
+                                                                 pp. 4438­4445, 2018.
+Ronneberger, O., Fischer, P., and Brox, T. U-net: Convolu-
+   tional networks for biomedical image segmentation. In In-  Zhao, H., Lu, Z., and Poupart, P. Self-adaptive hierarchical
+   ternational Conference on Medical image computing and         sentence model. In Twenty-Fourth International Joint
+   computer-assisted intervention, pp. 234­241. Springer,       Conference on Artificial Intelligence, 2015a.
+   2015.
+                                                              Zhao, J. J., Mathieu, M., Goroshin, R., and LeCun,
+Scarselli, F., Gori, M., Tsoi, A. C., Hagenbuchner, M., and     Y. Stacked what-where auto-encoders. CoRR,
+   Monfardini, G. The graph neural network model. IEEE           abs/1506.02351, 2015b.
+  Transactions on Neural Networks, 20(1):61­80, 2009.
+                                                              Zitnik, M. and Leskovec, J. Predicting multicellular function
+Schlichtkrull, M., Kipf, T. N., Bloem, P., van den Berg, R.,     through multi-layer tissue networks. Bioinformatics, 33
+  Titov, I., and Welling, M. Modeling relational data with      (14):i190­i198, 2017.
+

@@ -1,0 +1,1275 @@
+                                       Towards General Preference Alignment: Diffusion
+                                                     Models at Nash Equilibrium
+
+                                          Jiaming Hu            Jiamu Bai             Haoyu Wang
+                                       Boston University  Penn State University   University at Albany
+                                       jh7453@bu.edu       jvb6867@psu.edu       hwang28@albany.edu
+
+arXiv:2605.04494v1 [cs.LG] 6 May 2026  Debarghya Mukherjee                       Ioannis Ch. Paschalidis
+                                          Boston University                          Boston University
+                                            mdeb@bu.edu                              yannisp@bu.edu
+
+                                                                                   Abstract
+
+                                                 Reinforcement learning from human feedback (RLHF) has been popular for align-
+                                                 ing text-to-image (T2I) diffusion models with human preferences. As a main-
+                                                 stream branch of RLHF, Direct Preference Optimization (DPO) offers a com-
+                                                 putationally efficient alternative that avoids explicit reward modeling and has
+                                                 been widely adopted in diffusion alignment. However, existing preference-based
+                                                 methods for diffusion alignment still rely on reward-induced preference signals
+                                                 and typically assume that human preferences can be adequately modeled by
+                                                 the Bradley­Terry (BT) model, which may fail to capture the full complexity
+                                                 of human preferences. In this paper, we formulate diffusion alignment from a
+                                                 game-theoretic perspective. We propose Diffusion Nash Preference Optimiza-
+                                                 tion (Diff.-NPO), an intuitive general preference framework for diffusion align-
+                                                 ment. Diff.-NPO encourages the current policy to play against itself to achieve
+                                                 self-improvement and lead to a better alignment. Empirically, we demonstrate
+                                                 the effectiveness of Diff.-NPO on the text-to-image generation task via various
+                                                 metrics. Diff.-NPO consistently outperforms existing preference-based diffusion
+                                                 alignment methods.
+
+                                       1 Introduction
+
+                                       Diffusion models have become a dominant framework for text-to-image generation due to their abil-
+                                       ity to produce high-fidelity images that are well aligned with textual descriptions. Representative
+                                       systems such as Stable Diffusion [26, 31], GPT Image 2 [24], and DALL-E 2 [30] exemplify the
+                                       strong generative capability of this class of models. Although large-scale pretraining on web data
+                                       provides a powerful foundation, it does not by itself guarantee outputs that adequately reflect human
+                                       preference. Drawing inspiration from alignment methods developed for large language models, re-
+                                       cent work has adapted preference-based objectives such as DPO to diffusion models [29, 17, 43] ,
+                                       enabling learning from preference data without explicit reward modeling. By incorporating prefer-
+                                       ence signals directly into the optimization process, these methods have demonstrated clear advan-
+                                       tages over standard supervised fine-tuning [35, 42].
+
+                                       Despite these advantages, most existing DPO-style diffusion alignment methods are inherited from
+                                       the RLHF paradigm, where preference learning is often interpreted through an implicit reward in-
+                                       duced by Bradley­Terry [4] or Plackett­Luce (PL)[25] models. We argue that the BT-based prefer-
+                                       ence modeling fails to characterize the complexity of human preferences. Human preferences can
+
+                                          Co-first author.
+
+                                       Preprint.
+be intransitive as in rock­paper­scissors: rock beats scissors, scissors beats paper, and paper beats
+rock. Such cyclic preferences cannot be represented by a single transitive ranking. In contrast, the
+BT model assumes transitivity, implying that if A is preferred to B and B is preferred to C, then A
+must be preferred to C. Therefore, this assumption may not hold across diverse human groups and
+can contradict observed human decision-making [22, 34]. These limitations suggest that, rather than
+first converting human preference into a reward-induced preference function by BT model, it may
+be preferable to directly model and optimize the general preference relation itself.
+
+Motivated by this observation, we propose Diff.-NPO, a diffusion alignment method from the per-
+spective of Nash Learning from Human Feedback (NLHF)[23]. Instead of viewing alignment as
+the maximization of a BT-induced likelihood function[35], Diff.-NPO is derived from a minimax-
+style game in which one policy attempts to generate samples preferred over those of another policy,
+leading to the direct optimization of relative preference probabilities. The quality of a response is
+characterized by its expected preference win rate against samples drawn from the policy itself, as
+judged by the preference function. Thus, responses are favored when they are more likely to be
+preferred over the policy's own typical outputs. Concretely, Diff.-NPO can be interpreted as a game
+between the current policy and the previous policy. The current policy is optimized to increase the
+preference probability assigned to winning samples relative to losing samples, while the previous
+policy serves as an evolving opponent and the reference policy regularizes deviations of the current
+policy from the pretrained distribution. A Nash equilibrium is reached when both players adopt a
+policy  such that no competing policy can achieve a higher win rate over it.
+
+Our objective brings three advantages. First, Diff.-NPO provides a general preference perspec-
+tive on preference alignment. Instead of interpreting pairwise preferences through the combination
+of implicit rewards and BT model, as in standard DPO-style derivations, Diff.-NPO directly opti-
+mizes preference relations. Second, Diff.-NPO yields a self-play alignment objective that connects
+DPO-style alignment and self-play within a unified formulation through the regularization term. In
+particular, different values of the regularization coefficient interpolate between these two regimes.
+Third, Diff.-NPO makes the modeling assumptions behind preference optimization explicit. Under
+our formulation, the objective can be interpreted as fitting a preference-induced target distribution
+constructed from three components: the reference policy, the previous policy, and the preference
+signal. The regularization term determines how much this target distribution relies on the reference
+policy versus the previous policy.
+
+To evaluate the effectiveness of our method, we train Stable Diffusion 1.5 and SDXL on Pick-a-Pic
+[14], a large-scale dataset of real-world human preferences over image pairs. Empirical results show
+that Diff.-NPO consistently improves alignment quality over existing preference-optimization base-
+lines, demonstrating the effectiveness of on-policy Nash-style learning for diffusion model align-
+ment. Our main contributions are as follows:
+
+        · We bridge the gap between NLHF and diffusion model alignment by formulating diffusion
+          alignment as a general preference game that avoids the Bradley­Terry assumption, thereby
+          establishing a foundation for future research on Nash-style learning for diffusion models.
+
+        · We propose Diff.-NPO, a novel on-policy general preference optimization algorithm for
+          diffusion models. Our method unifies standard DPO and self-play paradigms, offering a
+          general perspective for existing on-policy preference optimization methods.
+
+        · We empirically validate the effectiveness of Diff.-NPO on text-to-image tasks. Diff.-NPO
+          achieves stronger alignment with human preferences than existing baselines.
+
+2 Preliminaries
+
+In this section, we introduce the basic background on diffusion models and Nash learning that will
+be used in our method, and defer a broader discussion of related work to Appendix B.
+
+2.1 Diffusion Models
+
+Diffusion models learn a data distribution by reversing a gradual noising process. The forward
+
+process starts from clean data x0  pdata and produces a sequence {xt}Tt=1 by adding Gaussian
+                                                                           t
+noise with a schedule {t}tT=1 such that 0  t  1. Let t := 1 - t and ¯t :=  s=1  s  .  A
+
+                      2
+common forward transition is
+
+                                                        
+                           q(xt | xt-1) = N xt; txt-1, (1 - t)I .                                               (1)
+
+The reverse (denoising) process is parameterized by a neural network  that predicts the noise
+component given a noisy sample xt at timestep t. Instead directly optimizing over p(x0), the
+diffusion model is trained to maximize Evidence Lower Bound (ELBO):
+
+log p(x0)  Eq(x1:T |x0)        log p(x0:T )       = Eq(x1:T |x0)     log  p(xT  )     T    p (xt-1  |   xt)  ,  (2)
+                                   q(x1:T | x0)                                       t=1
+
+                                                                                   T    q(xt  |  xt-1)
+                                                                                   t=1
+
+which can be reduced to minimizing the denoising matching loss,
+
+arg min KL q(xt-1 | xt, x0)  p(xt-1 | xt)            =  arg  min     (1 - t)2         Et,x0,      - (xt, t)22 .
+                                                                  2t2t(1 - ¯t)
+                                                               
+
+where t    U (0, T ), and  t2  =  1-¯t-1  t,  (xt, t)   is the  noise predicted    by the     diffusion  model at
+                                   1-¯t
+
+timestep t, and   N (0, I) is the Gaussian noise added to the image.
+
+2.2 Diffusion Model Alignment with Human Feedback
+
+A common approach for aligning human preference for diffusion models is through DPO. Given a
+prompt c  d0 and a clean image x0  p(· | c) generated by the diffusion model, the standard
+RLHF objective can be written as
+
+           min             -Ep (x0 |c) r(c,  x0)  +   KL(p (x0    |  c)||pref (x0  |  c)),                      (3)
+
+            p
+
+where p and pref are probability distributions of the diffusion model and reference model, and 
+controls the KL-regularization. From ELBO trick in Equation 2 and re-parameterization, the reward
+is calculated as,
+
+           r(c, x0) = Ep(x1:T |x0,c)                 log p(x0:T | c)      +  log Z(c),                          (4)
+                                                         pref (x0:T | c)
+
+where Z(c) is the partition function. With BT model assumption and approximation of the reverse
+process, Wallace et al. [35] get rid of summing over probability from the whole chain and derive
+the objective below,
+
+         LDiff-DPO() = -E(c,x+,x-)D,t log   T (t) ((c, x+, t) - (c, x-, t)) ,
+
+where (c, xt, t) := -  - (xt, c, t)22 -  - ref (xt, c, t)22 can be seen as implicit reward,
+and T is the number of diffusion steps and (t) reweights timestep contributions.
+
+2.3 Nash Learning with Human Feedback
+
+Many preference alignment methods rely on parametric preference models, such as Bradley­Terry,
+that represent pairwise preferences as differences in an underlying reward function[1, 11, 39]. A key
+limitation is that such models impose transitivity and therefore cannot faithfully represent intransi-
+tive preferences that can arise in practice. Instead, we directly work with the general preference
+probability P(x0  x0 | c), and cast policy optimization as a two-player zero-sum game.
+
+Given a prompt distribution d0 and a reference policy pref , for two policies p1 (max-player) and p2
+(min-player) we define
+
+         J (p1, p2) = Ecd0 Ex0p1(·|c), x0p2(·|c) P(x0  x0 | c)
+                                                                                                                    (5)
+
+                                  -  KL p1(· | c)  pref (· | c) +  KL p2(· | c)  pref (· | c) .
+
+where  > 0 controls how strongly both players are regularized toward pref via KL regularization.
+Intuitively, p1 tries to increase its win-rate against p2 while staying close to the reference, and p2
+plays the adversary.
+
+                                                     3
+2.3.1 Nash Policy and Duality Gap
+
+We restrict attention to a policy class P (e.g., policies with the same support as pref ). A Nash
+equilibrium is defined by
+
+                p1, p2  :=         arg max     arg min     J (p1, p2).                 (6)
+
+                                         p1 P        p2 P
+
+In the symmetric setting, the two equilibrium policies coincide, and we denote the unique Nash
+policy by p. For any candidate policy p  P, we measure how close it is to equilibrium via the
+
+duality gap
+
+                DualGap(p) := max J(p1, p) - min J(p, p2).                             (7)
+                                   p1 P                    p2 P
+
+By construction, DualGap(p)  0 and DualGap(p) = 0 if and only if p is a Nash policy. When
+DualGap(p)  , we call p an -approximate Nash policy.
+
+3 NLHF for Diffusion Models
+
+3.1 Overview
+
+Our method draws inspiration from Iterative Nash Policy Optimization (INPO)[50], but replaces
+its fixed-margin regression loss with a pairwise logistic loss that encourages the model to assign a
+higher trajectory likelihood to the preferred image than to the rejected image. To make the Nash
+framework suitable for diffusion alignment, we follow the online mirror descent principle used in
+prior Nash-style alignment methods and derive a self-play objective tailored to diffusion models.
+We denote the policy after s training steps by ps.
+
+3.2 Online Mirror Descent for Nash Policy
+
+Given the preference probability P(x0  x0 | c), define the loss at step s as
+
+s(p) := -Ecd0 Ex0p(x0|c), x0 ps(x0|c) P(x0  x0 | c) +  KL p(x0 | c)  pref (x0 | c)
+        -E E cd0 x0:T p(x0:T |c), x0 :T ps(x0:T |c) P(x0:T  x0:T | c)
+
++  KL p(x0:T | c)  pref (x0:T | c) .                                                   (8)
+
+Here we lift the image-level preference oracle to the reverse trajectory space by assuming that pref-
+
+erences depend only on the final samples. The loss function corresponds to the game objective of the
+max-player with the min-player fixed to the current policy ps. It consists of two parts: the negative
+win rate of p against ps and a KL penalty term that keeps p close to the reference policy pref . A
+natural self-play strategy is to take the best response
+
+                        ps+1 = arg min s(p),                                           (9)
+                                                  pP
+
+that is, the best response to ps. However, this greedy update can be unstable: the new policy ps+1
+may deviate significantly from ps, and such instability can lead to undesirable linear regret [15]. To
+obtain a more stable update, we instead adopt optimistic mirror descent with entropy regularization,
+also known as Hedge [8], and define ps+1 as the minimizer of
+
+                arg min s(ps), p +  KL(p  ps),                                         (10)
+                pP
+
+where  > 0 and
+
+ps(x0:T )s(ps) = -Ex0 :T ps P(x0:T  x0:T ) +                     log ps(x0:T ) + 1  .  (11)
+                                                                     pref (x0:T )
+
+Compared with the greedy update, this objective introduces an additional KL penalty that keeps
+ps+1 close to ps, thereby encouraging a more stable learning dynamic.
+
+                                               4
+3.3 Nash Preference Optimizaton
+
+A closed-form solution of the update implied by the OMD objective can be written in exponential-
+
+weights form; the full derivation is provided in Appendix C.
+
+       ps+1(x0:T | c)  exp    1  P(x0:T               ps   |  c)  pref (x0:T                  ps(x0:T     |  c)1-        ,      (12)
+                                                                                                                   
+                                                                                   | c) 
+
+where P(x0:T  ps | c) = Ex0:T ps(·|c)[P(x0:T  x0:T | c)]. Directly computing the normal-
+ization is intractable, so we optimize pairwise log-ratios. For a response pair (x0:T , x0 :T ), define
+hs(p; c, x0:T , x0:T ) as
+
+  log  p(x0:T   |  c)  - log  pref (x0:T   |  c)       -          log     p(x0:T      |  c)   - log    ps(x0:T     |     c)     . (13)
+       p(x0 :T  |  c)         pref (x0 :T  |  c)    +                     p(x0 :T     |  c)            ps(x0 :T    |     c)       (14)
+
+                                                          
+
+At optimum, hs(ps+1; c, x0:T , x0 :T ) should equal the preference-margin difference:
+
+                hs(ps+1; c, x0:T , x0 :T )       =  P(x0:T        ps   |  c)  - P(x0:T          ps     |  c)
+                                                                                                             .
+
+Equation (14) shows that, at the OMD-induced optimum, hs should match the relative preference ad-
+vantage between two trajectories against the same preference oracle. However, this target is difficult
+
+to compute exactly, as it requires estimating the expected preference of each trajectory against sam-
+
+ples drawn from ps. We therefore use observed preferred­rejected pairs as supervision and optimize
+a pairwise logistic loss based on hs. This loss encourages hs(p; c, x0:T , x0 :T ) to have the correct
+preference direction, serving as a tractable surrogate for matching the ideal preference-advantage
+
+difference in Equation (14). Based on above observation, we define the loss function Ls(p) as
+
+                                                                  log    p(x0:T    |  c)  - log  pref (x0:T        |  c)
+  Ls(p) := E E cd0 x0:T ,x0:T ps(·|c) - log                              p(x0:T    |  c)         pref (x0:T        |  c)
+
+                                                     ( -  )       log     p(x0:T      |   c)  - log       ps(x0:T     |  c)     ,
+                                                  +                       p(x0 :T     |   c)              ps(x0:T     |  c)
+
+                                                          
+
+                                                                                                                                (15)
+
+where 0   /  1. This objective function further clarifies how our method differs from Diffusion-
+
+DPO. Whereas Diffusion-DPO is designed for the offline setting and mainly contrasts the current
+
+policy with the reference policy pref , our method is inherently online and follows a self-play scheme
+in which each update is evaluated against samples generated by the current policy itself. Under this
+
+view, the next policy ps+1 should stay close to both ps and pref , although these two regularization
+effects serve different roles: proximity to ps promotes stable online optimization, while proximity
+to pref acts as an anchor that mitigates reward hacking.
+
+In the above derivation, (x0:T , x0 :T ) denotes a generic pair of trajectories sampled from the previous
+policy. In practice, after sampling such a pair, the preference oracle is used to determine which tra-
+jectory is preferred. We therefore relabel the preferred trajectory as x+0:T and the rejected trajectory
+as x-0:T . For diffusion models, we identify the generic policy p with the trainable reverse process p,
+and write the previous policy from last step as pprev. Following the standard diffusion-DPO reduc-
+
+tion from full-chain likelihoods to per-step reverse transitions, we obtain the final single-timestep
+
+objective, with details deferred to Appendix C.2:
+
+  L - =E Diff. NPO     c,t,x0+ ,x0- pprev (·|c),xt+ ,xt+-1 ,xt- ,x- t-1   - log            log  p (xt+-1        |  x+t ,    c)
+                                                                                                p (xt--1        |  x-t ,    c)
+
+                        log   pref (x+t-1     |  x+t , c)  -  (   -  )        log  pprev (x+t-1     |  xt+, c)        ,         (16)
+                   -          pref (xt--1     |  x-t , c)                          pprev (x-t-1     |  xt-, c)
+
+                      
+
+where t is the time step sampled from U (0, T ). Using Gaussian reparameterization of the reverse
+
+process, the objective can be further written as
+
+L - =E Diff. NPO   c,t,x+ 0 ,x- 0 pprev(·|c),xt{+,-}q(x{t +,-}|x0{+,-})       - log           T (t) (c, xt+, xt-)
+
+                -  /ref (c, xt+, x-t ) - ( -  )/prev(c, xt+, xt-) ,
+
+where  is defined as
+                  (c, x+t , xt-) = - + - (x+t , t, c)22 - - - (xt-, t, c)22 ,
+
+and prev and ref are defined analogously by replacing  with prev and ref , respectively. The full
+algorithm for Diff.-NPO can be found in Algorithm 1 in Appendix A.
+
+                                                           5
+3.4 Theoretical Insights
+
+In this section, we provide an interpretation of our objective through a preference-induced condi-
+tional distribution. Inspired by the form of guidance-based methods, we consider the following
+target distribution:
+
+p (x0:T | c)  pref (x0:T | c) pprev(x0:T | c)1- p(y | x0:T , c)1/ ,                          (17)
+
+where  denotes the ideal target policy induced by the conditional distribution p(y | x0:T , c), and
+y is a latent variable representing the preference outcome. For simplicity we set  =  /. The term
+
+p(y | x0:T , c) captures how likely a sample is preferred under the oracle. Since directly accessing
+p(y | x0:T , c) is intractable, we instead optimize relative preference likelihoods. Connecting this
+assumption with our training objective, we obtain:
+
+LDiff.-NPO = - E(c,x+ 0:T ,x0-:T )D
+
+- log                     log  p (x+0:T  |c)  -       log  pref (x0+:T |c)  +  (1  -  ) log  pprev(x0+:T |c)  .
+                               p (x0-:T  |c)               pref (x-0:T |c)                   pprev(x0-:T |c)
+
+By absorbing normalization constants into the definition of p(y | ·), we can express the objective as:
+
+LDiff.-NPO = -E log  log p(y | x+0:T , c) - log p(y | x0-:T , c) .                           (18)
+
+A Unified View of Preference Optimization. Equation 18 reveals that a wide class of preference
+optimization methods--including DPO, self-play methods, and our approach--can be viewed as
+optimizing the same fundamental pairwise logistic objective. The objective encourages the model to
+assign a larger preference-induced likelihood to the preferred sample than to the dispreferred sample.
+This view also provides a useful interpretation of . In standard RLHF,  is usually introduced as the
+coefficient of the KL regularization term. Under our formulation,  can be interpreted as controlling
+the strength of the preference-induced conditional distribution in Equation 17.
+
+The key distinction among these methods therefore lies not only in the loss form, but in how the
+implicit target distribution is modeled. When  = 1, Equation 17 reduces to
+
+                              p (x0:T | c)  pref (x0:T | c)p(y | x0:T , c)1/,
+
+which corresponds to the Diffusion-DPO-style assumption: the target distribution is obtained by
+preference-conditioning the reference policy. While this provides a stable anchor, it may limit
+learning because all improvement is measured relative to a fixed reference model. When  = 0,
+Equation 17 instead becomes
+
+                             p (x0:T | c)  pprev(x0:T | c)p(y | x0:T , c)1/,
+
+which corresponds to a pure self-play update. This forces each iteration to move beyond the previ-
+ous policy and can provide a stronger online learning signal. However, without the reference policy
+as an anchor, the model may drift away from the pretrained distribution and become unstable. Our
+objective interpolates between these two extremes. The reference policy provides a stable distribu-
+tional anchor, while the previous policy introduces an online self-improvement signal. As a result,
+the model is not restricted to merely improving over the fixed reference, nor is it forced into uncon-
+strained self-play at every step. This interpolation mitigates the two-sided failure mode of pure DPO
+and pure self-play, yielding a more stable and expressive preference-induced target distribution.
+
+Why Square Loss in INPO is Unstable. INPO-style objectives [50] justify the squared loss un-
+der a specific population assumption: after sampling a pair x, x  ps, the ordered pair (x+, x-) is
+drawn from the preference distribution p(x, x), i.e., (x, x) is selected with probability P(x  x)
+and (x, x) with probability 1-P(x  x). However, in most practical implementations, ordered
+
+preference pairs are constructed by querying an oracle or a reward model on the two samples and
+assigning the higher-scored sample as x+ and the lower-scored sample as x-. Thus, the observed
+
+pair is deterministically ordered by the oracle score, rather than sampled according to the proba-
+
+bilistic preference distribution p. In our online diffusion setting, this discrepancy is more explicit:
+we generate multiple candidate images, rank them using the preference oracle, and select the best-
+ranked image as x+ and the worst-ranked image as x-. Since these ordered pairs do not follow the
+
+preference distribution assumption, directly applying the squared surrogate becomes less natural for
+
+our data construction. We empirically validate this behavior in Section 4.3.
+
+                                                   6
+Table 1: SD1.5 win-rate and metric results for Diff.-NPO compared with other baselines. Win rates
+are vs. original SD1.5. The yellow-highlighted rows indicate our method. For each column, the best
+result is shown in bold, and the second-best result is underlined.
+
+Dataset Method                 SD1.5 Winrate (%)                         SD1.5 Metrics 
+
+                        PS HPS CLIP IM AES Avg PS HPS CLIP IM AES
+
+            Original    ­ ­ ­ ­ ­ ­ 20.68 26.74 33.23                                  0.0495  5.5060
+                                                                                       0.1555  5.5942
+            Online-SFT 40.44 46.60 54.96 53.24 59.28 50.90 20.51 26.64 33.97           0.6861  5.7498
+                                                                                       0.5381  5.8106
+Pick-a-Pic  Online-DPO  77.40  82.48  59.96  81.00  73.36  74.84  21.26  27.79  34.62  0.4461  5.9669
+            Seppo       82.68  84.52  55.04  75.32  80.56  75.62  21.40  27.80  33.93  0.8896  5.8773
+                                                                                       0.1926  5.3592
+            SPIN        81.32 77.36 44.68 69.88 85.36 71.72 21.43 27.65 32.54          0.3366  5.4508
+                                                                                       0.6699  5.5266
+            Diff.-NPO 81.60 84.64 60.32 85.12 80.76 78.49 21.48 28.02 34.61            0.5143  5.5904
+                                                                                       0.4014  5.7324
+            Original    ­ ­ ­ ­ ­ ­ 21.53 27.44 33.15                                  0.7966  5.6231
+                                                                                       0.0727  5.5725
+            Online-SFT 38.88 45.24 55.10 54.18 59.83 50.65 21.35 27.37 33.84           0.2053  5.6453
+                                                                                       0.7092  5.8203
+Parti- Online-DPO 71.43 78.42 56.38 74.73 74.73 71.14 21.95 28.31 34.09                0.6121  5.9132
+                                                                                       0.5027  6.0577
+Prompts Seppo           73.97 77.59 50.44 68.58 75.56 69.23 21.97 28.24 33.43          0.8761  5.8957
+
+            SPIN        72.73 72.34 39.01 62.34 81.92 65.67 21.98 28.15 31.98
+
+            Diff.-NPO 74.76 79.70 54.74 77.04 76.96 72.64 22.07 28.49 34.07
+
+            Original    ­ ­ ­ ­ ­ ­ 21.05 27.08 35.43
+
+            Online-SFT 40.25 48.70 50.25 55.15 57.95 50.46 21.27 27.06 35.53
+
+HPSV2       Online-DPO 80.70 85.10 59.20 80.35 73.80 75.83 21.75 28.21 36.51
+
+            Seppo       83.75 85.75 54.10 77.80 81.80 76.64 21.88 28.27 35.99
+
+            SPIN        81.70 80.65 44.65 71.10 87.25 73.07 21.92 28.20 34.69
+
+            Diff.-NPO 83.15 87.75 60.05 83.90 79.45 78.86 21.96 28.53 36.65
+
+4 Experiments
+
+4.1 Experiment Setup
+
+Models, datasets, baselines, and evaluation metrics. We fine-tune two text-to-image diffusion
+backbones, Stable Diffusion 1.5 (SD1.5) and SDXL. The prompts of training data are drawn from
+the Pick-a-Pic v1 preference dataset [14]. We use prompts from the Pick-a-Pic test split [14],
+Parti-Prompts [46], and HPSV2 [38] for testing. We compare against several representative base-
+lines, including online SFT trained on preferred images, online Diffusion-DPO [35], SPIN [47] and
+SEPPO [49], together with the original pretrained SD1.5 and SDXL models. We use the public avail-
+able checkpoints for SPIN2 and SEPPO3 for evaluation. For text-to-image alignment task, we adopt
+five widely used automatic metrics: PickScore [14], HPSV2 [38], CLIP [28], Aesthetic Score [32],
+and ImageReward [40], and compare the metric scores and winrates among different methods. More
+details are provided in Appendix D.
+
+Online Generation and Preference Oracle. During online generation, we use 10 inference steps
+for efficiency, following prior work showing that a small number of denoising steps has little impact
+on optimization performance [52, 21]. For each prompt, we generate 8 candidate images and use
+automatic preference oracles to construct preference pairs. Specifically, we evaluate each candi-
+date using five scoring models: PickScore [14], HPSV2 [38], CLIP [28], Aesthetic Score [32], and
+ImageReward [40]. For each oracle, we rank the 8 candidates according to their scores, and then
+compute the average rank across the five oracles as the final preference score. The candidate with
+the best average rank is selected as the positive sample, while the candidate with the worst average
+rank is selected as the negative sample.
+
+4.2 General Evaluation: Text-to-Image Alignment
+
+We report text-to-image generation results on SD1.5 and SDXL in Tables 1 and 2. Diff.-NPO
+achieves the highest average win rate on every evaluation dataset across both SD1.5 and SDXL,
+showing consistent gains over the pairwise Online-Diff-DPO baseline. The improvement is par-
+ticularly strong on SDXL, where Diff.-NPO improves the average win rate by 7.0% relatively on
+Parti-Prompts and remains the best method on Pick-a-Pic and HPSV2.
+
+    2https://huggingface.co/UCLA-AGI/SPIN-Diffusion-iter3
+    3https://huggingface.co/DwanZhang/SePPO
+
+                                                           7
+Table 2: SDXL win-rate and automatic metric results for Diff.-NPO compared with other baselines.
+Win rates are vs. original SDXL. Yellow rows indicate our method. Best is in bold; second-best is
+underlined.
+
+Dataset Method                                             SDXL Winrate (%)                                    SDXL Metrics 
+
+                                     PS HPS CLIP IM AES Avg PS HPS CLIP IM AES
+
+                     Original        ­                    ­      ­­                          ­      ­ 22.06    22.71  36.38  0.5562  6.0735
+                                                        38.00  57.84 53.36                 37.40  43.09 21.72  27.46  37.15  0.6539  5.9530
+Pick-a-Pic           Online-SFT      28.84              81.92  56.16 85.32                 65.64  74.22 22.71  28.57  37.05  1.1247  6.2686
+                     Online-DPO      82.08              86.12  55.12 89.56                 74.96  77.68 22.78  28.85  37.01  1.2599  6.4294
+                                                                                                               28.00  35.23  0.6003  5.7438
+                     Diff.-NPO 82.64                      ­      ­­                          ­      ­ 22.51    27.68  35.86  0.6976  5.6925
+                                                        36.02  54.42 51.38                 44.13  43.23 22.21  28.85  35.26  1.0427  6.0486
+                     Original        ­                  77.98  47.32 79.88                 76.74  72.01 23.07  29.18  35.34  1.2505  6.2496
+                                                        84.88  45.81 86.73                 85.04  77.02 23.26  28.18  38.64  0.7526  6.1155
+Parti- Online-SFT 30.21                                                                                        27.84  38.62  0.7715  6.0088
+                                                          ­      ­­                          ­      ­ 22.75    29.17  38.92  1.2205  6.3367
+Prompts Online-DPO 78.14                                34.70  48.20 47.25                 35.75  37.55 22.25  29.42  38.75  1.3319  6.4344
+                                                        84.75  52.65 83.35                 70.55  75.22 23.46
+                     Diff.-NPO 82.66                    88.60  50.69 88.60                 75.10  77.33 23.49
+
+                     Original        ­
+
+HPSV2                Online-SFT 21.85
+                     Online-DPO 84.80
+
+                     Diff.-NPO 83.65
+
+The advantage of Diff.-NPO is most evident on preference-oriented metrics. On SDXL Parti-
+Prompts, Diff.-NPO improves the ImageReward win rate from 79.88 to 86.73 and the AES win
+rate from 76.74 to 85.04, corresponding to relative improvements of 8.6% and 10.8% over Online-
+Diff-DPO, respectively. In contrast, SFT is unstable and often performs worse than the original
+SDXL model, with average win rates below 50%. This is likely because SFT is trained directly
+on images generated with only 10 inference steps, which are often low quality, whereas RL-based
+methods such as Diff.-NPO can leverage both positive and negative samples to improve even from
+poor initial generations. Figure 2 presents qualitative comparisons between Diff.-NPO and the base-
+lines after fine-tuning SDXL. Across diverse prompt types, including objects, human faces, multiple
+people, and full-body portraits, Diff.-NPO consistently produces images with more coherent and
+appealing visual quality. In particular, for the prompt "full length portrait of a beautiful woman",
+Diff.-NPO better preserves anatomical details and generates clearer, more realistic full-body struc-
+tures compared with the baselines. Qualitative results for SD1.5 and additional SDXL examples are
+provided in Figure 5 and Figure 4, respectively, in Appendix F.
+
+           90               / =0                     // = 1/3               / = 8/9               Table 3: Ablation study of different  /
+           80               / = 1/9                     =  1/2              8/5.=12183.68         settings on Pick-a-Pic for SD1.5, evalu-
+                                                                                                  ated using automatic metrics.
+                            76.92 81.60 80.40 77.40           81.24  81.28                 81.00
+                                                                                                   / PS  HPS  CLIP  IM  AES 
+Winrate (%)          73.28                              69.52                                     1 21.26 27.79 34.62 0.6861 5.7498
+                                                                                                  8/9 21.40 27.92 34.59 0.8001 5.7854
+           70                                                                                     1/2 21.48 28.02 34.61 0.8896 5.8773
+                                                                                                  1/3 21.34 27.76 33.97 0.7817 5.7916
+           60 57.56                                                                               1/9 21.29 27.89 34.12 0.8098 5.9041
+                                                                                                  0 20.87 27.41 33.78 0.4875 5.7541
+50                          PS (%)                                   IM (%)
+
+Figure 1: Winrates of different  / values for PickScore
+
+and ImageReward. Full results in Figure 3, Ap-
+
+pendix E.1.
+
+4.3 Ablation Studies
+
+Impact of different  / regularization Coefficient. We study the effect of the regularization ratio
+ /, which controls the relative strength of the reference-policy and previous-policy regularization
+terms. When  / = 1, the objective only regularizes toward the reference policy and reduces to
+the DPO-style setting; when  / = 0, the objective only regularizes toward the previous policy,
+corresponding to a pure self-play update. Table 3 reports the automatic metric scores under different
+ / values, while Figure 1 visualizes the win-rate comparison on PickScore and ImageReward. The
+full win-rate comparison across all five metrics is provided in Figure 3 in Appendix E.1. We observe
+a clear increase-then-decrease trend as  / varies from 0 to 1, with the best overall performance
+achieved at an intermediate value. This suggests that relying solely on either the reference policy
+
+                                                                                     8
+                      sill life photo of a                a closeup photo of a full length portrait of
+                             apple
+           Sunflower                        Family Photo     human hand a beautiful woman
+
+Original
+   SDXL
+
+Online
+   SFT
+
+Online
+   DPO
+
+Diff.-NPO
+
+Figure 2: Qualitative comparison on SDXL across six representative prompts. Rows correspond to
+the original SDXL model, SFT, Online DPO, and Diff.-NPO. Compared with the baselines, Diff.-
+NPO produces images that are generally more realistic, semantically faithful, and visually coherent.
+
+or the previous policy is suboptimal, and highlights the importance of jointly using both policies to
+provide stable and effective regularization.
+
+Impact of the objective design. We further study the im-     Table 4: Results on the objective design,
+portance of the pairwise-logistic objective (PL), log (·),   comparing the squared distance objec-
+by comparing it with the squared distance (SD) used in       tive (SD) with the pairwise-logistic ob-
+INPO-style objectives. As discussed in Section 3.4, the      jective (PL) used in Diff.-NPO.
+squared distance objective relies on a preference distribu-
+tion assumption, whereas practical implementations of-               Win Rate (%) on Pick-a-Pic
+ten construct pairs by deterministically ranking generated
+samples with an oracle. Table 4 shows that replacing the      Obj. PS  HPS  CLIP  IM  AES 
+pairwise-logistic objective with squared distance leads to
+a substantial performance drop on win-rate evaluations,       SD 60.80 74.60 54.80 70.20 71.60
+which supports our design of using the pairwise-logistic      PL 81.60 84.64 60.32 85.12 80.76
+objective, which ensures stable optimization.
+
+5 Conclusion
+
+In this paper, we proposed Diffusion Nash Preference Optimization (Diff.-NPO), a general prefer-
+ence optimization framework for diffusion models derived from a nash learning perspective. By di-
+rectly optimizing relative preference probabilities through a self-play-style objective with reference-
+policy regularization, Diff.-NPO provides a simple and stable approach to online diffusion align-
+ment. Experiments on Stable Diffusion 1.5 and SDXL across Pick-a-Pic, Parti-Prompts, and HPSV2
+show that Diff.-NPO consistently improves alignment over strong preference-optimization base-
+lines. These results suggest that Nash-style online learning is a promising alternative to reward-
+centric formulations for diffusion-model alignment. One limitation of the current study is that our
+average-rank preference construction relies on five scoring models, and incorporating a broader set
+of scoring models may provide a more comprehensive preference signal. In future work, we plan to
+
+                                            9
+extend this framework to stronger online data-collection strategies, and broader diffusion generation
+and editing tasks.
+
+References
+
+ [1] Michiel Bakker, Martin Chadwick, Hannah Sheahan, Michael Tessler, Lucy Campbell-
+      Gillingham, Jan Balaguer, Nat McAleese, Amelia Glaese, John Aslanides, Matt Botvinick,
+      et al. Fine-tuning language models to find agreement among humans with diverse preferences.
+      Advances in neural information processing systems, 35:38176­38189, 2022.
+
+ [2] James Betker, Gabriel Goh, Li Jing, Tim Brooks, Jianfeng Wang, Linjie Li, Long Ouyang,
+      Juntang Zhuang, Joyce Lee, Yufei Guo, et al. Improving image generation with better captions.
+      Computer Science. https://cdn. openai. com/papers/dall-e-3. pdf, 2(3):8, 2023.
+
+ [3] Kevin Black, Michael Janner, Yilun Du, Ilya Kostrikov, and Sergey Levine. Training diffusion
+      models with reinforcement learning. arXiv preprint arXiv:2305.13301, 2023.
+
+ [4] Ralph Allan Bradley and Milton E Terry. Rank analysis of incomplete block designs: I. the
+      method of paired comparisons. Biometrika, 39(3/4):324­345, 1952.
+
+ [5] Kevin Clark, Paul Vicol, Kevin Swersky, and David J Fleet. Directly fine-tuning diffusion
+      models on differentiable rewards. arXiv preprint arXiv:2309.17400, 2023.
+
+ [6] Xiaoliang Dai, Ji Hou, Chih-Yao Ma, Sam Tsai, Jialiang Wang, Rui Wang, Peizhao Zhang,
+      Simon Vandenhende, Xiaofang Wang, Abhimanyu Dubey, et al. Emu: Enhancing image gen-
+      eration models using photogenic needles in a haystack. arXiv preprint arXiv:2309.15807,
+      2023.
+
+ [7] Ying Fan, Olivia Watkins, Yuqing Du, Hao Liu, Moonkyung Ryu, Craig Boutilier, Pieter
+      Abbeel, Mohammad Ghavamzadeh, Kangwook Lee, and Kimin Lee. Dpok: Reinforcement
+      learning for fine-tuning text-to-image diffusion models. Advances in Neural Information Pro-
+      cessing Systems, 36:79858­79885, 2023.
+
+ [8] Yoav Freund and Robert E Schapire. A decision-theoretic generalization of on-line learning
+      and an application to boosting. Journal of computer and system sciences, 55(1):119­139, 1997.
+
+ [9] Yi Gu, Zhendong Wang, Yueqin Yin, Yujia Xie, and Mingyuan Zhou. Diffusion-rpo: Aligning
+      diffusion models through relative preference optimization. arXiv preprint arXiv:2406.06382,
+      2024.
+
+[10] Xiaoxuan He, Siming Fu, Wanli Li, Zhiyuan Li, Dacheng Yin, Kang Rong, Fengyun Rao, and
+      Bo Zhang. Sail: Self-amplified iterative learning for diffusion model alignment with minimal
+      human feedback. arXiv preprint arXiv:2602.05380, 2026.
+
+[11] Daniel R Jiang, Alex Nikulkov, Yu-Chia Chen, Yang Bai, and Zheqing Zhu. Improving gen-
+      erative ad text on facebook using reinforcement learning. arXiv preprint arXiv:2507.21983,
+      2025.
+
+[12] Luozhijie Jin, Zijie Qiu, Jie Liu, Zijie Diao, Lifeng Qiao, Ning Ding, Alex Lamb, and Xipeng
+      Qiu. Inference-time alignment control for diffusion models with reinforcement learning guid-
+      ance. arXiv preprint arXiv:2508.21016, 2025.
+
+[13] Sunwoo Kim, Minkyu Kim, and Dongmin Park. Test-time alignment of diffusion models
+      without reward over-optimization. In The Thirteenth International Conference on Learning
+      Representations.
+
+[14] Yuval Kirstain, Adam Polyak, Uriel Singer, Shahbuland Matiana, Joe Penna, and Omer Levy.
+      Pick-a-pic: An open dataset of user preferences for text-to-image generation, 2023. URL
+      https://arxiv.org/abs/2305.01569.
+
+[15] Tor Lattimore and Csaba Szepesva´ri. Bandit algorithms. Cambridge University Press, 2020.
+
+                                                          10
+[16] Kyungmin Lee, Xiahong Li, Qifei Wang, Junfeng He, Junjie Ke, Ming-Hsuan Yang, Irfan
+      Essa, Jinwoo Shin, Feng Yang, and Yinxiao Li. Calibrated multi-preference optimization for
+      aligning diffusion models. In Proceedings of the Computer Vision and Pattern Recognition
+      Conference, pages 18465­18475, 2025.
+
+[17] Shufan Li, Konstantinos Kallidromitis, Akash Gokul, Yusuke Kato, and Kazuki Kozuka.
+      Aligning diffusion models by optimizing human utility. Advances in Neural Information Pro-
+      cessing Systems, 37:24897­24925, 2024.
+
+[18] Yuming Li, Qingyu Li, Chengyu Bai, Xiangyang Luo, Zeyue Xue, Wenyu Qin, Meng Wang,
+      Yikai Wang, and Shanghang Zhang. Aegpo: Adaptive entropy-guided policy optimization for
+      diffusion models. arXiv preprint arXiv:2602.06825, 2026.
+
+[19] Zongjian Li, Zheyuan Liu, Qihui Zhang, Bin Lin, Feize Wu, Shenghai Yuan, Zhiyuan Yan,
+      Yang Ye, Wangbo Yu, Yuwei Niu, et al. Uniworld-v2: Reinforce image editing with diffu-
+      sion negative-aware finetuning and mllm implicit feedback. arXiv preprint arXiv:2510.16888,
+      2025.
+
+[20] Zhanhao Liang, Yuhui Yuan, Shuyang Gu, Bohan Chen, Tiankai Hang, Ji Li, and Liang Zheng.
+      Step-aware preference optimization: Aligning preference with denoising performance at each
+      step. arXiv preprint arXiv:2406.04314, 2(5):7, 2024.
+
+[21] Jie Liu, Gongye Liu, Jiajun Liang, Yangguang Li, Jiaheng Liu, Xintao Wang, Pengfei Wan,
+      Di Zhang, and Wanli Ouyang. Flow-grpo: Training flow matching models via online rl. arXiv
+      preprint arXiv:2505.05470, 2025.
+
+[22] Kenneth O May. Intransitivity, utility, and the aggregation of preference patterns. Economet-
+      rica: Journal of the Econometric Society, pages 1­13, 1954.
+
+[23] Re´mi Munos, Michal Valko, Daniele Calandriello, Mohammad Gheshlaghi Azar, Mark Row-
+      land, Zhaohan Daniel Guo, Yunhao Tang, Matthieu Geist, Thomas Mesnard, Co^me Fiegel,
+      et al. Nash learning from human feedback. In Forty-first International Conference on Machine
+      Learning, 2024.
+
+[24] OpenAI. GPT Image 2. https://developers.openai.com/api/docs/models/
+      gpt-image-2, 2026. Accessed: 2026-04-29.
+
+[25] Robin L Plackett. The analysis of permutations. Journal of the Royal Statistical Society Series
+      C: Applied Statistics, 24(2):193­202, 1975.
+
+[26] Dustin Podell, Zion English, Kyle Lacey, Andreas Blattmann, Tim Dockhorn, Jonas Mu¨ller,
+      Joe Penna, and Robin Rombach. Sdxl: Improving latent diffusion models for high-resolution
+      image synthesis. arXiv preprint arXiv:2307.01952, 2023.
+
+[27] Mihir Prabhudesai, Anirudh Goyal, Deepak Pathak, and Katerina Fragkiadaki. Aligning text-
+      to-image diffusion models with reward backpropagation. 2023.
+
+[28] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya Ramesh, Gabriel Goh, Sandhini Agar-
+      wal, Girish Sastry, Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learning transferable
+      visual models from natural language supervision. In International conference on machine
+      learning, pages 8748­8763. PmLR, 2021.
+
+[29] Rafael Rafailov, Archit Sharma, Eric Mitchell, Stefano Ermon, Christopher D. Manning, and
+      Chelsea Finn. Direct preference optimization: Your language model is secretly a reward model,
+      2024. URL https://arxiv.org/abs/2305.18290.
+
+[30] Aditya Ramesh, Prafulla Dhariwal, Alex Nichol, Casey Chu, and Mark Chen. Hierarchical
+      text-conditional image generation with clip latents. arXiv preprint arXiv:2204.06125, 1(2):3,
+      2022.
+
+[31] Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Bjo¨rn Ommer.
+      High-resolution image synthesis with latent diffusion models. In Proceedings of the IEEE/CVF
+      conference on computer vision and pattern recognition, pages 10684­10695, 2022.
+
+                                                          11
+[32] Christoph Schuhmann. Laion-aesthetics. https://laion.ai/blog/laion-aesthetics/,
+      2022.
+
+[33] Zhiwei Tang, Jiangweizhi Peng, Jiasheng Tang, Mingyi Hong, Fan Wang, and Tsung-Hui
+      Chang. Tuning-free alignment of diffusion models with direct noise optimization. In ICML
+      2024 Workshop on Structured Probabilistic Inference {\&} Generative Modeling, 2024.
+
+[34] Amos Tversky. Intransitivity of preferences. Psychological Review, 76(1):31­48, 1969. doi:
+      10.1037/h0026750.
+
+[35] Bram Wallace, Meihua Dang, Rafael Rafailov, Linqi Zhou, Aaron Lou, Senthil Purushwalkam,
+      Stefano Ermon, Caiming Xiong, Shafiq Joty, and Nikhil Naik. Diffusion model alignment us-
+      ing direct preference optimization. In Proceedings of the IEEE/CVF Conference on Computer
+      Vision and Pattern Recognition, pages 8228­8238, 2024.
+
+[36] Fu-Yun Wang, Yunhao Shui, Jingtan Piao, Keqiang Sun, and Hongsheng Li. Diffusion-npo:
+      Negative preference optimization for better preference aligned generation of diffusion models.
+      arXiv preprint arXiv:2505.11245, 2025.
+
+[37] Fang Wu, Xu Huang, Weihao Xuan, Zhiwei Zhang, Yijia Xiao, Guancheng Wan, Xiaomin Li,
+      Bing Hu, Peng Xia, Jure Leskovec, and Yejin Choi. Multiplayer nash preference optimization,
+      2026. URL https://arxiv.org/abs/2509.23102.
+
+[38] Xiaoshi Wu, Yiming Hao, Keqiang Sun, Yixiong Chen, Feng Zhu, Rui Zhao, and Hongsheng
+      Li. Human preference score v2: A solid benchmark for evaluating human preferences of text-
+      to-image synthesis, 2023. URL https://arxiv.org/abs/2306.09341.
+
+[39] Xun Wu, Shaohan Huang, Lingjie Jiang, and Furu Wei. Rethinking dpo-style diffusion aligning
+      frameworks. In Proceedings of the IEEE/CVF International Conference on Computer Vision,
+      pages 18068­18077, 2025.
+
+[40] Jiazheng Xu, Xiao Liu, Yuchen Wu, Yuxuan Tong, Qinkai Li, Ming Ding, Jie Tang, and Yuxiao
+      Dong. Imagereward: Learning and evaluating human preferences for text-to-image generation.
+      Advances in Neural Information Processing Systems, 36:15903­15935, 2023.
+
+[41] Zeyue Xue, Jie Wu, Yu Gao, Fangyuan Kong, Lingting Zhu, Mengzhao Chen, Zhiheng Liu,
+      Wei Liu, Qiushan Guo, Weilin Huang, et al. Dancegrpo: Unleashing grpo on visual generation.
+      arXiv preprint arXiv:2505.07818, 2025.
+
+[42] Kai Yang, Jian Tao, Jiafei Lyu, Chunjiang Ge, Jiaxin Chen, Weihan Shen, Xiaolong Zhu, and
+      Xiu Li. Using human feedback to fine-tune diffusion models without any reward model. In
+      Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages
+      8941­8951, 2024.
+
+[43] Kai Yang, Jian Tao, Jiafei Lyu, Chunjiang Ge, Jiaxin Chen, Weihan Shen, Xiaolong Zhu, and
+      Xiu Li. Using human feedback to fine-tune diffusion models without any reward model. In
+      Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pages
+      8941­8951, 2024.
+
+[44] Po-Hung Yeh, Kuang-Huei Lee, and Jun-Cheng Chen. Training-free diffusion model align-
+      ment with sampling demons. arXiv preprint arXiv:2410.05760, 2024.
+
+[45] Jiahui Yu, Yuanzhong Xu, Jing Yu Koh, Thang Luong, Gunjan Baid, Zirui Wang, Vijay Va-
+      sudevan, Alexander Ku, Yinfei Yang, Burcu Karagol Ayan, Ben Hutchinson, Wei Han, Zarana
+      Parekh, Xin Li, Han Zhang, Jason Baldridge, and Yonghui Wu. Scaling autoregressive mod-
+      els for content-rich text-to-image generation, 2022. URL https://arxiv.org/abs/2206.
+      10789.
+
+[46] Jiahui Yu, Yuanzhong Xu, Jing Yu Koh, Thang Luong, Gunjan Baid, Zirui Wang, Vijay Va-
+      sudevan, Alexander Ku, Yinfei Yang, Burcu Karagol Ayan, et al. Scaling autoregressive models
+      for content-rich text-to-image generation. arXiv preprint arXiv:2206.10789, 2(3):5, 2022.
+
+                                                          12
+[47] Huizhuo Yuan, Zixiang Chen, Kaixuan Ji, and Quanquan Gu. Self-play fine-tuning of diffusion
+      models for text-to-image generation. Advances in Neural Information Processing Systems, 37:
+      73366­73398, 2024.
+
+[48] Kevin Zhai, Utsav Singh, Anirudh Thatipelli, Souradip Chakraborty, Anit Kumar Sahu, Furong
+      Huang, Amrit Singh Bedi, and Mubarak Shah. Mira: Towards mitigating reward hacking in
+      inference-time alignment of t2i diffusion models. arXiv preprint arXiv:2510.01549, 2025.
+
+[49] Daoan Zhang, Guangchen Lan, Dong-Jun Han, Wenlin Yao, Xiaoman Pan, Hongming Zhang,
+      Mingxiao Li, Dong Yu, Christopher Brinton, Jiebo Luo, et al. Seppo: Semi-policy preference
+      optimization for diffusion alignment. 2024.
+
+[50] Yuheng Zhang, Dian Yu, Baolin Peng, Linfeng Song, Ye Tian, Mingyue Huo, Nan Jiang,
+      Haitao Mi, and Dong Yu. Iterative nash policy optimization: Aligning llms with general pref-
+      erences via no-regret learning. arXiv preprint arXiv:2407.00617, 2024.
+
+[51] Yuheng Zhang, Dian Yu, Tao Ge, Linfeng Song, Zhichen Zeng, Haitao Mi, Nan Jiang, and
+      Dong Yu. Improving llm general preference alignment via optimistic online mirror descent.
+      arXiv preprint arXiv:2502.16852, 2025.
+
+[52] Kaiwen Zheng, Huayu Chen, Haotian Ye, Haoxiang Wang, Qinsheng Zhang, Kai Jiang, Hang
+      Su, Stefano Ermon, Jun Zhu, and Ming-Yu Liu. Diffusionnft: Online diffusion reinforcement
+      with forward process. arXiv preprint arXiv:2509.16117, 2025.
+
+[53] Runlong Zhou, Maryam Fazel, and Simon S Du. Extragradient preference optimization (egpo):
+      Beyond last-iterate convergence for nash learning from human feedback. arXiv preprint
+      arXiv:2503.08942, 2025.
+
+[54] Huaisheng Zhu, Teng Xiao, and Vasant G Honavar. Dspo: Direct score preference optimization
+      for diffusion model alignment. International Conference on Learning Representations (ICLR
+      2025), 2025.
+
+                                                          13
+A Diff.-NPO Pseudo-code
+
+The Pseudo-code of Diff.-NPO is shown in Algorithm 1.
+
+Algorithm 1 Diffusion-NPO
+ 1: Input: steps S, KL regularization  , OMD parameter , reference policy pref , prompts c  d0
+ 2: Initialize p1  pref
+ 3: for s = 1, 2, . . . , S do
+ 4: Sample a minibatch of prompts {c(i)}ni=1  d0
+ 5: For each c(i), draw a batch of size k, denoted by (x(1i), . . . , x(ki))  ps(· | c(i))
+ 6: Query the average ranking oracle to obtain scores (r1(i), . . . , rk(i)) for (x(1i), . . . , x(ki))
+ 7: Rank the samples by their oracle scores and set
+          x+,(i)  arg maxx(ji) rj(i) and x-,(i)  arg minx(ji) rj(i)
+ 8: Form the preference pairs {(c(i), x+,(i), x-,(i))}ni=1
+ 9: Update the diffusion policy by minimizing the loss with objective as equation 16:
+          ps+1  arg min LDiff.-NPO
+
+                                     pP
+
+10: Implement soft update for the target policy:
+          ps+1  ps + (1 - )ps+1 where  = min(0.001  s, 0.5)
+
+11: end for
+12: Output: pS+1
+
+B Related Work
+
+B.1 Nash Learning with Human Feedback
+
+In the Nash learning with human feedback paradigm, a well-aligned policy is viewed as an opti-
+mal strategy that cannot be exploited by competing policies, thereby achieving strategic optimality
+rather than mere mediocrity. NLHF[23] first introduced this game-theoretic perspective by for-
+mulating preference alignment as regularized Nash equilibrium learning under general, potentially
+non-transitive preferences. Subsequent work has explored this paradigm through no-regret learning
+[50], optimistic mirror descent [51], and extragradient updates[53], thereby advancing both theoret-
+ical guarantees and empirical stability relative to traditional RLHF. More recently, Multiplayer Nash
+Preference Optimization (MNPO)[37] extends this line of work from two-player interactions to the
+multiplayer setting, enabling the modeling of richer preference structures.
+
+B.2 Diffusion Model Alignment
+
+Diffusion models [31, 26] have achieved remarkable success in T2I generation. Recently, alignment
+methods inspired by RLHF have been increasingly adopted for diffusion models, both in direct fine-
+tuning [6, 2, 5, 27, 7, 3] and at inference time [33, 44, 13, 48, 12], with the goal of improving
+downstream reward-related objectives [21, 35, 41]. Existing diffusion alignment methods can be
+broadly grouped into three lines: (1) methods that optimize explicit reward functions, e.g., GRPO-
+based approaches [21, 41, 19, 18]; (2) methods that optimize implicit rewards induced from pairwise
+preferences, such as Diffusion-DPO [35, 20, 36, 16, 9, 42]; and (3) likelihood-free methods that
+optimize forward scores and velocity fields directly [54, 52]. Despite their differences, most of
+these methods primarily focus on reward maximization, whereas only a few exploit on-policy self-
+play. In particular, Yang et al. [42] extends DPO to diffusion models by formulating denoising
+as a multi-step MDP and directly optimizing human preferences over sampled image pairs. Yuan
+et al. [47] introduces a self-play fine-tuning scheme in which the current model learns to outperform
+samples generated by earlier checkpoints. Zhang et al. [49] reduces reliance on human-labeled
+losing images by replacing them with reference samples generated from previous checkpoints. He
+et al. [10] further constructs synthetic preference pairs by self-ranking on-policy generated images
+and then applies DPO-style optimization. In our work, we build on nash learning [50, 37] and
+develop a more comprehensive game-theoretic self-play framework for diffusion model alignment.
+
+                                                          14
+C Mathematical Analysis
+
+C.1 Derivation of the OMD Update for Nash Policy
+
+Given the preference probability P(x0  x0 | c), define the loss at step s as
+
+ s(p) := -Ecd0 Ex0p(x0|c), x0ps(x0|c) P(x0  x0 | c) +  KL p(x0 | c)  pref (x0 | c)
+          -Ecd0 Ex0p(x0|c), x0ps(x0|c) P(x0  x0 | c) +  KL p(x0:T | c)  pref (x0:T | c)
+         = -E E cd0 x0:T p(x0:T |c), x0 :T ps(x0:T |c) P(x0:T  x0 :T | c)
+                                                                     +  KL p(x0:T | c)  pref (x0:T | c) ,
+
+Since KL p(x0 | c)  pref (x0 | c) is not directly tractable, we work on its upper bound
+KL p(x0:T | c)  pref (x0:T | c) , which lower-bounds the objective. Starting from the entropy-
+regularized online mirror descent update,
+
+                           ps+1 = arg min s(ps), p +  KL(pps),
+
+                                                pP
+
+The objective can be written (for a fixed prompt c) as
+
+min          p(x0:T        |  c) ps(x0:T )s(ps) +                           p(x0:T       |  c) log      p(x0:T | c) ,
+                                                                                                        ps(x0:T | c)
+  p                                                                   x0:T
+       x0:T
+
+s.t. p(x0:T | c) = 1.
+
+       x0:T
+
+Introducing a Lagrange multiplier  for the normalization constraint, the Lagrangian is
+
+L(p, )  =        p(x0:T       |  c) ps(x0:T )s(ps) +  p(x0:T                                   |  c) log  p(x0:T | c)
+                                                                                                          ps(x0:T | c)
+           x0:T                                                          x0:T
+
+                                                                              +                   p(x0:T | c) - 1 .
+
+                                                                                            x0:T
+
+When the derivative of L(p, ) with respect to p(x0:T | c) goes to zero, we get
+
+                 log       ps+1(x0:T |c)  =     -  1  ps (x0:T  )s(ps)                -     1  -     ,
+                            ps(x0:T |c)                                                           
+
+after exponentiating the left and right sides:
+
+ps+1(x0:T | c)  ps(x0:T | c) exp                       -  1   ps            (x0:T  )  s  (ps   )  ,
+                                                          
+
+                            ps(x0:T | c) exp           1  P(x0:T              ps      |  c)                            
+                                                       
+                                                                                                  , pref (x0:T |c) 
+
+                                                                                                   ps(x0:T |c)
+
+which can be collected as
+
+ps+1(x0:T | c)  exp              1  P(x0:T         ps  |  c)  pref (x0:T                          ps(x0:T  |  c)1-         .
+                                                                                                                         
+                                                                                      | c) 
+
+C.2 Derivation of Final Objective (Equation 16)
+
+To instantiate the full-chain policy objective in Equation 15 for diffusion models, we identify the
+generic policy notation with the corresponding diffusion reverse process. Specifically, the current
+policy  is parameterized by the trainable diffusion model p, the previous policy s is denoted by
+pprev, and the reference policy ref is denoted by pref . Under the Markov structure of the diffusion
+reverse process, the full-chain likelihood decomposes as
+
+                                                                                         T
+
+                                  p(x0:T | c) = p(xT ) p(xt-1 | xt, c),
+
+                                                                                       t=1
+
+                                                      15
+and similarly for pref and pprev. Therefore, the log-ratio over full trajectories in Equation 15 can be
+decomposed into a sum of per-step reverse-transition log-ratios. Following the standard diffusion-
+DPO approximation, we sample a timestep t  U(0, T ), replace the intractable reverse-chain sam-
+pling with the forward noising process q(xt | x0), and optimize the resulting single-timestep objec-
+tive with the factor T accounting for uniform timestep sampling.
+
+We start with Equation 15, the objective on reverse decomposition for current, reference, and previ-
+ous policies,
+
+                                  log  (x0+:T )       -     log  ref (x0+:T )
+Ex0+:T ,x0-:T t(·) - log               (x-0:T )                  ref (x-0:T )
+
+                                                         ( -  )           log  (x0+:T )   -    log  t(x0+:T )
+                                                      +                        (x0-:T )             t(x0-:T )
+
+                                                              
+
+                                                            log  p(x0+:T )     -  log  pref (x+0:T )
+=E - log   x1+:T q(x1+:T |x0+),x- 1:T q(x- 1:T |x0-)             p(x0-:T )             pref (x0-:T )
+
+                                               ( -  )               log   p (x+0:T  )  -  log  pprev(x0+:T )   ,
+                                            +                             p (x-0:T  )          pprev(x-0:T )
+
+                                                    
+
+where we use q(x1:T | x0) to approximate pprev(x1:T | x0) for efficient training. The objective
+hence becomes,
+
+                                                            log  p(x+0:T )     -  log  pref (x+0:T )
+L =E - log  x1+:T q(x+ 1:T |x0+),x- 1:T q(x- 1:T |x- 0 )         p(x-0:T )             pref (x-0:T )
+
+   ( -  )  log  p(x+0:T )  -      log  pprev(x+0:T )
++               p(x0-:T )              pprev(x-0:T )
+
+        
+
+=E - log  x+ 1:T q(x1+:T |x0+),x- 1:T q(x- 1:T |x0-)  T -1       log     p(x+t-1|x+t )    -    log  pref (x+t-1|x+t )
+                                                                         p (xt--1 |xt- )            pref (xt--1|xt-)
+
+                                                      t=0
+
+   ( -  )  log  p(x+t-1|x+t )     -    log  pprev(xt+-1|x+t )
++               p(xt--1|x-t )               pprev(x-t-1|x-t )
+
+        
+
+                                                                    log   p(xt+-1|x+t )   -    log  pref (xt+-1|xt+)
+=Ex1+:T q(x1+:T |x0+),x- 1:T q(x1-:T |x0-) - log  T Et                    p(x-t-1|x-t )             pref (xt--1|x-t )
+
+   ( -  )  log  p (xt+-1 |xt+ )   -    log  pprev (xt+-1 |xt+ )
++               p(x-t-1|x-t )               pprev(x-t-1|x-t )
+
+        
+
+                                                                                  p (x+t-1 |xt+ )
+=E - log  T E  x+ t,t-1q(xt+,t-1|x+ 0 ),xt-,t-1q(x- t,t-1|x0-)            log     p(xt--1|x-t )
+                                                                 t
+
+-  log  pref (x+t-1|xt+)      ( -  )   log            p (xt+-1 |xt+ )  -  log  pprev (xt+-1 |xt+ )    .
+        pref (x-t-1|x-t )  +                          p(xt--1|x-t )            pprev(xt--1|x-t )
+
+                                   
+
+                                                      16
+By applying Jensen's inequality, we can lower bound the objective as
+
+                                                                        log  p(x+t-1|x+t )
+L  Et, x+ t q(xt+|x0+), - log  T Ex+ t-1q(xt+-1|x+ t ,x+ 0 ),                p (xt--1 |xt- )
+   x- t q(xt-|x- 0 )                  xt--1q(x- t-1|x- t ,x- 0 )
+
+-  log  pref (xt+-1|xt+)      ( -  )   log  p(xt+-1|x+t )         -  log    pprev(x+t-1|x+t )
+        pref (xt--1|x-t )  +                p (x-t-1 |xt- )                 pprev(xt--1|x-t )
+
+                                   
+
+= Et, xt+q(xt+|x+ 0 ),     - log   -T       DKL(q(xt+-1|x+0,t) p(xt+-1|xt+))
+                                       
+   xt- q (xt- |x0- )
+
+        - DKL(q(xt--1|x0-,t) p(xt--1|xt-))
+
+        - DKL(q(xt+-1|x0+,t) pref (xt+-1|x+t )) + DKL(q(x-t-1|x-0,t) pref (x-t-1|xt-))
+
+      ( -  )          DKL(q(xt+-1|x0+,t) p(x+t-1|xt+)) - DKL(q(xt--1|x0-,t) p(xt--1|xt-))
+   +
+
+           
+
+   - DKL(q(xt+-1|x+0,t) pprev(x+t-1|xt+)) + DKL(q(x-t-1|x-0,t) pprev(x-t-1|x-t ))              .
+
+Since the distribution of reverse step t of diffusion models p(x0) is
+
+        p(xt-1|xt) = N (xt-1;              t-1  xt  -              t    ¯t  (xt)  , t2I),
+                                            t                       1-
+
+we can parameterize the loss as
+
+   L  Et, xt+q(x+ t |x+ 0 ),  - log    -T       + - (x+t , t)2 - - - (xt-, t)2
+                                            
+        xt-q(x- t |x- 0 )
+
+        - + - ref (xt+, t)2 + - - ref (x-t , t)2
+
+           ( -  )          + - (xt+, t)2 - - - (x-t , t)2
+        +
+
+                
+
+        - + - prev(xt+, t)2 + - - prev(xt-, t)2
+
+D Additional Experimental Details
+
+D.1 Datasets
+
+Pick-a-Pic. Pick-a-Pic is a large-scale public dataset of human preferences for text-to-image gen-
+eration [14] with over 500,000 examples. It is collected through a web interface in which users pro-
+vide prompts, compare multiple generated images, and indicate which image they prefer, or whether
+the comparison results in a tie. Each example therefore consists of a prompt, two generated images,
+and a preference label. We use Pick-a-Pic v1 for training and its held-out test split for evaluation.
+
+PartiPrompts. PartiPrompts is a curated benchmark designed to evaluate the compositional and
+semantic capabilities of text-to-image models [45]. It contains prompts covering a broad range of
+visual concepts, including objects, attributes, styles, and complex relational descriptions. Owing
+to this diversity, PartiPrompts has become a standard benchmark for assessing prompt following,
+compositional generation, and overall image quality. In our experiments, we use PartiPrompts as a
+standardized evaluation suite for text-to-image generation.
+
+HPS v2. HPS v2 is a human-preference benchmark built from over 25,000 prompts and 98,000
+images generated by Stable Diffusion, accompanied by 25,205 human preference annotations col-
+lected from the Stable Foundation Discord community [38]. For each prompt, annotators compare
+multiple candidate images and indicate the one they prefer. These annotations are then used to train
+a CLIP-based preference model, which defines the Human Preference Score (HPS). We use the HPS
+v2 test set to evaluate how well our aligned diffusion models reflect human preferences.
+
+                                            17
+D.2 Baselines
+
+We compare Diff.-NPO against several representative baselines. The first baseline is the original
+pretrained diffusion backbone, which provides the starting point for alignment on both SD1.5 and
+SDXL. We then consider online supervised fine-tuning (SFT) on preferred images, including both
+offline and online variants. We also compare with online-Diff-DPO in the main tables. In ad-
+dition, we include two representative self-play preference optimization methods, SPIN [47] and
+SEPPO [49], with detailed introductions in paragraphs below. Together, these baselines allow us to
+compare our method with reference-anchored preference optimization, pure self-play style updates,
+and simple supervised adaptation.
+
+SPIN. SPIN is a self-play fine-tuning method for text-to-image diffusion models. Instead of rely-
+ing on a fixed offline preference dataset, SPIN iteratively improves the model by comparing samples
+generated by the current model with samples from a previous or reference model. At each itera-
+tion, the model is encouraged to assign higher likelihood to its own improved generations than to
+weaker generations produced by an earlier policy. This creates a self-play learning dynamic, where
+the model continuously learns to outperform its past versions. In our comparison, SPIN represents
+a pure self-play style baseline: it uses online model-generated samples to construct preference pairs
+and update the diffusion model, but does not explicitly combine both reference-policy anchoring
+and previous-policy regularization in the same way as Diff.-NPO.
+
+SEPPO. SEPPO is a semi-policy preference optimization method for diffusion alignment. Its
+main idea is to bridge offline preference optimization and online self-play by using samples gen-
+erated from both the current policy and an auxiliary policy, such as a reference or previous policy,
+to construct preference pairs. Compared with standard Diffusion-DPO, which is mainly anchored
+to a fixed reference model, SEPPO introduces policy-dependent samples so that the training dis-
+tribution can better reflect the model's current generation behavior. Compared with pure self-play
+methods, however, SEPPO still maintains a semi-policy structure rather than fully optimizing the
+current policy through an explicit Nash-style online mirror descent objective.
+
+D.3 Implementation Details
+
+We adopt AdamW for training SD1.5 and Adafactor for training SDXL. The learning rate is set to
+1 × 10-8 with linear warmup and is scaled by the effective batch size. The global batch size is
+2048: for pairwise methods, the effective batch contains 2048 pairs. For SD1.5 and SDXL, we set
+ = 5000 for Online-Diffusion-DPO and Diff.-NPO. For Diff.-NPO, we fix the ratio  / = 1/2
+in all experiments unless the ablation study. For SEPPO and SPIN, we directly evaluate the official
+checkpoints released by their authors. All experiments are conducted on eight NVIDIA A100 80GB
+GPUs.
+
+E Additional Ablation Results
+
+E.1 Ablation on  / Regularization
+
+Figure 3 presents the complete win-rate comparison for different  / values across all five evaluation
+metrics. Consistent with the main-text results, the performance generally improves from the pure
+self-play setting and then decreases as the objective approaches the DPO-style setting. This trend
+suggests that intermediate regularization ratios better balance the stabilizing effect of the reference
+policy and the online self-improvement signal from the previous policy.
+
+E.2 Comparison with Offline SFT and DPO
+
+We further compare Diff.-NPO with offline variants of SFT and DPO in Table 5. Offline SFT sub-
+stantially outperforms online SFT, mainly because the preferred images in the offline Pick-a-Pic
+dataset are generally of higher quality than the images generated online with a small number of
+inference steps. Nevertheless, offline SFT still underperforms preference-optimization methods,
+suggesting that training only on preferred images cannot fully exploit the relative preference infor-
+mation contained in positive­negative pairs. We also observe that offline DPO is weaker than online
+
+                                                          18
+DPO in this setting, indicating that online model-generated preference pairs better match the current
+policy distribution. Overall, Diff.-NPO achieves the best win rates across all five metrics, show-
+ing that the proposed online Nash-style objective provides stronger preference alignment than both
+supervised adaptation and standard DPO variants.
+
+Table 5: Comparison between online and offline training variants on SD1.5 Pick-a-Pic, evaluated by
+win rate (%) against the original model.
+
+                                                                    Win Rate (%) on Pick-a-Pic
+
+                                                                                   PS  HPS  CLIP  IM  AES 
+
+                                                           SFT(online) 40.4 46.6                            55.0 53.2 59.3
+                                                           SFT(offline) 73.4 80.7                           56.3 74.9 71.7
+                                                           DPO(online) 77.4 82.5                            60.0 81.0 73.4
+                                                           DPO(offline) 73.3 69.8                           57.1 61.7 63.4
+                                                           Diff.-NPO 81.6 84.6                              60.3 85.1 80.8
+
+           90                       / =0                          / = 1/9                 / = 1/3                        / = 1/2       / = 8/9                             / =1
+           80                                                          84.6484.68                                                      81.24 81.2885.1283.68 81.00
+                                 81.6080.40                80.12  78.76            82.48                                                                                   81.20 80.76
+                            76.92
+Winrate (%)          73.28                   77.40                                                                                                                         75.08        75.92 73.36
+
+           70                                       68.92                                                                       69.52                               71.82
+
+           60 57.56                                                                              55.96       60.3260.54  59.96
+                                                                                                        56.84
+
+50                                                                                        52.24
+
+                            PS (%)                         HPS (%)                               CLIP (%)                              IM (%)                              AES (%)
+
+Figure 3: Full win-rate comparison for the ablation study of different  / values on Pick-a-Pic
+for SD1.5. We report win rates across all five evaluation metrics: PickScore, HPSV2, CLIP score,
+ImageReward, and Aesthetic Score.
+
+F More Qualitative Results
+
+In this section, we provide additional qualitative comparisons for both SDXL and SD1.5. As shown
+in Figures 4 and 5, Diff.-NPO consistently generates images with better semantic alignment, stronger
+visual coherence, and more appealing overall quality compared with the baselines. These results
+further support the quantitative improvements reported in the main text.
+
+                                                                                                        19
+           In the middle of a city                                             a close up of a watermelon
+
+           during a rainstorm a a spanish water dog breed                      shaped, egg style chair, with masterpiece, best
+
+           glowing side on the side as arthur morgan from red  humanoid robot  watermelon characteristics, a quality, 1 girl, standing,
+
+           of a skyscraper says     dead redemption                            3D render                   hat, dress, cloud fluffy
+
+           AATF
+
+Original
+   SDXL
+
+Online
+   SFT
+
+Online
+   DPO
+
+Diff.-NPO
+
+Figure 4: Additional qualitative comparison on SDXL. Compared with the baselines, Diff.-NPO
+produces images with stronger prompt alignment, more coherent global structure, and improved
+visual quality across diverse prompts.
+
+                                                          20
+Original SD1.5 Online SFT Online DPO SEPPO  SPIN                                        Diff.-NPO
+
+a woman in a forest
+
+A koala playing ping pong
+
+Renault Capture on a beach
+
+Duck
+
+RAW photo, aristocratic russian noblewoman, dressed in medieval dress, model face, come hither gesture, medieval
+mansion, medieval nobility, slim body, high detailed skin, 8k uhd, dslr, soft lighting, high quality, film grain, Fujifilm XT3
+
+                                 tulips leaves flowers oil painting seamless ""vase"" ""centerpiece""
+
+A close-up photograph of a fat orange cat with lasagna in its mouth. Shot on Leica M6.
+
+                                                                                   A man
+
+Figure 5: Qualitative comparison on SD1.5. Diff.-NPO consistently improves the realism, semantic
+faithfulness, and visual coherence of generated images, demonstrating that the benefits of our pref-
+erence optimization method also transfer to the SD1.5 backbone.
+
+                                                          21
+

@@ -1,0 +1,2694 @@
+# Multimodal / Vision / Audio / Video / World-Model Study Notes (Draft)
+Papers extracted: 31
+---
+## 
+**File:** `2103.00020_Learning Transferable Visual Models From Natural Language Supervision.txt`
+### Abstract
+Learning Transferable Visual Models From Natural Language Supervision Alec Radford * 1 Jong Wook Kim * 1 Chris Hallacy 1 Aditya Ramesh 1 Gabriel Goh 1 Sandhini Agarwal 1 Girish Sastry 1 Amanda Askell 1 Pamela Mishkin 1 Jack Clark 1 Gretchen Krueger 1 Ilya Sutskever 1 arXiv:2103.00020v1 [cs.CV] 26 Feb 2021 Abstract Task-agnostic objectives such as autoregressive and masked language modeling have scaled across many orders of mag- State-of-the-art computer vision systems are nitude in compute, model capacity, and data, steadily im- trained to predict a fixed set of predetermined proving capabilities. The development of "text-to-text" as object categories. This restricted form of super- a standardized input-output interface (McCann et al., 2018; vision limits their generality and usability since Radford et al., 2019; Raffel et al., 2019) has enabled task- additional labeled data is needed to specify any agnostic architectures to zero-shot transfer to downstream other visual concept. Learning directly from raw datasets removing the need for specialized output heads or text about images is a promising alternative which dataset specific customization. Flagship systems like GPT-3 leverages a much broader source of supervision. (Brown et al., 2020) are now competitive across many tasks We demonstrate that the simple pre-training task with bespoke models while requiring little to no dataset
+### Methods / Architecture
+- arXiv:2103.00020v1 [cs.CV] 26 Feb 2021 Abstract Task-agnostic objectives such as autoregressive and masked
+- additional labeled data is needed to specify any agnostic architectures to zero-shot transfer to downstream
+- We demonstrate that the simple pre-training task with bespoke models while requiring little to no dataset
+- of predicting which caption goes with which im- specific training data.
+- of 400 million (image, text) pairs collected from sible to modern pre-training methods within web-scale col-
+- the internet. After pre-training, natural language lections of text surpasses that of high-quality crowd-labeled
+- the performance of this approach by benchmark- Could scalable pre-training methods which learn directly
+- The model transfers non-trivially to most tasks content based image retrieval by training a model to pre-
+- cific training. For instance, we match the ac- ble to learn more data efficient image representations via
+- million training examples it was trained on. We vastava & Salakhutdinov (2012) explored deep represen-
+- release our code and pre-trained model weights at tation learning by training multimodal Deep Boltzmann
+- https://github.com/OpenAI/CLIP. Machines on top of low-level image and text tag features.
+- Pre-training methods which learn directly from raw text the title, description, and hashtag metadata of images in the
+- ford et al., 2018; Devlin et al., 2018; Raffel et al., 2019). training AlexNet (Krizhevsky et al., 2012) to predict these
+- *Equal contribution 1OpenAI, San Francisco, CA 94110, USA. to ImageNet-based pre-training on transfer tasks. Li et al.
+- Correspondence to: <{alec, jongwook}@openai.com>. (2017) then extended this approach to predicting phrase n-
+- (1) Contrastive pre-training (2) Create dataset classifier from label text
+- Figure 1. Summary of our approach. While standard image models jointly train an image feature extractor and a linear classifier to predict
+- some label, CLIP jointly trains an image encoder and a text encoder to predict the correct pairings of a batch of (image, text) training
+- tures and pre-training approaches, VirTex (Desai & Johnson, a much wider set of visual concepts through its general-
+### Equations / Objectives
+- equiring little to no dataset
+- Equal contribution 1OpenAI, San Francisco, CA 94110, USA. to ImageNet-based pre-training on transfer tasks. Li et al.
+- Contrastive pre-training (2) Create dataset classifier from label text
+- score. Adopting more recent architec- Natural language is able to express, and therefore supervise,
+- contrastive objectives to learn im- "zero-shot" capabilities.
+- kly supervised mod-
+- equire annotations to be in a classic "machine learning
+- Contrastive (CLIP) compatible format" such as the canonical 1-of-N majority
+- contrastive objective of CLIP further
+- equivalent accuracy supervised ImageNet models which are small by modern standards with approximately 100,000
+- equately reflect
+- kly supervised, and supervised text) pairs collected form a variety of publicly available
+- scores. In Figure 3 we include pseudocode of the core of an
+- equired 19 struction technique and objective was first introduced in the
+- equired 33 TPUv3 core-years to train their Noisy Sohn (2016), was popularized for contrastive representation
+- InfoNCE loss, and was
+- contrastive (text, image) representation
+- contrastive
+- contrastive representation learning for images the text since many of the (image, text) pairs in CLIP's pre-
+- contrastive objectives can learn better repre- training dataset are only a single sentence. We also simplify
+### Quantitative Claims
+- State-of-the-art computer vision systems are nitude in compute, model capacity, and data, steadily im-
+- age is an efficient and scalable way to learn SOTA
+- For example, Li et al. (2017) reach only 11.5% accuracy ICMLM, and ConVIRT trained for accelerator days on one
+- 88.4% accuracy of the current state of the art (Xie et al., this gap and study the behaviors of image classifiers trained
+- 2020). It is even below the 50% accuracy of classic com- with natural language supervision at large scale. Enabled
+- ImageNet these pre-trained models increased accuracy by of learning from natural language supervision. We study
+- also demonstrated large gains on a broader set of transfer serve that transfer performance is a smoothly predictable
+- Zero-Shot ImageNet Accuracy 35 representations, improvements in deep contextual represen-
+- equivalent accuracy supervised ImageNet models which are small by modern standards with approximately 100,000
+- State-of-the-art computer vision systems use very large implementation of CLIP. To our knowledge this batch con-
+- and observed a further 4x efficiency improvement in the rate as the base architecture for the image encoder due to its
+- Given a batch of N (image, text) pairs, CLIP is trained to D improvements from He et al. (2019) and the antialiased
+- # scaled pairwise cosine similarities [n, n] not gains or biases, and decay the learning rate using a
+- depth, and resolution outperforms only allocating it to only
+- representation and then compute its probability according CLIP model improves accuracy on ImageNet from a proof
+- task learning is inspired by work demonstrating task learn- dataset. Additionally, the top-5 accuracy of CLIP models
+- first identified task learning as an "unexpected side-effect" 95% top-5 accuracy, matching Inception-V4 (Szegedy et al.,
+- by a large amount. This improvement reflects many differences RN50x16
+- that Visual N-Grams was trained on and found it matched 36 datasets. This improvement is similar to the gain from using
+- CLIP also outperforms Visual N-Grams on the other 2 re- in order to transfer successfully.
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2201.12086_BLIP_ Bootstrapping Language-Image Pre-training for Unified Vision-Language Unde.txt`
+### Abstract
+BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation Junnan Li Dongxu Li Caiming Xiong Steven Hoi Salesforce Research https://github.com/salesforce/BLIP arXiv:2201.12086v2 [cs.CV] 15 Feb 2022 Abstract "blue sky bakery in Filt Vision-Language Pre-training (VLP) has ad- sunset park " vanced the performance for many vision-language tasks. However, most existing pre-trained mod- "chocolate cake els only excel in either understanding-based tasks or generation-based tasks. Furthermore, perfor- with cream frosting mance improvement has been largely achieved by scaling up the dataset with noisy image-text Cap and chocolate Filt pairs collected from the web, which is a subop- timal source of supervision. In this paper, we sprinkles on top" propose BLIP, a new VLP framework which trans- fers flexibly to both vision-language understand- Figure 1. We use a Captioner (Cap) to generate synthetic captions ing and generation tasks. BLIP effectively uti- for web images, and a Filter (Filt) to remove noisy captions. lizes the noisy web data by bootstrapping the captions, where a captioner generates synthetic
+### Methods / Architecture
+- ing and generation tasks. BLIP effectively uti- for web images, and a Filter (Filt) to remove noisy captions.
+- (+2.7% in average recall@1), image captioning To this end, we propose BLIP: Bootstrapping Language-
+- (+2.8% in CIDEr), and VQA (+1.6% in VQA Image Pre-training for unified vision-language understand-
+- score). BLIP also demonstrates strong general- ing and generation. BLIP is a new VLP framework which
+- Vision-language pre-training has recently received tremen- flexible transfer learning. An MED can operate either as
+- (1) Model perspective: most methods either adopt an text contrastive learning, image-text matching, and image-
+- captioning), whereas encoder-decoder models have not been We finetune a pre-trained MED into two modules: a cap-
+- SimVLM (Wang et al., 2021)) pre-train on image-text pairs We perform extensive experiments and analysis, and make
+- BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation
+- Figure 2. Pre-training model architecture and objectives of BLIP (same parameters have the same color). We propose multimodal mixture
+- trained with an image-text contrastive (ITC) loss to align the vision and language representations. (2) Image-grounded text encoder uses
+- causal self-attention layers, and shares the same cross-attention layers and feed forward networks as the encoder. The decoder is trained
+- formance of downstream vision and language tasks by pre- Knowledge distillation (KD) (Hinton et al., 2015) aims to
+- training the model on large-scale image-text pairs. Due to improve the performance of a student model by distilling
+- simple rule-based filters, noise is still prevalent in the web simply enforce the student to have the same class predic-
+- and language tasks into a single framework (Zhou et al., While data augmentation (DA) has been widely adopted in
+- challenge is to design model architectures that can perform language tasks is less straightforward. Recently, generative
+- et al., 2020; Puri et al., 2020; Yang et al., 2020). Differ- former and the text transformer by encouraging positive
+- language-only tasks, our method demonstrates the advan- to the negative pairs. It has been shown to be an effective
+- tage of synthetic captions in large-scale vision-language objective for improving vision and language understand-
+### Equations / Objectives
+- kles on top"
+- score). BLIP also demonstrates strong general- ing and generation. BLIP is a new VLP framework which
+- contrastive learning, image-text matching, and image-
+- contrastive (ITC) loss to align the vision and language representations. (2) Image-grounded text encoder uses
+- equal
+- equence of embeddings, feature. In order to find more informative negatives, we
+- contrastive similarity in a
+- equence, and an sharing these layers can improve training efficiency while
+- equence token is used to signal its end. benefiting from multi-task learning,
+- equires one for- pairs {(Ih, Th)} (e.g., COCO (Lin et al., 2014)). Recent
+- Contrastive Loss (ITC) activates the unimodal for learning vision-language alignment.
+- l = !, ! + ", " (Image-grounded Filtering
+- scores.
+- equire an object detector pre-trained on 2.5M images with human-annotated bounding
+- equires a computational-
+- equires the model to predict an an-
+- formulating NLVR2 (Suhr et al., 2019) asks the model to predict whether
+- equence. Note that this we replicate the web text in the original dataset so that it
+- contrastive
+- Contrastive pre-training for zero-shot video-
+### Quantitative Claims
+- mance improvement has been largely achieved
+- captions, where a captioner generates synthetic collected from the web. Despite the performance gain ob-
+- achieve state-of-the-art results on a wide range of noisy web text is suboptimal for vision-language learning.
+- (2) Data perspective: most state-of-the-art methods (e.g., texts and the synthetic texts.
+- achieve substantial performance improvement on various
+- find that more diverse captions yield larger gains.
+- BLIP achieves state-of-the-art performance on a wide
+- largely overlooked, shadowed by the performance gain ob- as a more effective way to perform KD in the context of
+- In this section, we first introduce pre-training details. Then with 14M images, performance improvement can be ob-
+- each other, leading to substantial improvements compared
+- Table 5. Comparison with state-of-the-art image-text retrieval methods, finetuned on COCO and Flickr30K datasets. BLIPCapFilt-L pre-trains
+- As shown in Table 5, BLIP achieves substantial performance
+- BLIPViT-L 129M 96.7 100.0 100.0 86.7 97.3 98.7 improvement compared with existing methods. Using the
+- same 14M pre-training images, BLIP outperforms the pre-
+- to not sharing, while also reducing the model size thus The result is shown in Table 6, where BLIP also outperforms
+- the captioner are less likely to be filtered out by the filter, as training images substantially outperforms methods using
+- images achieves competitive performance as LEMON with
+- Table 7. Comparison with state-of-the-art image captioning methods on NoCaps and COCO Caption. All methods optimize the cross-
+- entropy loss during finetuning. C: CIDEr, S: SPICE, B@4: BLEU@4. BLIPCapFilt-L is pre-trained on a dataset bootstrapped by captioner
+- "[Encode] + Text " Table 8. Comparison with state-of-the-art methods on VQA and
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2111.02358_VLMO_ Unified Vision-Language Pre-Training with Mixture-of-Modality-Experts.txt`
+### Abstract
+arXiv:2111.02358v2 [cs.CV] 27 May 2022 VLMO: Unified Vision-Language Pre-Training with Mixture-of-Modality-Experts Hangbo Bao,Wenhui Wang,Li Dong, Qiang Liu Owais Khan Mohammed, Kriti Aggarwal, Subhojit Som, Furu Wei Microsoft https://aka.ms/vlmo Abstract We present a unified Vision-Language pretrained Model (VLMO) that jointly learns a dual encoder and a fusion encoder with a modular Transformer network. Specifically, we introduce Mixture-of-Modality-Experts (MOME) Transformer, where each block contains a pool of modality-specific experts and a shared self- attention layer. Because of the modeling flexibility of MOME, pretrained VLMO can be fine-tuned as a fusion encoder for vision-language classification tasks, or used as a dual encoder for efficient image-text retrieval. Moreover, we propose a stagewise pre-training strategy, which effectively leverages large-scale image-only and text-only data besides image-text pairs. Experimental results show that VLMO achieves state-of-the-art results on various vision-language tasks, including VQA, NLVR2 and image-text retrieval. The code and pretrained models are available at https
+### Methods / Architecture
+- arXiv:2111.02358v2 [cs.CV] 27 May 2022 VLMO: Unified Vision-Language Pre-Training with
+- We present a unified Vision-Language pretrained Model (VLMO) that jointly
+- learns a dual encoder and a fusion encoder with a modular Transformer network.
+- Specifically, we introduce Mixture-of-Modality-Experts (MOME) Transformer,
+- attention layer. Because of the modeling flexibility of MOME, pretrained VLMO
+- used as a dual encoder for efficient image-text retrieval. Moreover, we propose a
+- stagewise pre-training strategy, which effectively leverages large-scale image-only
+- and text-only data besides image-text pairs. Experimental results show that VLMO
+- Vision-Language (VL) pre-training [30, 41, 35, 26, 20, 23] learns generic cross-modal representations
+- contrastive learning, masked region classification/feature regression, word-region/patch alignment
+- Two mainstream architectures are widely used in previous work. CLIP [35] and ALIGN [18] adopt a
+- dual-encoder architecture to encode images and text separately. Modality interaction is handled by
+- the cosine similarity of the image and text feature vectors. The dual-encoder architecture is effective
+- to handle complex VL classification tasks. ViLT [20] finds that CLIP gives a relatively low accuracy
+- cross-modal attention to model image-text pairs. Multi-layer Transformer [45] networks are usually
+- employed to fuse image and text representations. The fusion-encoder architecture achieves superior
+- In order to take advantage of the two types of architectures, we propose a unified Vision-Language
+- pretrained Model (VLMO) that can be used as either a dual encoder to separately encode images
+- (MOME) Transformer that can encode various modalities (images, text, and image-text pairs) within
+- a Transformer block. MOME employs a pool of modality experts to replace the feed-forward network
+### Equations / Objectives
+- contrastive learning, masked region classification/feature regression, word-region/patch alignment
+- equires to jointly encode all possible image-text pairs
+- scores for retrieval tasks. The quadratic time complexity leads to a much slower
+- Equal contribution. Contact person.
+- contrastive learning, image-
+- contrastive
+- equire
+- Contrastive Learning
+- contrastive learning, masked language modeling, and image-text match-
+- contrastive learning on image-only and text-only representations,
+- equence. Finally, image input representations
+- equence token ([T_CLS]) and a special boundary token ([T_SEP]) are
+- equence. Text input representations H0w R(M+2)D are computed via
+- l = [H0w; H0v]
+- l = MSA(LN(Hl-1)) + Hl-1 (1)
+- l = MoME-FFN(LN(Hl )) + Hl (2)
+- Contrastive Learning
+- contrastive learning on the image and text representations,
+- contrastive learning aims
+- equence, and replace them with the [MASK] token. The model is trained to predict these masked
+### Quantitative Claims
+- and text-only data besides image-text pairs. Experimental results show that VLMO
+- achieves state-of-the-art results on various vision-language tasks, including VQA,
+- to handle complex VL classification tasks. ViLT [20] finds that CLIP gives a relatively low accuracy
+- employed to fuse image and text representations. The fusion-encoder architecture achieves superior
+- Experimental results demonstrate that VLMO achieves state-of-the-art results on vision-language
+- retrieval and classification tasks. Our model, used as a dual encoder, outperforms fusion-encoder-
+- our model also achieves state-of-the-art results on visual question answering (VQA) and natural
+- deeper interaction for classification tasks. Our model achieves competitive performance, while
+- Global hard negative mining can find more informative image-text pairs and significantly improves
+- batch size. We report vqa-score on VQA test-dev and test-standard split, and report accuracy for
+- We present the results of VL classification tasks in Table 1. VLMO achieves state-of-the-art per-
+- formance and substantially outperforms previous methods. Our large-size model even outperforms
+- As present in Table 2, VLMO achieves competitive performance with previous fusion-encoder-based
+- Moreover, our large-size model even outperforms the huge-size model of Florence [48], which also
+- (ImageNet [38]) and semantic segmentation (ADE20K [50]) tasks. The model also achieves competi-
+- shows that using the ViT [12] model pretrained on image-only data as the initialization achieves better
+- with random initialization but obtain a relatively low accuracy on downstream tasks. Stagewise
+- Transformer achieves better performance than standard Transformer for both retrieval and classifica-
+- Transformer. In addition, experimental results show that masked language modeling positively
+- Experimental results demonstrate that VLMO outperforms previous state-of-the-art models on various
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2304.08485_Visual Instruction Tuning.txt`
+### Abstract
+arXiv:2304.08485v2 [cs.CV] 11 Dec 2023 Visual Instruction Tuning Haotian Liu1, Chunyuan Li2, Qingyang Wu3, Yong Jae Lee1 1University of WisconsinMadison 2Microsoft Research 3Columbia University https://llava-vl.github.io Abstract Instruction tuning large language models (LLMs) using machine-generated instruction-following data has been shown to improve zero-shot capabilities on new tasks, but the idea is less explored in the multimodal field. We present the first attempt to use language-only GPT-4 to generate multimodal language-image instruction-following data. By instruction tuning on such generated data, we in- troduce LLaVA: Large Language and Vision Assistant, an end-to-end trained large multimodal model that connects a vision encoder and an LLM for general- purpose visual and language understanding. To facilitate future research on visual instruction following, we construct two evaluation benchmarks with diverse and challenging application-oriented tasks. Our experiments show that LLaVA demon- strates impressive multimodal chat abilities, sometimes exhibiting the behaviors of multimodal GPT-4 on unseen images/instructions, and yields a 85.1% rela- tive score compared with GPT-4 on a synthetic multimodal instruct
+### Methods / Architecture
+- new tasks, but the idea is less explored in the multimodal field. We present the
+- utilize various machine-generated high-quality instruction-following samples to improve the LLM's
+- In this paper, we present visual instruction-tuning, the first attempt to extend instruction-tuning to
+- instruction-following data. We present a data reformation perspective and pipeline to convert
+- open-set visual encoder of CLIP [40] with the language decoder Vicuna [9], and fine-tuning
+- GPT-4, our approach achieves SoTA on the Science QA [34] multimodal reasoning dataset.
+- Multimodal instruction-following benchmark. We present LLaVA-Bench with two challenging
+- VisProg [18], and ViperGPT [46]. While sharing the same goal in building instruction-following
+- FLAN-PaLM [11], and OPT-IML [22], respectively. It turns out that this simple approach can
+- text pairs include BLIP-2 [28], FROMAGe [24], and KOSMOS-1 [20]. PaLM-E [13] is an LMM
+- success of recent GPT models in text-annotation tasks [17], we propose to leverage ChatGPT/GPT-4
+- and curation process in Appendix). For each image, we randomly sample one question from the
+- We collect 158K unique language-image instruction-following samples in total, including 58K in
+- For an input image Xv, we consider the pre-trained CLIP visual encoder ViT-L/14 [40], which
+- provides the visual feature Zv = g(Xv). The grid features before and after the last Transformer layer
+- language embedding tokens Hv, which have the same dimensionality as the word embedding space
+- in Flamingo [2] and Q-former in BLIP-2 [28]. We leave exploring possibly more effective and
+- readability. For LLaVA model training, we consider a two-stage instruction-tuning procedure.
+- Stage 1: Pre-training for Feature Alignment. To strike a balance between concept coverage
+- and training efficiency, we filter CC3M to 595K image-text pairs. Please see Appendix for details
+### Equations / Objectives
+- score compared with GPT-4 on a synthetic multimodal instruction-following
+- equire the embodied AI agent to follow natural language instructions
+- equence of actions to complete goals in visual environments. In the image editing domain,
+- equence. We
+- equire a step-by-step
+- EqggWnddJwEvIwo4FSyv9FLNEkJHZMC6hkoSMe1l0+tzfGyUPg5jZUoCnqq/JzISaT2OAtMZERjqeW8i/ud1UwgvvYzLJAUm6WxRmAoMMZ5EgftcMQpibAihiptbMR0SRSiYwComBHf+5UXSOq255zX39qxavyriKKNDdIROkIsuUB3doAZqIo
+- eqG2JNOZO0ZZjhtJsoikXIaScc30z9ziNVmsXy3kwSGgg8lCxiBBsrPUT9zA+jDPnJiOV5v1pz6+4MaJl4BalBgWa/+uUPYpIKKg3hWOue5yYmyLAyjHCaV/xU0wSTMR7SnqUSC6qDbHZ1jk6sMkBRrGxJg2bq74kMC60nIrSdApuRXvSm4n9e
+- X0zRkEVBBlOraVgJuRiRwKlhecVLFEkKHpM+6mkYkZMrNptfn+FgrPRzEUlcEeKr+nshIqNQ49HVnSGCg5r2J+J/XTSG4dDMeJSmwiM4WBanAEONJFLjHJaMgxpoQKrm+FdMBkYSCDqyiQ7DnX14krdOafV6zb8+q9asijjI6REfoBNnoAtXRD
+- KlhecVLFEkJHZMB6mkYkZMrNZtfn+FQrfRzEUlcEeKb+nshIqNQk9HVnSGCoFr2p+J/XSyG4djMeJSmwiM4XBanAEONpFLjPJaMgJpoQKrm+FdMhkYSCDqyiQ7AXX14m7fOafVmz7y6q9ZsijjI6RifoDNnoCtVRAzVRC1H0iJ7RK3oznowX49
+- X04/pmnIIqCCKNWzrQTcjEjgVLC84qSKJYSOyID1NI1IyJSbTa/P8bFW+jiIpa4I8FT9PZGRUKlx6OvOkMBQzXsT8T+vl0Jw6WY8SlJgEZ0tClKBIcaTKHCfS0ZBjDUhVHJ9K6ZDIgkFHVhFh2DPv7xI2qc1+7xm35xV61dFHGV0iI7QCbLRBa
+- eqxjqCQx034+ub7AJ0bp4ihRpiTgifp7Iiex1qM4NJ0xgb6e98bif14ng+jKz7lMM2CSThdFmcCQ4HEUuMsVoyBGhhCquLkV0z5RhIIJrGxCcOdfXiTNs6p7UXXvziu161kcJXSEjtEpctElqqFbVEcNRNEjekav6M16sl6sd+tj2rpkzWYO0B
+- Klhe7qaaJYQOSZ91DJUkYtrLJtfn+MgoPRzGypQEPFF/T2Qk0noUBaYzIjDQs95Y/M/rpBBeeBmXSQpM0umiMBUYYjyOAve4YhTEyBBCFTe3YjogilAwgZVNCO7sy/OkeVJ1z6ruzWmldlnEUUIH6BAdIxedoxq6RnXUQBQ9omf0it6sJ+vFer
+- equence of visual tokens Hv. Note that our simple projection scheme is lightweight,
+- kly. More sophisticated schemes to con-
+- equence, by treating all answers as the assistant's
+- equence illustrated in
+- equence of length L, we compute the probability of the target answers Xa by:
+- p(Xa|Xv, Xinstruct) = p(xi|Xv, Xinstruct,<i, Xa,<i),
+- equence used to train the model. Only two conversation turns are illustrated
+- equence/tokens are used to compute the loss in the auto-regressive model.
+### Quantitative Claims
+- achieves a new state-of-the-art accuracy of 92.53%. We make GPT-4 generated
+- GPT-4, our approach achieves SoTA on the Science QA [34] multimodal reasoning dataset.
+- Quantitative Evaluation. To gain a systematic understanding of the performance of LLaVA, we
+- helpfulness, relevance, accuracy, and level of detail of the responses from the assistants, and gives an
+- inference runs. LLaVA performs significantly better than others. For a given set of LLaVA decoding
+- significantly by over 50 points. Second, adding a small amount of detailed description and complex
+- reasoning questions contributes to a considerable improvement of the model's overall capability
+- suggesting that improvements in reasoning capabilities complement conversational abilities. Finally,
+- achieves significantly better performance compared with BLIP-2 (+29%) and OpenFlamingo (+48%).
+- Compared to the text-only GPT-4 that has access to ground-truth labels, LLaVA achieves an impressive
+- which is the current SoTA method on this dataset. For more baseline numbers, please see [34].
+- accuracy, which is quite close to the SoTA 91.68%. To explore the limit of LLMs, we also prompt
+- GPT-4 using 2-shot in-context-learning and achieve 82.69% accuracy, which is a 7.52% absolute gain
+- accuracy, which is almost the same as applying our method alone. (ii) GPT-4 as the judge. Whenever
+- GPT-4 and LLaVA produce different answers, we prompt GPT-4 again, asking it to provide its own
+- improvement over all question classes, and achieves a new SoTA accuracy of 92.53%. Interestingly,
+- Representative & SoTA methods with numbers reported in the literature
+- Table 7: Accuracy (%) on Science QA dataset. Question categories: NAT = natural science, SOC =
+- reports the best number 89.77% accuracy in 12 epochs, while reasoning-first can quickly reach
+- 89.77% accuracy in 6 epochs, but no further improvement with more training. Training the model
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.24807_CLIP-Guided SAM_ Parameter-Efficient Semantic Conditioning for Promptable Segmen.txt`
+### Abstract
+arXiv:2605.24807v1 [cs.CV] 24 May 2026 CLIP-Guided SAM: Parameter-Efficient Semantic Conditioning for Promptable Segmentation Shayan Jalilian and Abdul Bais University of Regina, Regina, SK, Canada sjs949@uregina.ca, Abdul.Bais@uregina.ca Abstract. Promptable foundation models such as the Segment Any- thing Model (SAM) produce high-quality masks but remain semantically blind, relying on external prompts to specify categories. Existing vision language approaches address this limitation by using external prompt coupling, in which a visionlanguage model generates spatial prompts for SAM as a separate stage. We propose CLIP-Guided SAM, a parameter-efficient segmentation framework built on internal semantic conditioning. Instead of using se- mantic signals only to generate prompts, we inject CLIP-derived text, vision, and similarity features directly into SAM's image encoder via lightweight multi-modal semantic adapters. These adapters condition SAM's internal feature representations, allowing semantic information to influence mask prediction while preserving SAM's original prompt- able interface. Our framework is designed for low labelled-data settings and applies to
+### Methods / Architecture
+- arXiv:2605.24807v1 [cs.CV] 24 May 2026 CLIP-Guided SAM: Parameter-Efficient Semantic
+- thing Model (SAM) produce high-quality masks but remain semantically
+- language approaches address this limitation by using external prompt
+- We propose CLIP-Guided SAM, a parameter-efficient segmentation
+- framework built on internal semantic conditioning. Instead of using se-
+- mantic signals only to generate prompts, we inject CLIP-derived text,
+- vision, and similarity features directly into SAM's image encoder via
+- SAM's internal feature representations, allowing semantic information
+- to influence mask prediction while preserving SAM's original prompt-
+- Our framework is designed for low labelled-data settings and applies to
+- only textual input. We show that robustness depends on aligning training
+- Through extensive experiments and ablations, we evaluate our method
+- against SAM+PEFT baselines without semantic conditioning, vision
+- language + SAM pipelines, SAM 3, and strong semi-supervised segmen-
+- these settings, CLIP-Guided SAM consistently achieves superior or com-
+- petitive performance while remaining parameter-efficient in both training
+- Prompt-based segmentation, popularized by the Segment Anything Model (SAM)
+- mal spatial input--such as a point, box, or mask--SAM can produce high-quality
+- object masks across diverse scenes. However, SAM is intentionally class-agnostic:
+- Furthermore, SAM is sometimes adapted via Parameter-Efficient Fine-Tuning
+### Equations / Objectives
+- equire concept-specific segmentation using
+- Contrastive LanguageImage Pre-
+- equires optimizing CLIP not merely as a prompt generator, but as an
+- kly with additional SAM backbone
+- kly supervised approaches derive activation maps or grouped regions from
+- scored using CLIP [1,38]. In most cases, SAM and the
+- equiring substantial
+- scores s RN1.
+- scores s RN1. We fuse vision and similarity via broadcasted
+- l = \mathbf {F}_\ell + \mathbf {U}_\ell + \mathbf {T}_\ell ,
+- gradients reach CLIP only through the injected feature pathway.
+- L = LBCE +LDice +LIoU. We fine-tune
+- equired at runtime.
+- equired at runtime.
+- equiring manual point prompts
+- equipped with trainable semantic adapters.
+- equipped with semantic
+- equires only modest semantic capacity once strong
+- equires joint co-
+- contrastive language-image pre-training. Pattern Recognition 162, 111409 (2025)
+### Quantitative Claims
+- against SAM+PEFT baselines without semantic conditioning, vision
+- these settings, CLIP-Guided SAM consistently achieves superior or com-
+- [15], has significantly expanded the flexibility of visual localization. With mini-
+- consistently outperforms SAM-based parameter-efficient baselines and achieves
+- Experiment 2: VLM+SAM baselines. We compare against representative vi-
+- Table 3 shows that our jointly trained framework consistently outperforms
+- ened with decoder fine-tuning and adapters, our method achieves substantially
+- the gains arise from internal semantic conditioning and joint SAMCLIP co-
+- The largest improvements appear on camouflaged object benchmarks, where
+- achieves strong performance. For fair comparison, predictions are converted to
+- creasing CLIP capacity yields a substantial improvement (65.0 mIoU on COCO
+- 1/512), whereas increasing SAM capacity alone provides a smaller gain (61.2
+- Table 5 shows strong gains on COCO and ADE20K, despite our method using
+- mentation even without additional data. Importantly, these improvements are
+- gains, suggesting that SAM requires only modest semantic capacity once strong
+- Experiment 3, where increasing CLIP capacity (CLIP-L) provided larger gains
+- points significantly improves robustness: models trained on GT points but eval-
+- standard CLIP reduces accuracy substantially (78.372.8 mIoU), confirming
+- it converges to a substantially lower final accuracy (67.5 mIoU vs. 78.3), sug-
+- roborating the quantitative gains of our multi-modal encoder injection and joint
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷃: youthful, learning, instruction tuning
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.22902_Transcoders Trace Visual Grounding and Hallucinations in Vision-Language Models.txt`
+### Abstract
+arXiv:2605.22902v1 [cs.LG] 21 May 2026 Transcoders Trace Visual Grounding and Hallucinations in Vision-Language Models Dimitrios Damianos Leon Voukoutis Georgios Skyrianos Vassilis Katsouros Georgios Paraskevopoulos Institute of Language and Speech Processing, Athena Research Center Athens, Greece {d.damianos, leon.voukoutis, george.skyrianos, vsk, g.paraskevopoulos}@athenarc.gr Abstract Generative Vision-Language Models (VLMs) perform well on multimodal rea- soning, but how visual inputs are transformed to text remains poorly understood. Existing interpretability work on VLMs uses Sparse Autoencoders (SAEs), which decompose static residual representations and miss the functional updates that drive cross-modal interaction. We adopt a function-centric framework based on Transcoders, sparse approximations of MLP sublayers that act as a causal proxy for layer-wise computation. Applied to Gemma 3-4B-IT, the framework decom- poses the model into interpretable computational pathways linking image patches to directions in token generation. Transcoder attributions produce stronger and more stable effects on visually grounded tokens under patch ablation than SAE att
+### Methods / Architecture
+- Generative Vision-Language Models (VLMs) perform well on multimodal rea-
+- Existing interpretability work on VLMs uses Sparse Autoencoders (SAEs), which
+- drive cross-modal interaction. We adopt a function-centric framework based on
+- for layer-wise computation. Applied to Gemma 3-4B-IT, the framework decom-
+- Visual Language Models (VLMs), such as Gemma 3 [Gemma Team, 2025], Qwen-VL [Bai et al.,
+- reasoning and grounded question-answering, significantly exceeding the capabilities of contrastive
+- frameworks such as CLIP [Radford et al., 2021] and SigLIP [Zhai et al., 2023]. This architectural
+- focused mainly on the semantic properties of LLMs or the visual encoders of contrastive VLMs.
+- In the LLM domain, Sparse Autoencoders (SAEs) [Cunningham et al., 2023, Bricken et al., 2023]
+- shift from state-based decomposition to functional circuit analysis. These architectures have become
+- a standard tool for tracing computational pathways in Transformers, as they isolate how individual
+- Regarding VLMs, current interpretability work remains largely confined to contrastive encoders,
+- 2025, Stevens et al., 2025]. Although recent studies have begun to apply SAEs to Large VLMs to
+- 2025], these approaches typically treat the LLM backbone as a sequence of static, independent states.
+- comprehensive mechanistic decomposition of VLMs. By shifting from state-based to functional
+- Multimodal Functional Decomposition: We apply Transcoders to generative VLM and show that
+- more interpretable VLM computation and provide mechanistic tools for structural analysis of common
+- f (x)1, where the choice of target y determines the functional objective:
+- Training follows a two-stage curriculum totaling 500M tokens: (1) a 200M-token text-only warm-up
+- Within this framework, decoder directions define a structured basis over which local model behavior
+### Equations / Objectives
+- contrastive
+- contrastive VLMs.
+- contrastive encoders,
+- equence of static, independent states.
+- L = y - y^22 +
+- P(x)): Reconstruct a computational transformation, acting as a
+- score Sdec [Sikdar et al., 2021, Simonyan et al., 2013] as:
+- gradient of the target logit
+- score per patch.
+- score and compute the resulting changes in target token probability, p = poriginal -
+- equence.
+- Score and Area Under the ROC Curve
+- contrastive encoders like CLIP [Radford et al., 2021] to decomposing generative multimodal back-
+- equent or more specialized forms
+- eqin Chen, Xionghui Chen, Zesen Cheng, Lianghao
+- gradients: Feature
+- Klara Nahrstedt, and Mingyuan Wu. Circuit tracing
+- gradient-based
+- equently features are shared per layer across different tokens.
+- equency and the number of
+### Quantitative Claims
+- tures predicts hallucinations at AUC 0.68. These results show that function-centric
+- 2025], and LLaVA [Liu et al., 2023], have achieved state-of-the-art performance in complex visual
+- reasoning and grounded question-answering, significantly exceeding the capabilities of contrastive
+- We observe that the patches identified by Transcoders in the FVG setting show no clear visual
+- In Table 2 we observe average differences between correct and hallucinated cases. Hallucinations
+- Given the class imbalance, we report Balanced Accuracy, F1 Score and Area Under the ROC Curve
+- (AUC). We compare against a Majority Class baseline (always predicting hallucination) and a Random
+- imbalance, the logistic model shows a measurable gain in both AUC and Balanced Accuracy.
+- The model outperforms both baselines across all metrics. In particular, an AUC of 0.68 indicates
+- baseline. Although we make no claims of competitive performance against output-level detectors, we
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷃: youthful, learning, instruction tuning
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.19792_Mechanisms of Object Localization in Vision-Language Models.txt`
+### Abstract
+Mechanisms of Object Localization in VisionLanguage Models Timothy Schaumloffel1,2 Martina G. Vilas1 Gemma Roig1,2 1Goethe University Frankfurt, Germany 2The Hessian Center for AI, Germany https://github.com/t9s9/vlm-loc-mechanisms arXiv:2605.19792v1 [cs.CV] 19 May 2026 Abstract underlying classification have been studied [21, 38], much less is known about localization and detection. Closing this Visually-grounded language models (VLMs) are highly ef- gap is important because most VLMs inherit visual features fective in linking visual and textual information, yet they of- from CLIP [25], which was trained with global image-text ten struggle with basic classification and localization tasks. supervision and struggles with the pixel-level precision While classification mechanisms have been studied more ex- required for localization and detection [3, 27, 39]. Yet tensively, the processes that support object localization re- VLMs can still answer queries that require identifying and main poorly understood. In this work, we investigate two locating objects, suggesting that these models build spatial representative families, LLaVA-1.5 and InternVL-3.5, using structure from weakly grounded visual representations. a suite of mechanistic interpretability tools, including token This raises the question of how the mechanisms enabling ablations, attention knockout, and causal mediation analy- localization an
+### Methods / Architecture
+- Visually-grounded language models (VLMs) are highly ef- gap is important because most VLMs inherit visual features
+- fective in linking visual and textual information, yet they of- from CLIP [25], which was trained with global image-text
+- tensively, the processes that support object localization re- VLMs can still answer queries that require identifying and
+- ablations, attention knockout, and causal mediation analy- localization and detection emerge in VLMs.
+- mechanism in which object-aligned tokens define the spa- In this paper, we present an initial mechanistic study
+- tial extent of the object, while the semantic arrangement of object localization in VLMs. We combine token-level
+- head-level account of localization in VLMs, revealing nar- formation is directly encoded in the visual tokens. The
+- design and grounding objectives. object boundaries, largely independent of the spatial ar-
+- Visually-grounded Language Models (VLMs) combine a In architectures with global and local views, the global
+- processed jointly with text by the LLM. This architecture 3. Implicit spatial layout learning. The LLM infers the
+- allows VLMs to link visual and textual inputs and has en- two-dimensional structure of the image from the one-
+- Despite these advances, VLMs continue to struggle with row boundaries and a grid-like layout.
+- heads, revealing a sequential mechanism in which object by VLMs, we construct a carefully curated dataset derived
+- We start by introducing the model architectures, the dataset, Base Dataset and Filtering We use the COCO valida-
+- put. We choose two representative VLMs that instantiate vided in Appendix 6.1. After filtering, the dataset contains
+- LLaVA-1.5 employs a CLIP ViT-L/14 [25] visual back- control for this effect, we construct an auxiliary object-
+- InternVL-3.5 uses a custom, contrastively pre-trained Because this procedure results in model-dependent subsets,
+- number of 4482 px tiles that are processed independently by each task, we design a different prompt for the same image.
+- nated and passed to the LLM. After compression, each crop defined as the proportion of samples where IoU exceeds
+- of visual input tokens to the performance of the VLMs on by adding p layers of surrounding tokens. Concretely,
+### Equations / Objectives
+- equired for localization and detection [3, 27, 39]. Yet
+- equire identifying and
+- kly grounded visual representations.
+- equence: residual positional signals
+- equential mechanism in which object by VLMs, we construct a carefully curated dataset derived
+- equires correct-
+- equent analyses rely on real object evidence rather
+- contrastively pre-trained Because this procedure results in model-dependent subsets,
+- score
+- formulation over original boundaries through negative padding has minimal
+- Gradients: We identify the image tokens Figure 1. Alignment between predicted and scaled ground-truth
+- Gradients [29] with respect to the correct accuracy between predictions obtained with a given padding level
+- gradient how well the predicted box size adapts to the artificially enlarged
+- equal number of tokens either randomly or via of object-related tokens within the spatial region rather
+- gradient-based selection. Localization is more affected than than on their semantically coherent arrangement. We show
+- gradient tokens, random tokens, and register tokens. We report
+- Gradients 21 (34,18) 2.02 70.6 20.73 62.6
+- contrastively trained ViTs trade spatial preci-
+- equence. Tokens aligned
+- equired for the task is
+### Quantitative Claims
+- and InternVL-3.5 [33], a state-of-the-art variant incorporat- Object-Removed Control Set Contextual cues can
+- 4482 px thumbnail provides coarse context. We refer to dicted bounding boxes are parsed and compared against
+- A prediction is counted as correct if the ground-truth performance below 10% accuracy, while classification still
+- the mask by 1 or 2 token padding. For InternVL mod- Accuracy (%)
+- Integrated Gradients [29] with respect to the correct accuracy between predictions obtained with a given padding level
+- Results. As Table 1 shows, across all three models, both from padding = 1 inputs achieve the highest accuracy
+- a significantly larger performance decline compared to re- indicate that localization depends mainly on the presence
+- both absolute accuracy and the corresponding drop relative to the baseline. The average proportion of removed tokens is indicated as a
+- in Table 2, localization performance drops only slightly We report localization and classification accuracy for two condi-
+- resulting change in accuracy for localization and classifica- 81.19 0.39 2.1
+- moving the global object tokens reduces accuracy by
+- drops. This dissociation indicates that each view can com- Results. In Figure 2, we observe that positional informa-
+- Figure 2. Positional decoding results. Left: average position accuracy per layer for visual backbone (0-23), the multimodal projection
+- accuracy at maximum layer of LLM, showing higher accuracy at the image corners.
+- Accuracy 0.4 lating groups of layers amplifies the effect, particularly for
+- Accuracy 0.6 concentrated within a narrow region of the language
+- curves show classification and localization accuracy and compares activations from the source run and patch them into the for-
+- to accuracy of the unmodified model. Additional results can be ward pass of the base run, yielding the counterfactual output
+- tify the causal contribution of a component using the Medi- Finally, we observe a substantial number of negative
+- Accuracy 0.2 AUC=0.09 0.4 AUC=0.15 localization information is extracted and transformed, using
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷎: humility, mitigation, bias
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.13156_Dual-Pathway Circuits of Object Hallucination in Vision-Language Models.txt`
+### Abstract
+Dual-Pathway Circuits of Object Hallucination in Vision-Language Models arXiv:2605.13156v1 [cs.CV] 13 May 2026 Jiaxin Liu Ding Zhong Yue Wang UIUC UMich Stanford Zhidong Yang Zhaolu Kang Guangyuan Dong HKUST PKU NUS Qishi Zhan Pengcheng Fang Aofan Liu Marquette Southampton PKU Abstract Vision-language models (VLMs) have demonstrated remarkable capabilities in bridging visual perception and natural language understanding, enabling a wide range of multimodal reasoning tasks. However, they often produce object hal- lucinations, describing content absent from the input image, which limits their reliability and interpretability. To address this limitation, we propose Dual-Pathway Circuit Analysis, a framework that identifies and characterizes hallucination-related circuits in VLMs for mechanistic understanding and causal probing. We first apply activation patching across five architecturally diverse VLMs to identify a visual grounding pathway that supports correct predictions and a hallucination pathway that drives erroneous outputs. We then introduce Conditional Pathway Analysis (CPA) to characterize pathway-level interactions, re
+### Methods / Architecture
+- Vision-language models (VLMs) have demonstrated remarkable capabilities in
+- reliability and interpretability. To address this limitation, we propose Dual-Pathway
+- Circuit Analysis, a framework that identifies and characterizes hallucination-related
+- circuits in VLMs for mechanistic understanding and causal probing. We first apply
+- activation patching across five architecturally diverse VLMs to identify a visual
+- ponents remain strongly redundant in both correct and hallucinating samples but
+- rect samples to aligning with the hallucinated answer on erroneous ones. We further
+- accuracy cost, and validate that the same circuit selectively transfers to relational
+- show that the identified circuits are consistent across architectures, support causal
+- Vision-Language Models (VLMs) demonstrate strong visual reasoning [36] and cross-modal un-
+- ing [37]. However, VLMs often produce object hallucinations, describing entities, attributes, or
+- cally document this problem. Existing mitigation strategies span training-time alignment [29, 35],
+- decoding-time constraints [8, 11], and post-hoc corrections [34]. These approaches primarily treat
+- VLMs as black boxes, modifying input signals or decoding procedures without investigating the
+- recall [18], and truthfulness [12]. Studying hallucination in VLMs presents additional challenges, as
+- modern VLMs differ substantially in how visual information is integrated. This raises a fundamental
+- question: are hallucination-related circuits architecture-specific, or do they reflect a more general
+- To address this question, we propose a cross-model analysis strategy to fully investigate the mecha-
+- nism of object-existence hallucination on POPE-adversarial across five architecturally diverse VLMs.
+- object hallucination in VLMs having a shared mechanistic structure that develops during training
+### Equations / Objectives
+- equently
+- equestion pair, we first run a clean pass, then corrupt visual token
+- equiring a different patching interface. We therefore implement a unified patching framework with
+- Eq. 3 alone conflates redundancy with the underlying IE polarity. We therefore additionally report a
+- l = lm_head(norm(hl)). We compute the per-layer delta,
+- equivalence
+- equired. We select the optimal s per
+- equires subtracting it. As a further control, we include a random control that applies the uniform-
+- equency. We use 1,000 samples for circuit
+- l =B 12 ngrLndL=aV1A8-,v1n.h6al-l7=B30 ngLrnladm=a1-13,.2n-hVa-l1l =1B20 ngrInndt=er2n1V,Ln3h-a8llB= 6 0 Nor2m5 alize5d0depth75(%) 100
+- mselves
+- eqin Chen, Xionghui Chen, Zesen Cheng, Lianghao
+- eqin Chen, Xuejing Liu, Jialin Wang, Wenbin Ge, Sibo Song, Kai Dang, Peng Wang,
+- contrastive decoding. In CVPR, 2024.
+- equence; LLaVA-v1.6-7B [17] (llava-hf/llava-v1.6-mistral-7b-hf), which
+- equired for CPA is implemented by simultaneously restoring
+- equires one
+- l =
+- equence length (Llama-3.2 is fastest at 1.8s/sample; InternVL3-14B is slowest
+- equired), and measure overlap with the reference |d| > 0.3 circuit using
+### Quantitative Claims
+- accuracy cost, and validate that the same circuit selectively transfers to relational
+- pathway reduces object hallucination by up to 76% with 2 pp accuracy cost. Matched static-
+- tokens at layer 0, sufficient to drive accuracy to chance), and a patch pass that restores a single
+- We compare against two linear-steering baselines from prior work [12, 41], applied to the same
+- across models (Fisher's exact test, all six pairs p > 0.05 against a shared-pattern null). At the
+- POPE-adversarial range from 40% (LLaVA-v1.6) to 76% (Llama-3.2) at 2 pp accuracy cost.
+- components. Suppressing all of them (s=0.5) drops accuracy by 9.0 pp. We therefore evaluate
+- reduction (5.0% 3.0%) at no accuracy cost (Figure 4). Top-k selection thus identifies a compact
+- alone. The probes are discriminative (per-model mean head-probe validation accuracy 0.620.67,
+- s=0 collapses POPE accuracy to chance (0.500.51) on every model (Appendix D.4), establishing a
+- double dissociation: hallucination-pathway suppression reduces hallucination at near-zero accuracy
+- with a floor effect. Accuracy cost remains within 2 pp for most models.
+- show improvement (1042% relative reduction). On relational hallucination, Qwen3-VL, InternVL3-
+- and InternVL3-8B (-17%) show meaningful improvement; the remaining models are unaffected.
+- each model's selected configuration; x-axis: accuracy change (pp), y-axis: relative hallucination
+- reduction. All five models achieve 4076% reduction at 2 pp accuracy cost. LLaVA uses top-k=10
+- information: the accuracy of the corrupt run drops to near chance level (50%) for all five models.
+- {0.5, 1.0, 1.5}, with selected on the same selection set and accuracy budget as uniform
+- ITI achieves a mean |H| of 4.1 pp under the symmetric grid (ranging from 0.5 pp on LLaVA and
+- components. Mean-difference projection achieves 0.8 pp on its three evaluated models, smaller
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷎: humility, mitigation, bias
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.25334_Dual-Pathway Geometry-Aware MLLM for Spatial Intelligence.txt`
+### Abstract
+arXiv:2605.25334v1 [cs.CV] 25 May 2026 Dual-Pathway Geometry-Aware MLLM for Spatial Intelligence Yufei Zheng1,2 Xuhan Zhu2 Zide Liu2 Chunpeng Zhou2 Chenfeng Wang1,2 Yongchao Xu1 Yunnan Wang3 Jiawei Liu1, Pengfei Yu2, Wei Zhai1, Yang Cao1 Zheng-Jun Zha1 1University of Science and Technology of China 2Li Auto Inc. 3Shanghai Jiao Tong University Spatial understanding of the physical world from 2D visual inputs hinges on two complemen- tary forms of geometric knowledge: holistic 3D structural perception and fine-grained metric scale estimation. Existing multimodal large language models (MLLMs) typically address only one facet, ingesting either depth maps or point clouds as additional model inputs, which incurs substantial computational overhead and inherits the generalization limitations of upstream prediction models. We propose GAMSI, a dual-pathway Geometry-Aware MLLM for Spatial Intelligence that takes only RGB images as input while internalizing both forms of geometric prior within a unified autoregressive backbone. Specifically, we introduce Metric-Structure Decoupled Queries (MSDQ) which employ two groups of learnable queries to respectively extract dense metric signals and sparse structural cues from the shared visual context, with a task-decoupled attention mask further preventing the two pathways from contaminating each other. Building
+### Methods / Architecture
+- arXiv:2605.25334v1 [cs.CV] 25 May 2026 Dual-Pathway Geometry-Aware MLLM for Spatial
+- scale estimation. Existing multimodal large language models (MLLMs) typically address only
+- prediction models. We propose GAMSI, a dual-pathway Geometry-Aware MLLM for Spatial
+- prior within a unified autoregressive backbone. Specifically, we introduce Metric-Structure
+- each other. Building on this, an Expert-Guided Visual Grounding (EVG) module projects the
+- models, which serve purely as training-time supervision, rather than as model inputs. We
+- further build a multi-task spatial instruction-tuning dataset (MTS) comprising 152,776 samples
+- Large Language Models (MLLMs) [9, 10, 11, 12, 13, 14] have emerged as the default interface for
+- queried via natural language. Whether MLLMs genuinely possess such spatial cognition, rather than
+- What is the distance in meters, from What is the approximate depth If I am standing at the same spot and facing the same When positioned at bathtub facing sink, where can you
+- Despite the encouraging progress made by existing studies, endowing MLLMs with reliable spatial
+- dense, unit-bearing signal, MLLMs can offer at best qualitative guesses, since RGB features alone
+- However, existing approaches typically address only one facet of this picture. The first family of
+- To address the above limitations, we propose GAMSI, a dual-pathway Geometry-Aware MLLM
+- framework for Spatial Intelligence. Unlike prior approaches, GAMSI operates on raw RGB images
+- priors into the MLLM's own semantic space during training, enabling the model to spontaneously
+- further introduce an Expert-guided Visual Grounding (EVG) module, in which the visual queries
+- vision foundation models during training only, leaving inference entirely free of any external model.
+- training paradigm that advances from low-level perceptual alignment to high-level task-oriented
+- and EVG modules via metric-depth and 3D-structure supervision. However, SenseNova-SI is
+### Equations / Objectives
+- equiring Metric Knowledge Questions Requiring 3D Structural Knowledge
+- equire scale-aware,
+- equire sparse, relational cues.
+- equally important class involves relational, viewpoint-
+- equired for
+- equiring no depth maps, point clouds, or camera parameters, and thus removes
+- equired for precise spatial perception, we
+- equiring no auxiliary 3D data, and adaptively
+- contrastive vision-language models such as CLIP [31] and
+- MSE Contrastive EVG EVG Token
+- equence of token ids and then tween Depth and 3D queries (yellow).
+- equence TA RLa , which serves as the
+- equence [Fv, Qm, Qs, Ftq ], so that both query groups can causally
+- equence. We modify the standard causal mask Mcausal by setting:
+- equired for structural or metric perception, so explicit
+- MSE regression loss for point-wise proximity and an InfoNCE contrastive loss [40] for
+- MSE = N
+- L = 1N log exp sim(fviq, fgit)/ ,
+- MSE + LCL (5)
+- equip GAMSI with spatial understanding
+### Quantitative Claims
+- Trained with a two-stage curriculum, GAMSI achieves state-of-the-art performance on seven
+- achieves state-of-the-art performance across diverse spatial intelligence benchmarks.
+- spatial perception. With this design, our model achieves a unified understanding of geometric layout
+- supervised against the expert feature fgit extracted by a pretrained vision foundation model. We
+- Table 1: Comparison with state-of-the-art methods on seven spatial intelligence benchmarks. All
+- multi-image, and video inputs. Overall, GAMSIS1+S2 achieves the best result on every benchmark and
+- to 75.8%, an absolute improvement of 11.8%. The largest margins over the best prior result on each
+- GAMSIS1 outperforms SenseNova-SI-InternVL3-8B on most benchmarks and improves the macro-
+- proposed metric-structure decoupled pathways and EVG grounding yield gains that purely data-
+- while consuming roughly 10 less spatial data (800K vs. 8M), with the largest gains again on
+- macro-average from 67.4% to 75.8% (+8.4%), with the largest gains concentrated on benchmarks
+- macro-average from 54.1% to 55.0% (+0.9%), with the largest gains concentrated on benchmarks
+- MindCube-Tiny and +1.5% on ViewSpatial), together with a moderate gain on VSI-Bench (+1.4%).
+- (+4.7% over the structural-only variant), while largely preserving the structural gains, with only a
+- into Qs and contaminate each pathway with the other's objective, eroding the gains from injecting
+- against their respective depth and VGGT targets on four scenes.
+- Trained with a two-stage curriculum, GAMSI achieves state-of-the-art results on seven spatial
+- VSI-590K focuses on video-based spatial intelligence and significantly enlarges the pool of relative
+- that further enlarging K adds computational overhead without measurable gain. We therefore adopt
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷌: fellowship, clip, contrastive
+- ䷎: humility, mitigation, bias
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.25036_Language Bias in LVLMs_ From In-Depth Analysis to Simple and Effective Mitigatio.txt`
+### Abstract
+Language Bias in LVLMs: From In-Depth Analysis to Simple and Effective Mitigation Yangneng Chen 1 Jing Li 1 Abstract Vanilla Multimodal Training Process arXiv:2605.25036v1 [cs.CL] 24 May 2026 Large Vision-Language Models (LVLMs) extend Text Over-rely Hallucinated output large language models with visual understanding, (language bias) but remain vulnerable to hallucination, where out- puts are fluent yet inconsistent with images. Re- Language Bias Regularization/Penalty cent studies link this issue to language bias--the tendency of LVLMs to over-rely on text while Text Balanced Focus Factual output neglecting visual inputs. Yet most analyses re- main empirical without uncovering its underlying Figure 1. Existing multimodal training paradigms (e.g., Visual cause. In this paper, we provide a systematic study Instruction Tuning, Direct Preference Tuning) often exhibit an over- of language bias and identify its root in modal- reliance on text, which leads to language bias. To counter this, we ity misalignment during training. Our analysis propose two distinct methods, Language Bias Regularization and shows that both Visual Instruction Tuning (VIT) Language Bias Penalty, which encourage the LVLM to balance
+### Methods / Architecture
+- arXiv:2605.25036v1 [cs.CL] 24 May 2026 Large Vision-Language Models (LVLMs) extend Text Over-rely Hallucinated output
+- tendency of LVLMs to over-rely on text while Text Balanced Focus Factual output
+- main empirical without uncovering its underlying Figure 1. Existing multimodal training paradigms (e.g., Visual
+- ity misalignment during training. Our analysis propose two distinct methods, Language Bias Regularization and
+- shows that both Visual Instruction Tuning (VIT) Language Bias Penalty, which encourage the LVLM to balance
+- and Direct Preference Optimization (DPO) often its focus between visual and textual modalities during training.
+- LVLMs to overly lean toward language modeling 1. Introduction
+- To address this, we propose two simple yet ef- The integration of vision into large language models
+- (LBR), which mitigates language bias through (LVLMs) (Liu et al., 2023a; 2024c), marking a pivotal step
+- guage bias in the DPO training process. Extensive lenge: hallucination (Sun et al., 2024; Zhou et al., 2024;
+- icantly reduces hallucination and improves trust- text not only degrades the reliability of LVLMs but also
+- publicly available at https://github.com/ 2024c; Zhang et al., 2024), attribute LVLM hallucinations
+- lab-klc/LVLM-Language-Bias. to a dominant language bias, where the model prioritizes
+- Language Bias in LVLMs: From In-Depth Analysis to Simple and Effective Mitigation
+- training-free, which focus on post-processing outputs (Chen Figure 1.
+- et al., 2024b; Leng et al., 2024), or training-based, which ad-
+- dress the issue during fine-tuning (Yu et al., 2024a;c; Yang Building upon this insight, we explore loss function designs
+- address this gap by investigating its root cause, which we ing overall performance. For DPO training, we introduce
+- of LVLMs. Consequently, rather than focusing solely on hal- As conceptually depicted in Figure 1 (bottom), both our
+- lucination scenarios, our work adopts a broader perspective methods steer the LVLM to balance its focus between the
+### Equations / Objectives
+- klc/LVLM-Language-Bias. to a dominant language bias, where the model prioritizes
+- equire strong visual grounding, resulting in hallucinations. (Bottom) Our LBR method enables
+- equently, rather than focusing solely on hal- As conceptually depicted in Figure 1 (bottom), both our
+- Eq. 5) during the training processes of (a) Visual Instruction Tuning (VIT)
+- equire neither additional alignment on high-quality instruction data. Our analysis fo-
+- equires a separate and complex reward model. In the
+- equired to LDPO = - log log (yw | x, v) - log (yl | x, v) ,
+- formulation of language bias
+- formulation, we propose the Lan-
+- equiring long-form generation.
+- Score HalRate CHAIRs Cover. HalRate Cog.
+- Score HalRate CHAIRs HalRate DPO Score HalRate CHAIRs HalRate
+- KL 1501.2 69.8 33.8 31.2 45.6 110.7
+- Contrastive 69.9 31.7 111.8
+- score on the AMBER Generative
+- scores outputs by match-
+- score by repeatedly
+- equence-level language bias. it. This finding indicates that LBP's penalty mechanism
+- KL divergence without causing collateral damage to the model's founda-
+- KL), and (iii) tional abilities.
+### Quantitative Claims
+- prioritize textual improvements, which may cause
+- sufficient emphasis on the visual modality. In practice, mod- tent performance gains across more than ten general-purpose
+- improvement in the text-only likelihood (y|x) rivals--or bustness and trustworthiness on multiple hallucination-
+- measures the gain on the full multimodal input, while BVIT
+- (bias) measures the gain from text-only conditioning. As where is a hyperparameter controlling the regularization
+- strong quantitative evidence that the model's improvement effectively suppresses linguistic drift during training and
+- corresponding multimodal gain (R) and text-only gain (B) Optimization
+- the text-only gain for preferred responses (BDPOw ) even from prior instruction tuning. A mild regularizer like LBR
+- outpaces the multimodal gain (RDPOw ), reinforcing that is insufficient for this scenario; a more potent and targeted
+- Intuitively, B quantifies the model's performance gain from where y can be either the chosen (yw) or rejected (yl) re-
+- 2024a) (5.7K pairs), supplemented by 1K and 10K pairs tent improvements across a wide range of tasks. Across
+- and Discriminative tasks), and Object HalBench. Further Table 3, LBP achieves SOTA performance on key hallu-
+- and Object HalBench. LBP consistently outperforms all
+- Baselines. For LBR, we compare against the vanilla VIT baselines across both 7B and 13B models, with particularly
+- baseline. For LBP, We first compare LBP with DPO variants strong gains on benchmarks requiring long-form generation.
+- on varying scales of preference data (1K and 10K samples outperforms both baselines across nearly all metrics. The
+- isolate the performance gains of LBP, comparing it directly provided in Section D.2.
+- against vanilla DPO and DPOM in Table 5 (detailed results
+- are in Table 12). The results show that LBP consistently Alternative Regularization Methods for LBR. To validate
+- confirming its selection as our final approach. gains, this section focuses on directly assessing the mitiga-
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.26501_Unveiling the Fragility of Vision-Language Models_ Multi-Modal Adversarial Syner.txt`
+### Abstract
+Unveiling the Fragility of Vision-Language Models: Multi-Modal Adversarial Synergy via Texture-Constrained Perturbations and Cross-Modal Optimization Xiang Fang1, Wanlong Fang2, Changshuo Wang3* 1School of Software Engineering, Huazhong University of Science and Technology 2Nanyang Technological University, Singapore 3University College London xfang9508@gmail.com, wanlongfang@gmail.com, wangchangshuo1@gmail.com arXiv:2605.26501v1 [cs.CV] 26 May 2026 Abstract 2025; Fang and Fang 2026b; Wang et al. 2026a; Fang, Fang, and Ji 2026; Wang et al. 2026d; Fang and Fang 2026a; Wang Large Vision-Language Models (LVLMs) have transformed et al. 2025e; Fang 2026; Wang et al. 2026b; Liu et al. 2023c, multi-modal understanding, excelling in tasks like image cap- 2026; Fang et al. 2026b; Wang et al. 2025b; Fang et al. tioning and visual question answering by integrating visual 2026c, 2025d, 2024b; Liu et al. 2024c; Fang et al. 2025e,c, and textual inputs. However, their robustness against ad- 2024a; Liu et al. 2023b; Fang et al. 2024c; Liu et al. 2024a; versarial attacks--particularly those exploiting both modal- Fang et al. 2023a; Xiong et al. 2024; Fang et al. 2021b; Wang ities--remains underexplored, posing risks to critical appli- et al. 2025d; Zhang et al. 2025a; Fang, Zhang, an
+### Methods / Architecture
+- Large Vision-Language Models (LVLMs) have transformed et al. 2025e; Fang 2026; Wang et al. 2026b; Liu et al. 2023c,
+- cal white-box access, limiting their real-world relevance. In Hu 2020). These models leverage vast pre-training datasets
+- this paper, we introduce Multi-Modal Adversarial Synergy, and sophisticated architectures to achieve remarkable gener-
+- a groundbreaking framework that crafts universal, black-box alization across diverse applications. However, their increas-
+- multi-modal attacks against LVLMs. MMAS simultaneously ing deployment in real-world systems--such as autonomous
+- and transferability across tasks and models. Extensive exper- nature of LVLMs introduces a new frontier: how resilient are
+- our proposed attack with prevalent LVLMs. language modalities?
+- (LVLMs), such as CLIP (Radford et al. 2021; Liang et al. carefully crafted text prompts can mislead LVLMs across
+- 2025; Fang et al. 2022; Fang, Fang, and Wang 2026; Lei vances, existing approaches predominantly focus on single-
+- potent and practical attacks. vulnerability of LVLMs to coordinated multi-modal attacks
+- sign image with a misleading textual instruction to cause attack framework for LVLMs, integrating texture scale-
+- tle image-text manipulations could bypass filters, allow- perturbations. 2) We introduce a novel cross-modal regular-
+- sal nature of LVLMs--designed to handle arbitrary image- perturbations, improving attack efficacy and transferability.
+- or modality-isolated methods. Existing multi-modal attack the multi-modal vulnerabilities of LVLMs.
+- for a practical, black-box, multi-modal attack framework seminal works (Goodfellow, Shlens, and Szegedy 2014;
+- In this paper, we introduce Multi-Modal Adversarial Syn- generality. For instance, (Moosavi-Dezfooli et al. 2017) pi-
+- ergy (MMAS), a novel framework to craft universal adver- oneered Universal Adversarial Perturbations (UAPs), sin-
+- sarial attacks against LVLMs. MMAS simultaneously gen- gle noise patterns effective across multiple images, enhanc-
+- only model queries. Our approach builds upon insights from noise that withstands image transformations. While effec-
+- to ensure visual imperceptibility and robustness, draw on the dress the multi-modal nature of LVLMs, where text inputs
+### Equations / Objectives
+- equire impracti- Fang et al. 2021a; Cai et al. 2026; Fang et al. 2020; Fang and
+- gradient directions, enhancing their synergistic impact language processing (Min et al. 2023). Yet, the multi-modal
+- score the
+- gradients, Related Work
+- gradient-based perturbations to mislead image classifiers.
+- equent studies refined these attacks for practicality and
+- gradients. While
+- gradient approx- modal potential by pairing their respective text and image
+- equires attacks, but these combinations are ad hoc, lacking a unified
+- Gradient-based image noise update
+- score
+- Gradient-based text noise update
+- Gradient Descent with cross-modal regularization to align perturbations. The resulting universal attack is evaluated
+- formulation. Consider an LVLM f(v, t) that
+- gradient information space: v = L sk W -1 (Wk W (v)), where W -1 is
+- scores/logits from the inverse wavelet transform; Wk is a binary mask select-
+- gradient back-propagation across its entire enhancing cross-image and cross-task transferability.
+- gradient for each segment in a detailed
+- equire: LVLM f, target text y, image set V, prompt set T ,
+- kle this issue, we introduce a brand-new joint optimiza- N (0, t2)
+### Quantitative Claims
+- and textual inputs. However, their robustness against ad- 2024a; Liu et al. 2023b; Fang et al. 2024c; Liu et al. 2024a;
+- multi-modal attacks against LVLMs. MMAS simultaneously ing deployment in real-world systems--such as autonomous
+- sarial attacks against LVLMs. MMAS simultaneously gen- gle noise patterns effective across multiple images, enhanc-
+- prior works: we adapt the texture-constrained UAP concept tive against vision-only models, these methods do not ad-
+- imation, MMAS achieves a practical attack that requires attacks, but these combinations are ad hoc, lacking a unified
+- ing, VQA, and text-guided image classification. Our results versarial attacks against Large Vision-Language Models
+- demonstrate that MMAS achieves higher attack success (LVLMs). Our approach simultaneously generates a texture
+- R(v, t) = v L t L2. This term encourages align- Figure 4: Investigation on the adversarial robustness against
+- TA-UAP 0.846 0.835 0.848 0.884 0.853 DALLE-3) against LLaVA in different methods.
+- Baselines: We compared MMAS against: (1) Clean inputs we create a universal patch targeting the LLaVA model on
+- scaling; (3) Texture-Constrained UAP (TC-UAP) (Huang ferability, we produce a patch against a specific model using
+- ues for each task are highlighted in bold. withstands protective measures, we test it against three
+- Attack performance on different LVLM models and greater robustness against these defense methods, as we de-
+- sistently achieves the best performance on all models and tack performance within single generation process.
+- Comparison with state-of-the-arts. Considering that dif- joint optimization). In particular, we remove each key indi-
+- the comparison results. Obviously, our proposed method module provide the significant performance improvement.
+- significantly outperforms MF-Attack (Zhao et al. 2024b) The results demonstrate that each component of our method
+- state-of-the-art in Face Presentation Attack Detection: From early ings of the AAAI Conference on Artificial Intelligence.
+- transferable attackers against large vision-language models. Ad- Fang, X.; Fang, W.; and Wang, C. 2026. CogniVerse: Revolution-
+- tackers against real-world large vision-language models. Advances
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.27315_Real Images, Worse Judgments_ Evaluating Vision-Language Models on Concreteness .txt`
+### Abstract
+Real Images, Worse Judgments: Evaluating Vision-Language Models on Concreteness and Imagery Yifan Jiang Ruoxi Ning Sheng Yao Freda Shi University of Waterloo Vector Institute {yifan.jiang,ruoxi.ning,s57yao,fhs}@uwaterloo.ca arXiv:2605.27315v1 [cs.CL] 26 May 2026 Abstract with human interpretation. Prior work shows that models can over-rely on superficial visualtextual Visual inputs are often assumed to improve correlations (Goyal et al., 2017; Agrawal et al., language understanding in multimodal mod- 2018; Yksekgnl et al., 2023), leading for ex- els. We examine this assumption by asking ample to object hallucinations or errors in spatial whether visionlanguage models (VLMs) can interpretation driven by linguistic co-occurrence distinguish useful visual evidence from inciden- biases (Li et al., 2023b). These failure modes sug- tal image context in lexical judgments. We use gest that strong downstream performance does not human concreteness and imagery ratings be- necessarily imply robust grounding, and they raise cause they span words with varying expected vi- broader concerns about when models use visual sual relevance, from abstract and low-imagery context as meaningful evidence rather than as a
+### Methods / Architecture
+- whether visionlanguage models (VLMs) can interpretation driven by linguistic co-occurrence
+- is least relevant. Through probing and canoni- word, can a visionlanguage model (VLM) distin-
+- vulnerable subsets. Our findings suggest that ting for testing whether VLMs preserve a lexical
+- current instruction-tuned VLMs need better cal- judgment when visual context is present. We use
+- ibration of when visual context should inform these ratings to test whether state-of-the-art VLMs
+- tion under the same retrieved-image condition. code perceptually grounded aspects of meaning
+- erties that quantify the degree to which words are VLMs learn joint visualtextual representations
+- tied to perceptual experience. Concreteness mea- through large-scale pretraining, ranging from early
+- sures how directly a word denotes something per- contrastive models such as CLIP (Radford et al.,
+- how different visual contexts affect VLM judg- 3.3 Prompt Design
+- Qwen2.5 (Qwen Team, 2024). For VLMs, we should determine the rating. To reduce prompt-
+- both text-only and visionlanguage variants, the sentation analyses. VLMs receive the same textual
+- VLM counterpart, e.g., Qwen2.5-VL is the vi- texts (None, White, Noise, ImageNet, Wikimedia).
+- ing the effect of vision fine-tuning. Checkpoint and by making a visual instance salient. This ambiguity
+- notations on a CP2004B subset in Appendix C. tions by training regressors to predict concreteness
+- significance versus None for the same model (* q < 0.05, ** q < 0.01, *** q < 0.001; paired sign-flip tests with
+- ing over attended non-image tokens. For VLMs, indicate larger context-associated shifts. Implemen-
+- by training the same probes after permuting the ents (IG), implemented with Layer Integrated Gra-
+- = max corr(Xa, Zb). (1) Our primary finding is that VLMs are vulnerable
+- words, where text-only models or VLMs given un- can diverge (Appendix D.2).
+### Equations / Objectives
+- equested rating
+- equested word-level judgment when
+- contrastive models such as CLIP (Radford et al.,
+- equested judgment
+- MSE).
+- MSE on the full evaluation set and on
+- MSE penalizes deviations on
+- MSE of model predictions against human concreteness (left) and imagery (right) ratings. None denotes
+- formulation and implementation details
+- MSE 1.0 1.0 1.0
+- MSE 1.5 1.5 1.5
+- MSE of model predictions 2024b,a). However, the substantial performance
+- equently worsen for abstract and low-imagery subset. Human raters also shift upward under re-
+- MSE than ence lexical ratings in both humans and VLMs.
+- MSE pattern, while also analyses still show that VLMs are significantly
+- kly
+- Gradients for Qwen2.5-VL on "nature" (human rating: 2.92) under four visual contexts. Panels
+- kly aligned, or incidental visual contexts,
+- equently on abstract words, but gains imagery words. Crucially, a matched human study
+- equested linguistic judgment.
+### Quantitative Claims
+- sistent gains and often hurt alignment with hu- These concerns motivate a more targeted ques-
+- degradation, with the clearest gains on these picture. They therefore provide a controlled set-
+- ibration of when visual context should inform these ratings to test whether state-of-the-art VLMs
+- ments to visual representations, has gained renewed by varying the visual input while holding the target
+- Error: 1.56 Largest gains for abstract, low-imagery words.
+- ness is rated on a 5-point scale (1 = highly abstract; from the model output and evaluate it against the
+- Table 1: RMSE of model predictions against human concreteness (left) and imagery (right) ratings. None denotes
+- sults broadly support the RMSE pattern, while also analyses still show that VLMs are significantly
+- token hidden representations as well as the aver- Liang, 2019), drops significantly relative to other
+- Qwen2.5-VL probing setup is associated with de- VL. The None visual context is compared against
+- we prepend the same sentence: VLMs also benefit, with the most consistent gains
+- prompt wins frequently on abstract words, but gains imagery words. Crucially, a matched human study
+- search over mitigation designs. The selective gains
+- pre-training with frozen image encoders and large gain, and Carolyne M. Weil. 1979. Semantic priming
+- significantly larger than the corresponding human words. This confirms that imageword match qual-
+- tent when making the lexical judgment. leading. Many VLM shifts are significantly larger
+- man as complementary, especially because the rat- gains depend more on the model and subset, so the
+- The average rows show consistent gains for abstract
+- the clearest improvements on low-imagery words.
+- all, these results suggest that the gains are robust
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷊: peace, alignment, grounding
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.30912_Attend to Evidence_ Evidence-Anchored Spatial Attention Supervision for Multimod.txt`
+### Abstract
+Attend to Evidence: Evidence-Anchored Spatial Attention Supervision for Multimodal RLVR Ruina Hu1,2, Chen Wang2,4, Lai Wei2,5, Jionghao Bai2,6, Bin Yu1,2, Weiran Huang5, Kai Wang1,*, Yue Wang2,3,* 1Harbin Institute of Technology 2Zhongguancun Academy 3Zhongguancun Institute of Artificial Intelligence 4Nankai University 5Shanghai Jiaotong University 6Zhejiang University Abstract Q: Which animal appears three times? A: giraffes arXiv:2605.30912v1 [cs.CV] 29 May 2026 Reinforcement learning with verifiable re- Standard RLVR EASE wards (RLVR) improves vision-language mod- els (VLMs) by optimizing outcome rewards giraffes giraffes derived from final answers. However, such Weak Evidence Grounding outcome-only rewards do not tell the model Guide Attention on High- which image regions justify an answer. For Reward Trajectories questions that require visual grounding, these rewards cannot distinguish responses supported EASE teaches VLM where to look, not just what to answer. by relevant visual evidence from those pro- duced by language-prior shortcuts or lucky Figure 1: From outcome rewards to evidence acqui-
+### Methods / Architecture
+- arXiv:2605.30912v1 [cs.CV] 29 May 2026 Reinforcement learning with verifiable re- Standard RLVR EASE
+- rewards cannot distinguish responses supported EASE teaches VLM where to look, not just what to answer.
+- guesses. We introduce EASE (Evidence- sition. Standard RLVR may answer correctly while
+- attention during RL training, but only on high- 2026). However, outcome-only reward does not
+- solely as privileged training labels, while in- in the image. A VLM may need to find a small ob-
+- Reinforcement learning with verifiable rewards answer may reflect relevant visual evidence, but
+- ingly used in vision-language model (VLM) post- incorrect answer is also ambiguous because the
+- training (Shao et al., 2024; Yu et al., 2026; Yang model may have looked at the wrong region, or it
+- cally. Recent VLM systems show that these ver- require object comparison, counting, localized at-
+- grounded and vulnerable to hallucination (Li et al., trained and evaluated under the same protocol as
+- training signal. Evidence boxes and human atten- cent 7B-scale multimodal RL methods on shared
+- and can serve as training-only labels for where the tion, reward-aware gating, the smoothed target, and
+- model should look (Hudson and Manning, 2019; mixed single-/multi-evidence training setup.
+- to improve grounding in VLMs (Selvaraju et al., Our contributions are summarized as follows.
+- 2019). In RL, the same idea can be used to check We identify visual evidence acquisition as a
+- tion objectives, visual-dependency signals, or tex- requiring evidence metadata at inference.
+- only to supervise internal attention during training, We validate EASE across multiple VLM back-
+- leaving the VLM's inference format unchanged. bones and benchmarks for perception-heavy
+- We propose EASE (Evidence-Anchored Spatial math, and multimodal reasoning, with diagnos-
+- AttEntion), a framework that adds visual evidence- tics showing better alignment between visual
+### Equations / Objectives
+- equire visual grounding, these
+- kly to the key evidence region. EASE
+- equires only the original image and ject, compare two regions, or combine clues across
+- scores over DAPO by 2.5 to 3.1 points on per- RL can reward a correct answer without knowing
+- equire object comparison, counting, localized at-
+- Equal corresponding authors.
+- kly 7B, Qwen3-VL-4B, and Qwen3-VL-8B. When
+- score by 2.9,
+- equiring evidence metadata at inference.
+- kly to the image region that justifies the an-
+- klists (Zhang et al.,
+- KL
+- KL quantile 3.1 Motivating Observation
+- KL by response outcome
+- KL-binned hallucination We first examine whether RL with only outcome
+- KL VL-4B policy trained by GRPO using final-answer
+- KL
+- klist verifi- This score measures attention-target mismatch. Ev-
+- KL divergence
+- KL overall than responses that
+### Quantitative Claims
+- tively, with gains on perception-heavy reasoning,
+- indicate which image regions support an answer gains to stronger evidence-aligned visual atten-
+- coordinates, or grounded rationales (Peng et al., outcome rewards can improve final accuracy while
+- Consistent Gains under Controlled Training. DAPO average from 75.7 to 78.8 and gives gains
+- Qwen2.5-VL-7B, EASE improves DAPO on every ants, improving DAPO from 78.4 to 80.9 and again
+- 70.5 to 73.4. The largest gains appear on vision- sults suggest that evidence-focused attention regu-
+- w/o reward gating 86.4 71.0 77.9 78.4 ing accuracy, and multi-evidence coverage on a held-out
+- achieves the best average score in this compari- target, including Gaussian smoothing, background
+- rather than only final-answer accuracy. Detailed nation benchmarks, EASE improves outcome-only
+- Huang, and Lijuan Wang. 2025d. Sota with less: reasoning through cross-modal formalization. In Pro-
+- sual reasoning self-improvement. arXiv preprint on Computer Vision, pages 23762385.
+- evidence regions. Evidence boxes are used only Pointing Accuracy. Pointing Accuracy measures
+- ment, Pointing Accuracy measures whether the
+- coordinates against the original image, question, agram elements are identified, but the final answer
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.31096_iVGR_ Internalizing Visually Grounded Reasoning for MLLMs with Reinforcement Lea.txt`
+### Abstract
+iVGR: Internalizing Visually Grounded Reasoning for MLLMs with Reinforcement Learning Chang-Bin Zhang 1 Yujie Zhong 2 Qiang Zhang 3 Kai Han 1 Project Page: https://visual-ai.github.io/ivgr/ arXiv:2605.31096v1 [cs.CV] 29 May 2026 Abstract query crops <think>...<tool_call>[x1,y1,x2,y2]</tool_call> ...</think><answer>...</answer> While visually grounded Chain-of-Thought (CoT) has emerged as a promising paradigm to enhance (a) Visually Grounded CoT with Tools (Crop) fine-grained perception in multimodal large lan- guage models (MLLMs), its efficacy during the query <think>...object <box>[x1, y1, x2, y2]</box> inference phase remains underexplored. In this ...</think> <answer>...</answer> work, we empirically find that mandating explicit object boxes in visually grounded CoT during (b) Visually Grounded CoT without Tools inference often degrades performance compared to standard textual CoT, which reasons without query <think>...object <box>[x1, y1, x2, y2]</box> explicit visual grounding. We hypothesize that ...</think> <answer>...</answer> the visual localization capability can be internal-
+### Methods / Architecture
+- guage models (MLLMs), its efficacy during the query <think>...object <box>[x1, y1, x2, y2]</box>
+- interference with the model's primary objective <think>...</think> <answer>...</answer>
+- we propose Internalizing Visually Grounded Rea- (c) iVGR (ours)
+- framework that transfers localization capabilities Figure 1. Paradigms of visually grounded reasoning. (a) Tool-
+- into the textual reasoning process. We employ based approaches rely on dynamically invoking crop tools to
+- a dual-stream training strategy, where a textual acquire fine-grained visual details. (b) Explicit grounding ap-
+- ward, enabling the model to localize accurately duces a dual-stream training strategy. By utilizing a consistency
+- tensive experiments demonstrate that our method stream, we explicitly internalize localization capabilities into the
+- Multimodal large language models (MLLMs) (Liu et al., scenes (Zheng et al., 2025b; Wang et al., 2025e). In such
+- remarkable progress in recent years. While post-training Chain-of-Thought (CoT) often fails to guide MLLMs to lo-
+- iVGR: Internalizing Visually Grounded Reasoning for MLLMs with Reinforcement Learning
+- require the MLLM to generate bounding boxes when refer- visually grounded CoT consistently underperforms textual
+- CoT, we conduct a comparative study using representa- Building upon this insight, we propose iVGR, a reinforce-
+- tive SOTA models, DeepEyes (Zheng et al., 2025b) and ment learning-based dual-stream training strategy. For each
+- TreeVGR (Wang et al., 2025a). Specifically, we take off- training query, the policy MLLM generates two distinct
+- swering (VQA) benchmarks. Without any re-training, as standard reasoning. To transfer the grounding capability
+- reported in Table 1, we compare their default grounded across streams, we introduce a novel consistency reward that
+- the questions based on the IoU of the generated grounded Building on this insight, we propose iVGR, a
+- CoT. We then calculate the accuracy for each IoU inter- reinforcement-learning-based dual-stream training
+- 2025b) (see Figure 2a), visually grounded CoT with crops our method explicitly transfers the visually grounded
+### Equations / Objectives
+- equire the MLLM to invoke an
+- equently integrat-
+- equire the MLLM to generate bounding boxes when refer- visually grounded CoT consistently underperforms textual
+- equently, a wave of recent studies (Chen et al., classify this format distinctively to highlight the explicit
+- equires the model to explicitly predict bounding
+- equire the model to predict bounding boxes boxes when referring to objects, whereas the textual stream
+- formulation from
+- scores:
+- equests only reasoning
+- formulated as:
+- equire the out- Rit = Rformat + Racc + Rconsistency, (3)
+- equipped with crops from the predicted
+- scores among (b) correctly predicted
+- equency with which historical best
+- Score 1.0) steadily increases to
+- Score 0.0) significantly decline. Interest-
+- scores (0.3 and 0.7) exhibit a distinct
+- equently, it jumps to 30% in the second
+- score and the average of four sampled judge scores. `Single score' uses Qwen2.5-72B
+- score with the sampling temperature set to 0.01, whereas `avg. of four scores' uses Qwen2.5-72B to judge four
+### Quantitative Claims
+- significantly outperforms existing baselines on textual reasoning process.
+- 2025a), significantly enhance their general reasoning capa-
+- HR4K 69.0 75.1 74.9 77.1 76.9 Figure 2. Relationship between accuracy and localization qual-
+- HR8K 65.1 72.6 73.1 73.1 74.7 based on the IoU of the generated grounded CoT, and accuracy is
+- tive SOTA models, DeepEyes (Zheng et al., 2025b) and ment learning-based dual-stream training strategy. For each
+- CoT against a typical textual CoT, which is elicited simply aligns the textual CoT with high-quality grounded reasoning
+- However, textual CoT achieves superior performance across over, iVGR remains compatible with explicit crop tools
+- into typical textual CoT, obviating the need for explicit that iVGR yields significant improvements across multiple
+- tion, we examine the relationship between answer accuracy revealing that this capability can be implicitly trans-
+- CoT. We then calculate the accuracy for each IoU inter- reinforcement-learning-based dual-stream training
+- outperforms textual CoT when the crops are of high qual- reasoning capability into the textual reasoning process.
+- our models achieve significant improvements across CoT. Furthermore, our method remains compatible with
+- cal perception via cropping mechanisms. Early approaches sis reveals that textual CoT consistently achieves superior
+- like SEAL (Wu & Xie, 2024), Dyfo (Li et al., 2025), and accuracy across various localization quality intervals when
+- When referring to particular objects in Stream !#" Accuracy "#" Group #"#
+- <answer> </answer> tags, respectively, !#' Accuracy "#' Group #'#
+- swer accuracy, and localization quality. For the textual average of the recall-oriented and precision-oriented
+- stream, alongside standard format and accuracy rewards,
+- Accuracy Reward (Racc): This binary reward indi- tailed in Section 3.3). Note that Rformat and Racc are calcu-
+- ways computed against the highest-quality visual guides 32,000 samples with their original grounded CoT annota-
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷍: greatness, visual autoregressive, scalable
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.31271_DriveMA_ Driving Vision-Language-Action Models with verifiable Meta-Actions.txt`
+### Abstract
+DriveMA: Driving Vision-Language-Action Models with verifiable Meta-Actions Weicheng Zheng1,2 Yixin Huang1,3 Qiao Sun1 Derun Li1 Hang Zhao1,2 1Shanghai Qi Zhi Institute 2IIIS Tsinghua University 3Tongji University arXiv:2605.31271v2 [cs.CV] 10 Jul 2026 Abstract: Driving Vision-Language-Action Models (Driving VLAs) aim to use language to improve end-to-end planning, but the language-action gap limits this promise. We propose DriveMA, a Driving VLA framework built on verifiable meta-actions, which summarize future ego motion into compact language-domain intentions and can be constructed from expert trajectories with a trajectory- grounded annotation pipeline and can be verified against generated trajectories through rule-based projection. DriveMA exploits this verifiability with action- centric supervised training and a data-efficient turn-level credit assignment rein- forcement learning framework, explicitly aligning high-level decisions with low- level trajectory planning through dense rewards and precise credit assignment. DriveMA sets a new state of the art on the Waymo Open Dataset Vision-based E2E Driving, achieving a Rater Feedback Score of 8.060 with a 2B model and further improving it to 8.079 with a 4B model; it also obtains competitive closed- loop planning performance on NAVSIM. These results show that even a simple meta-action interface can achieve state-of-the-art planning when made verifiable
+### Methods / Architecture
+- promise. We propose DriveMA, a Driving VLA framework built on verifiable
+- centric supervised training and a data-efficient turn-level credit assignment rein-
+- forcement learning framework, explicitly aligning high-level decisions with low-
+- To this end, we propose DriveMA, a Driving VLA that instantiates meta-action as a simple verifiable
+- action-centric pretraining for driving-domain decision learning, and turn-level credit assignment RL
+- show that action-centric pretraining and turn-level credit assignment RL effectively align language
+- We propose DriveMA, a Driving VLA framework that instantiates meta-actions as a sim-
+- We introduce a highly data-efficient turn-level credit assignment RL framework for explicit
+- visual inputs and actions [9, 10, 11, 4, 12]. For example, DriveVLM [3] decomposes driving into
+- and action generation in an autoregressive framework with adaptive thinking modes. These works
+- ing [14, 5, 15, 6]. SimLingo [5] aligns language and actions through multi-task training and
+- a shared token space and introducing an action-understanding objective to learn bidirectional
+- ric cues with dataset-specific thresholds estimated from training trajectories. Additional annotation
+- Before RL, DriveMA uses a two-stage supervised fine-tuning (SFT) pipeline to establish meta-
+- action-guided planning. The first stage adapts the general VLM to driving-domain action under-
+- Action-Centric Pretraining. This stage contains two types of supervision. First, we use meta-
+- we incorporate 240K action-related Driving VQA samples from public datasets, selecting samples
+- related to driving intention, action decision, and risk-aware behavior. These samples further align
+- the general VLM with driving-domain perception and decision knowledge.
+- Meta-Action-Conditioned Planning SFT. After action alignment pretraining, we train the full
+### Equations / Objectives
+- Score of 8.060 with a 2B model and
+- equires the intermediate language interface to be verifiable. A veri-
+- Score (RFS) of 8.060,
+- equent reasoning supervision. Rather than relying on implicit alignment from auxiliary tasks or
+- formulates end-to-end driving planning as
+- l = ann([tl,tl+c]).
+- equence conditioned on expert meta-actions. This staged design separates action-
+- equence x
+- equence-level
+- KL(ref ),
+- Eq ,{oi }G i=1 old j=1 j
+- KL term, weighted by , is applied as a separate regularizer to
+- scored trajectory samples and instantiate Rtraj with RFS. For
+- Score (RFS)7.9
+- Score (RFS)
+- equires
+- equire visual context to distinguish turning
+- equiring exact agreement on visually dependent fine-grained lateral distinctions, such as turn versus
+- equiring exact agreement on visually dependent
+- KL penalty coefficient is set to = 0.4, and the sampling temperature is 1.0. The
+### Quantitative Claims
+- grounded annotation pipeline and can be verified against generated trajectories
+- loop planning performance on NAVSIM. These results show that even a simple
+- meta-action interface can achieve state-of-the-art planning when made verifiable
+- against generated trajectories, and optimized through explicit alignment. In this paper, we study
+- achieves a new state of the art with a 2B model, reaching a Rater Feedback Score (RFS) of 8.060,
+- decisions with trajectory planning. Overall, these results show that the key value of DriveMA lies
+- NAVSIM Benchmark. Table 2 reports the closed-loop results on NAVSIM. DriveMA achieves
+- competitive performance compared with state-of-the-art end-to-end planners, with DriveMA-4B
+- 3.065 to 2.802, showing that the meta-action interface provides useful but limited gains by itself.
+- (a) Data efficiency frontier (b) Training component gains
+- NoRD [13]. Right: the gains from RL and ACP are decomposed over DriveMA-2B variants.
+- with substantially larger data. This improvement mainly comes from turn-level credit assignment
+- its combination with RL achieves 8.060 RFS using only 77K planning samples, 240K action-centric
+- to be converted into substantial planning gains.
+- scaling from 4B to 9B brings limited additional gain. This is because finer chunks substantially
+- face, DriveMA achieves a new state of the art on WOD-E2E, competitive performance on NAVSIM,
+- case. These examples indicate that DriveMA's improvement is not limited to selecting the correct
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+---
+## 
+**File:** `2605.17204_Event-Grounded Sparse Autoencoders for Vision-Language-Action Policies.txt`
+### Abstract
+arXiv:2605.17204v1 [cs.RO] 17 May 2026 Event-Grounded Sparse Autoencoders for Vision-Language-Action Policies Xinchen Jin Aditya Chatterjee Pranav Kumar Rohan Paleja Department of Computer Science, Purdue University West Lafayette, IN 47907 {jin548, chatte59, kumar649, rpaleja}@purdue.edu Abstract Vision-Language-Action (VLA) policies translate language and visual inputs into robot actions, where their hidden representations directly shape closed-loop behav- ior. However, mechanistic interpretability tools from language and vision-language models do not transfer cleanly to VLAs: outputs are robot actions rather than human-readable tokens, and interventions can only be tested via expensive closed- loop rollouts. We propose an event-grounded interpretability pipeline that anchors SAE feature analysis to behavioral events rather than text contexts. End-effector keyframes are clustered within each task using visual, state, and temporal cues, linking SAE features to behaviorally salient events and, via optional VLM anno- tations, to semantic context. To our knowledge, our pipeline is among the first to ground SAE-based VLA analysis in closed-loop behavioral events. Across two
+### Methods / Architecture
+- arXiv:2605.17204v1 [cs.RO] 17 May 2026 Event-Grounded Sparse Autoencoders for
+- loop rollouts. We propose an event-grounded interpretability pipeline that anchors
+- linking SAE features to behaviorally salient events and, via optional VLM anno-
+- simulation architectures and a real-robot study, event-grounded ranking yields the
+- architecture and intervention site, and aggressive intervention reveals safety and
+- sparse autoencoder (SAE) feature decoding [6, 7]. These methods exploit two properties of language
+- can be enumerated and scored individually [10, 21], and its training is unsupervised. To select
+- Architecture- and site-dependent intervention behavior. The same pipeline yields qualitatively
+- action expert collapses under nearly any ranking. Intervention sites are architecture-specific and do
+- Mechanistic Interpretability of LLMs and VLMs. In LLMs, prior work has studied how informa-
+- which makes intermediate representations relatively easy to inspect and validate. The same advantage
+- largely carries over to VLMs, whose outputs remain linguistic, and similar analyses have begun to
+- Sparse Autoencoders. A line of interpretability work from Anthropic identified superposition
+- in neural networks [20], introduced sparse autoencoders (SAEs) as a means of recovering more
+- interpretable latent features from activations [10], and later scaled this framework to large language
+- more broadly [11, 12, 27, 13], and similar ideas have recently been extended to VLMs [28, 29, 30].
+- Non-SAE approaches include FFN-direction analysis for physical quantities such as end-effector
+- VLA action fidelity. Buurmeijer et al. [19] take a complementary linear-probe approach to observe
+- Figure 1: This figure shows the 4 stages of the event-grounded SAE pipeline: (1) SAE training
+- (Sec. 3.1); (2) kinematic keyframe extraction (Sec. 3.2); (3) task-local event clustering with VLM
+### Equations / Objectives
+- scores every alive SAE feature against external behavioral events, achieving full coverage of the SAE
+- scored individually [10, 21], and its training is unsupervised. To select
+- score features
+- score every alive SAE feature against these events
+- scores SAE activations conditioned on these external behavioral events.
+- scores SAE features against SAE-independent behavioral events extracted from rollouts.
+- score, and causally test SAE features without manual per-feature labeling.
+- equence of waypoints under
+- scores, providing a representation-independent proposal mechanism for candidate events.
+- score SAE features against recurring event types rather than individual keyframes, we group
+- equent release when source and target locations are close, or two passes through
+- scores highly. Per-episode score formulas
+- score measures how well a
+- score reflects
+- scores use the best-matching template,
+- equally.
+- x0 0.050.00 0.05 0.200.150.100.0E05E.0F00y.050.10 0.050.0E0E0F.05x0.10 0.15 0.20 0.005.000.050.1E00E.F150y.20 0.0
+- scored highly by the
+- equiring the activation to follow a specific temporal pattern.
+- equent OpenVLA discovery
+### Quantitative Claims
+- scores every alive SAE feature against external behavioral events, achieving full coverage of the SAE
+- against clusters, and validate features through closed-loop interventions. Extraction and scoring are
+- rollouts, cluster them into task-local events, and score every alive SAE feature against these events
+- instead scores SAE features against SAE-independent behavioral events extracted from rollouts.
+- To score SAE features against recurring event types rather than individual keyframes, we group
+- 0.20 0.E15EF0.1x0 0.050.00 0.05 0.200.150.100.0E05E.0F00y.050.10 0.050.0E0E0F.05x0.10 0.15 0.20 0.005.000.050.1E00E.F150y.20 0.0
+- sweeps edit strength continuously and is motivated by the saturation we observe under hard zero-
+- These results show that FFN value-vector projection can recover some color-associated directions,
+- LIBERO-Object, event-aligned f19249 zero-out: place the cream cheese in the basket
+- We read this not as negative evidence against event-feature scoring, but as a sign that many event-
+- LIBERO-Object (10 tasks 5 rollouts), we compare decoder-vector steering against a random unit
+- SAE probe against raw hidden states, task-identity, and shuffled labels. The picture is consistent with
+- Table 10: Balanced accuracy of trajectory-level success-prediction probes (5-fold cross-validation).
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.23035_Sparse Autoencoders Map Brain-LLM Alignment onto Cortical Semantic Topography.txt`
+### Abstract
+Sparse Autoencoders Map BrainLLM Alignment onto Cortical Semantic Topography Dongxin Guo Jikun Wu Siu Ming Yiu The University of Hong Kong Stellaris AI Limited The University of Hong Kong Hong Kong, China Hong Kong, China Hong Kong, China bettyguo@connect.hku.hk hk950014@connect.hku.hk smyiu@cs.hku.hk arXiv:2605.23035v1 [cs.CL] 21 May 2026 Abstract predict neural responses with remarkable accu- racy (Schrimpf et al., 2021; Goldstein et al., 2022; Intermediate layers of large language models Pereira et al., 2018). Tuckute et al. (2024b) demon- (LLMs) best predict human brain responses strated that LLM-optimized stimuli causally drive to language, one of the most robust findings the brain's language network, and Fedorenko et al. in computational neurolinguistics, yet why re- (2024) argued that this network constitutes a natural mains mechanistically unexplained. We ad- kind whose properties align with LLM-discovered dress this gap by bridging sparse autoencoders representations. The "direct fit" perspective (Has- (SAEs) from mechanistic interpretability with son et al., 2020) suggests this alignment arises be- neural encoding models, decomposing GPT- cause both brains and models are optimized for 2 XL and Llama-3.1-8B into 16K32K inter- similar computational objecti
+### Methods / Architecture
+- dress this gap by bridging sparse autoencoders representations. The "direct fit" perspective (Has-
+- 2 XL and Llama-3.1-8B into 16K32K inter- similar computational objectives.
+- activity? This question, rooted in decades of neu- into interpretable features. Sparse autoencoders
+- amines training and scale: Hosseini et al. (2024) Gallant, 2026)), developed in parallel with the
+- showed modality-invariant maps. Patterson and sive objectives shape LLM representations in ways
+- architecture. Binder et al. (2016) developed a 65- sibility, what they term "embers of autoregression."
+- transformers as iteratively refining representations. 3 Methodology
+- (2025) discovered spatial modules. Recent work Our approach proceeds in five stages (Figure 1). In
+- 3.2 Language Models and SAE Training dog ran across the"; an affective-semantic feature
+- (Chanin et al., 2024), and questions about "true" tracted per word and downsampled to the fMRI TR
+- from the cross-linguistic "Little Prince" tradition: random: same number of features as semantic
+- validation within each training fold, searching over gular gyrus and posterior parietal; temporal/causal
+- ness features best predict posterior temporal cortex the same conclusion: the SAE-derived cortical to-
+- (p<0.001). These results are evidence consistent features with the same number of randomly sam-
+- subject and by-item random intercepts. Follow- Appendix J) and =4 is our layer sampling in-
+- 95% CI [0.005, 0.031]; VIF= 1.21; MLP replace- fore training-objective specialization (McCoy et al.,
+- SAE semantic features outperform PCA This work bridges sparse autoencoders from mecha-
+- programs supports the hub-and-spoke architecture ing that the fine-grained contextual representations
+- mantics posteriorly and social/affective semantics SAE architectures. All code, configurations,
+- tional semantics. (4) Three languages, two families, approach to multiple testing. Journal of the Royal
+### Equations / Objectives
+- equires decomposing representations
+- L = x - x^22 + f (x)1, with 27 stories, 6 hours/subject; TR=2.0 s). Because
+- equire
+- l = proportion of patterns. Left: a priori predictions from Binder et al.
+- l=0.092); shared = Rf2ull (2009)/Huth et al. (2016)/Deniz et al. (2019) (dark =
+- l=0.64, p=0.002.
+- formulated without
+- equency and length (spillover), and unigram
+- L=38.4, 2=76.8, p<0.001; ran-
+- L=2.1, p=0.34) and Provo
+- L=24.7, p<0.001; total reading
+- L=31.2, p<0.001). Critically, SAE
+- L=12.8, p<0.001), confirming
+- equires SAE decomposition or could emerge we frame this as a generalization check, not cross-
+- equency, word length
+- gradient. BrainLLM convergence primarily language models and to generate testable neu-
+- gradient (Appendix P): lexical-feature
+- equired to
+- equal to fit brain
+- equire new
+### Quantitative Claims
+- et al., 2016; Mitchell et al., 2008), has gained
+- 1. Primary empirical (novel): We derive five testing against independent neuroscience programs
+- unique vs. shared variance against count- and The confusion matrix (Table 15, Appendix) shows
+- tion error achieves only r=0.031, confirming SAEs anatomical language-network parcellation sum-
+- ness against alternative subcategorizations: using 44 .198 .132 .078 .098 .008 .107
+- (r=0.141) and angular gyrus (r=0.131); affect fea- pography significantly matches independent neuro-
+- (d=0.74), still significantly less than semantic et al., 2023); the random baseline replaces SAE
+- + prediction + lexical + other) achieves r=0.189. duration: log L=24.7, p<0.001; total reading
+- SAE features against word-level norms (concrete-
+- Cortical topography and the semantic atlas. gions in a pattern that significantly matches predic-
+- L20. The improvement from combining (+0.018, M Shapley Value Decomposition
+- Post-hoc power analysis for the subcategory 45% top-1 accuracy.
+- tion to 847 dimensions achieves only r=0.201, and
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.09352_The Wittgensteinian Representation Hypothesis_ Is Language the Attractor of Mult.txt`
+### Abstract
+arXiv:2605.09352v1 [cs.AI] 10 May 2026 The Wittgensteinian Representation Hypothesis: Is Language the Attractor of Multimodal Convergence? Zhaoyang Zhang1,4Run Shao1 Dongyue Wu2 Jiajie Teng3 Chao Tao1 Jingdong Chen4 Haifeng Li1 1Central South University 2Huazhong University of Science and Technology 3Shanghai Jiao Tong University 4Ant Group Abstract Understanding why independently trained neural networks from different modal- ities converge toward shared representations, and where this convergence leads, remains an open question in representation learning. All existing evidence relies on symmetric similarity measures, which can detect convergence but are struc- turally blind to its direction. We introduce directional convergence analysis using CYCLE-KNN, an asymmetric alignment measure, applied across dozens of inde- pendently trained unimodal models spanning point clouds, vision, and language. We uncover a consistent directional asymmetry: non-language modalities move toward the neighborhood structure of language significantly more than the reverse, and this pattern holds across all model families and scales--yet is entirely invisible to symmetri
+### Methods / Architecture
+- turally blind to its direction. We introduce directional convergence analysis using
+- regions of representational space. The Information Bottleneck framework provides
+- both directions reveals a consistent directional bias: vision representations approach language more
+- cloud representations approach language significantly more than the reverse--invisible to
+- among the most compact; the Information Bottleneck framework provides a principled
+- framework to extract it. This "directional convergence analysis" framework is useful independently
+- Based on these findings, we propose the Wittgensteinian Representation Hypothesis (WRH): the
+- tically similar samples cluster tightly, making the return hop more likely to succeed:
+- models across supervised, self-supervised, and contrastive paradigms (ViT [Dosovitskiy et al., 2021],
+- MAE [He et al., 2022], DINOv2 [Oquab et al., 2024], DINOv3 [Caron et al., 2025], CLIP [Radford
+- InternLM [Cai et al., 2024]; 560M72B). Except for CLIP and ReCon++ (cross-modal controls), no
+- model has seen data from another modality during training. Full details are in Table 4 (Appendix D).
+- symmetric measures (CKA, mutual kNN), which yield 0 by construction on the same model
+- compute symmetric measures (CKA, mutual kNN) on the same model pairs as controls. Default
+- statistical significance (p < 0.01 for all modality pairs; Table 1). On the same model pairs, CKA and
+- Symmetric measures (CKA, mutual kNN) show 0 on the same pairs.
+- language model pairs (k = 10, WiT-1024 dataset). Both panels share the same color scale. Panel (a)
+- for PCLanguage), regardless of scale, architecture, or training paradigm.
+- BLOOMZ LLaMA Qwen2.5 Qwen3 InternLM Sup MAE DINOv2 DINOv3 CLIP CLIP-FT
+- Having established the empirical phenomenon, we investigate its underlying mechanism. We propose
+### Equations / Objectives
+- Klabunde et al., 2025]. Like a ball rolling into a valley, if representation convergence
+- contrastive paradigms (ViT [Dosovitskiy et al., 2021],
+- score matrix of size Lx Ly. We report the
+- score across layer pairs (best-layer alignment) as the summary statistic. We simultaneously
+- score matrices (Figure 3) confirm this is systematic across all 638 model pairs.
+- ScoreB/DINOv2
+- score matrices for all 22 vision 29
+- contrastive learning adapts representations to the
+- equent formalizations including Indra representations [Lu et al.,
+- score the
+- contrastive learning: Intrinsic dimension
+- Klabunde, Tobias Schumacher, Markus Strohmaier, and Florian Lemmerich. Similarity of
+- contrastive fusion for multimodal alignment. In
+- contrastive
+- klas Muennighoff, Thomas Wang, Lintang Sutawika, Adam Roberts, Stella Biderman, Teven
+- contrastive vision-language models. In International Conference on Learning
+- scores coincide.
+- Score: CYCLE-KNN(XY; 2) = 5/6.
+- Score: CYCLE-KNN(YX; 2) = 3/6 = 1/2.
+- equires both hops to preserve semantic identity:
+### Quantitative Claims
+- toward the neighborhood structure of language significantly more than the reverse,
+- cloud representations approach language significantly more than the reverse--invisible to
+- predict smooth capability gains with scale, the directional asymmetry shows no such dependence--
+- et al., 2025], blind matching without paired data achieves non-trivial accuracy [Schnaus et al., 2025,
+- S(m B) - S(B m) averaged over all partner models in modality B, and plot this against
+- 7/7 models again have > 0. Importantly, no systematic correlation with scale is observed--the
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.16468_Mechanistically Interpretable Neural Encoding Reveals Fine-Grained Functional Se.txt`
+### Abstract
+arXiv:2605.16468v1 [cs.CV] 15 May 2026 Mechanistically Interpretable Neural Encoding Reveals Fine-Grained Functional Selectivity in Human Visual Cortex Idan Daniel Grosbard1 Mor Geva2, Galit Yovel1,3, 1Sagol School of Neuroscience, 2Blavatnik School of Computer Science and AI, 3School of Psychological Sciences, Tel Aviv University {idangrosbard@mail, morgeva@tauex, gality@tauex}.tau.ac.il Abstract A central goal in understanding human vision is to uncover the visual features that drive neuronal activity. A growing body of work has used artificial neural networks as encoding models to predict cortical responses to natural images, revealing the visual content that activates category-selective regions. However, existing approaches are largely correlational and treat the encoder as a black box, leaving open which image features drive each voxel's response. We introduce Mechanistically Interpretable Neural Encoding (MINE), a framework that opens this black box by applying mechanistic-interpretability tools to localize the features within natural images that drive millimeter-scale (i.e., voxel-lev
+### Methods / Architecture
+- existing approaches are largely correlational and treat the encoder as a black box,
+- leaving open which image features drive each voxel's response. We introduce
+- Mechanistically Interpretable Neural Encoding (MINE), a framework that opens
+- While this approach has led to significant findings, it is limited by its hypothesis-driven nature and the
+- approach to identify novel functional regions encoding concepts such as specific locations and tool
+- voxels (1 mm volumes sampled by functional magnetic resonance imaging, fMRI), while the
+- Drawing on this paradigm shift in ANN interpretability, we propose a new framework for interpreting
+- relies on MI tools. In this framework, we study the mechanism of how an encoder uses the input
+- MINE framework is illustrated in Figure 1. To summarize, our contribution is threefold:
+- 1. We propose a mechanistic framework for modeling neural activity with built-in interpretabil-
+- 2. We validate the framework with causal counterfactual analyses, showing that our method
+- 3. Applied to category-selective regions, our method recovers their known categorical prefer-
+- selectivity. One line of work [9, 10, 21] has utilized the high alignment between CLIP [22] and
+- in CLIP's representational space, allowing the use of decoding methods that rely on CLIP's language
+- alignment [24, 25]. While providing a powerful framework for succinct concepts, these methods share
+- a common limitation introduced by CLIP's short captions [26], preventing the model from generating
+- 2Code is available at https://github.com/idangrosbard/MINE-Framework.git.
+- (a) Encoder training (b) Hypothesis generation (c) Counterfactual validation
+- Figure 1: Overview of the MINE framework. (a) A neural encoder is trained on textually aligned
+- Models (VLMs) to caption images preferred by different neural regions. While revealing novel
+### Equations / Objectives
+- Equal senior authorship.
+- gradient-based image generation [11]; however, they lack causal evaluation of these
+- MSE loss h^(v, x) - y22. We implement this as a query operation over stimulus-related information.
+- equence-length of image-tokens
+- equation, we get that the model queries image features to predict
+- Gradients (IG)
+- gradient based attribution method to quantify the contribution of each input-token to the
+- score), we extracted the top 10 vocabulary-tokens (by logit-lens score), yielding 500
+- scores, random
+- scores. (b) Distribution of predicted activation for preferred (red) and
+- scores image-tokens. We generated candidate images from the decoded descriptions
+- Klein-9B [50], a text-conditioned image generation model. We measured the error
+- Klein-9B [50]. An example of original and
+- equire validation through neu-
+- scores (Section 4.2), although the optimal number of critical image-tokens
+- kle. A
+- Kloots, Sandro Pezzelle, and Raquel Fernndez. Vision-
+- equired years of hand-designed stimulus experiments per region. The pipeline is also modality-
+- equires only a stimulus-conditioned neural recording dataset and a pretrained, tokenized
+- equiring biological validation (Section 6) and by restricting analyses to the publicly
+### Quantitative Claims
+- = [0.2992, 0.3011]; per-voxel R2 range = [-0.0573, 0.7756]), comparable to other state-of-the-art
+- critical-features-based editing is significantly more faithful than random features-based editing, we
+- counterfactual editing based on critical image-tokens is significantly more faithful than when using
+- voxel-profile editing produced significantly stronger predicted activations, indicating that the voxel
+- ers: State-of-the-art natural language processing. arXiv preprint arXiv:1910.03771, 2019.
+- Wolf. Diffusers: State-of-the-art diffusion models, 2022.
+- potential negative societal impacts are indirect. Improvements in fMRI encoding contribute to a
+- therefore compare the performance of our models, previously validated as SOTA for predicting neural
+- [63]. To compare with previous results, we also report the voxel prediction accuracy, defined as the
+- per-voxel R2 normalized by the noise-ceiling [14]. The Per-subject and overall prediction accuracy
+- values for the three encoders are reported in Table 3. Comparing with previous SOTA results, we
+- performance is high enough comparable to SOTA, making the approximate hypotheses learned by
+- encoder significantly outperforms the OLMo-based encoder (t(83,070) = 400.89, p < 0.001), with
+- model reached a perfect validation accuracy of 100% on the validation split. Due to the relatively
+- by the consistent presence of elements photographed from below or against the sky (birds in flight, clock
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2604.27969_From Mirage to Grounding_ Towards Reliable Multimodal Circuit-to-Verilog Code Ge.txt`
+### Abstract
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026 1 From Mirage to Grounding: Towards Reliable Multimodal Circuit-to-Verilog Code Generation Guang Yang, Xing Hu, Xiang Chen, and Xin Xia arXiv:2604.27969v2 [cs.SE] 5 May 2026 Abstract--Multimodal large language models (MLLMs) are Fig. 1. Motivating example 1 of the Mirage phenomenon. The model increasingly used to translate visual artifacts into code, from generates correct code regardless of whether the input contains the real circuit UI mockups into HTML to scientific plots into Python scripts. diagram or a blank image. A circuit diagram can be viewed as a visual domain-specific language for hardware: it encodes timing, topology, and bit- purely textual specifications toward richer visual artifacts. In level semantics that are invisible to casual inspection yet safety- each of these tasks, the visual input can be viewed as a visual critical once fabricated in silicon. Translating such diagrams domain-specific language (visual DSL): a UI mockup specifies into register-transfer-level (RTL) code therefore represents an layout and interaction semantics, a chart encodes data and extreme reliability test for vision-to-code generation. We reveal rendering logic, and each must be faithfully translated into a phenomenon we call Mirage: replacing a circuit diagram with executable code. Recently, this paradigm has been extended to a blank image leaves Pass@k unchanged or even higher, becaus
+### Methods / Architecture
+- arXiv:2604.27969v2 [cs.SE] 5 May 2026 Abstract--Multimodal large language models (MLLMs) are Fig. 1. Motivating example 1 of the Mirage phenomenon. The model
+- a blank image leaves Pass@k unchanged or even higher, because hardware: MLLMs are used to translate circuit diagrams into
+- semantics in the module_header to retrieve canonical RTL circuit-to-Verilog code generation [10], [11]. A circuit diagram
+- AI-assisted code generation that directly undermines MLLMs' timing, topology, and bit-level semantics that are invisible to
+- the diagram and the module header; Anony-mode scores drop cern across all visual DSLs, the consequences in the hardware
+- Normal and significantly outperforms all baselines under Anony, may not catch. This directly threatens MLLMs' trustworthi-
+- ogy and training recipe generalize beyond hardware: C2VEVAL's Circuit-to-Verilog generation therefore serves as a rigorous
+- testbench. When the diagram is replaced by a blank image while the module_header is retained, the model instead produces correct code.
+- Although recent studies have demonstrated the feasibility of both the module_header and the circuit diagram, thereby
+- using MLLMs to read circuit diagrams and generate Verilog stripping the semantic cues that enable such shortcuts.
+- existing MLLMs truly read circuit diagrams, or merely exploit Following this idea, we construct C2VEVAL (Circuit-to-
+- textual shortcuts? Verilog Evaluation), a benchmark that samples problems
+- Following standard practice, the module_header (module nal identifiers in both the diagram and the module header, and
+- Yet this seemingly innocuous input turns out to be a powerful semantic cues. We evaluate eight MLLMs, from 4B open-
+- circuit or a blank image: the module name TopModule is replaced by a blank image, header retained). The experimental
+- models rely on textual priors in the module_header rather grounding accounts for only 89% of samples, with the vast
+- MLLM trained with three targeted interventions that together approach. Section IV details the proposed method. Section V
+- vision-to-code generators: (i) mixed supervised fine-tuning parameter sensitivity, mismatch refusal, and threats to validity.
+- or-refuse boundary and mitigating the over-refusal problem of A multimodal large language model (MLLM) [16], [17]
+- tively alleviates the Mirage phenomenon. With only 4B pa- MLLM M auto-regressively generates an output sequence
+### Equations / Objectives
+- scores drop cern across all visual DSLs, the consequences in the hardware
+- equally insidious forms, in other yet it was never derived from the visual specification, leaving
+- scores mask the fact that driver of Normal-mode performance; and (iii) genuine visual
+- equence
+- equence zv = Enc(I); a connector (typically an MLP)
+- equence. Representative models include
+- equiring only domain-appropriate identifier masking
+- equences are fed directly into a shared backbone without an
+- equal intermediate projection, with decoupled parallel strategies for
+- scores when the circuit diagram is removed, the heterogeneous modalities to maintain training efficiency.
+- formulation of Circuit-
+- equiva-
+- equential Building Blocks 43 25.7%
+- equential Building Blocks (25.7%) and Finite State Machines
+- SCORE BETWEEN ORIGINAL AND MIRAGE IN EACH PAIR.
+- equivalence
+- equent alignment However, the provided image does not match
+- equal proportion, the same module header H appears detect semantic inconsistency between the visual and textual
+- equal split over-represents refusal-preferred pairs (two out
+- equires costly online
+### Quantitative Claims
+- accuracy is largely a Mirage. We then propose VeriGround (4B), beginning of the silicon design flow and feeds downstream into
+- achieves Functional Pass@1 of 46.11%/42.51% (Normal/Anony) of magnitude higher than a rendering or plotting error. More
+- Normal and significantly outperforms all baselines under Anony, may not catch. This directly threatens MLLMs' trustworthi-
+- rameters, VeriGround achieves Functional Pass@1 of 46.11% Y^ = (y1, . . . , yL):
+- VeriGround reaches 42.51%, significantly outperforming all
+- 4) Evaluation. VeriGround achieves Functional Pass@1 lent to the reference implementation H V , where denotes
+- against the corresponding testbench; only solutions passing all I is the circuit diagram, H is the module header (Definition 2),
+- Normal-mode accuracy is a Mirage driven by identifier se- inputs. Circuit-diagram images exhibit a heavy right-skewed
+- gram, while Opus-4.6 sees a Functional gain of over 10 points.
+- pairs with refusal augmentation and applies D-ORPO alignment to balance generation quality against hallucination and over-refusal.
+- The Original-only rate in Table III, which captures samples leakage, we remove any sample whose Rouge-L [47] similarity
+- Because Dsft interleaves Normal and Anony samples in depicts a circuit unrelated to H. Refusal is again chosen over
+- to the Mirage phenomenon identified in Section III-C. MATCH pair, giving a raw ratio of 1 : 1 : 1. We observe that
+- We observe that this dilution leads to over-refusal: the model
+- A. RQ1: Code Generation Accuracy 0L0RYRPQL
+- VeriGround against all baselines as a function of model size.
+- stantial gains across all settings. Compared with Normal- v2-omni at 42B active (1T total, MoE). Proprietary models (, size estimated)
+- Obs. 2: D-ORPO achieves the best generationrefusal
+- MLLMs. As shown in Fig. 6(c), VeriGround achieves Func-
+- 2 form 2 = (|b - c| - 1)2/(b + c). All eight p-values Table VII shows that standard ORPO achieves near-perfect
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.21059_Multimodal LLMs under Pairwise Modalities.txt`
+### Abstract
+arXiv:2605.21059v1 [cs.CV] 20 May 2026 Multimodal LLMs under Pairwise Modalities Yan Li1*, Yunlong Deng1*, Yuewen Sun1,2, Gongxu Luo1 Kun Zhang1,2, and Guangyi Chen1,2 1 Mohamed bin Zayed University of Artificial Intelligence 2 Carnegie Mellon University Abstract. Despite the impressive results achieved by multimodal large language models (MLLMs), their training typically relies on jointly cu- rated multimodal data, requiring substantial human effort to construct multi-way aligned datasets and thereby limiting scalability across do- mains. In this work, we explore training MLLMs by only leveraging multiple paired modalities as a surrogate for the full joint multimodal distribution. Specifically, we first provide a theoretical analysis of the conditions under which the representations are identifiable with only observing pairwise modalities. Building on this analysis, we propose a representation learning framework for aligning latent representations across modalities using only pairwise data. The framework consists of two stages: latent representation alignment and cross-modal recomposition. Specifically, in the first stage, we learn the shared latent space across modalities by both self-modal reconstruction and pair-wise contrast
+### Methods / Architecture
+- language models (MLLMs), their training typically relies on jointly cu-
+- mains. In this work, we explore training MLLMs by only leveraging
+- observing pairwise modalities. Building on this analysis, we propose a
+- representation learning framework for aligning latent representations
+- across modalities using only pairwise data. The framework consists of two
+- modalities by both self-modal reconstruction and pair-wise contrastive
+- learning. We also incorporate an inductive bias in the contrastive learning
+- and generation. We evaluate our method by newly adding 3D point clouds
+- and tactile modalities into pre-trained MLLMs with three modality pairs
+- Multimodal large language models (MLLMs) have recently demonstrated re-
+- nals, these MLLMs learn shared representations that support flexible modality
+- data. (a) Jointly-aligned modalities: each sample requires all modalities, which is
+- Motivated by this analysis, we introduce a representation learning framework
+- sion. The framework is structured into two stages: first, learning a unified shared
+- former preserves modality-specific semantics and stabilizes training, whereas the
+- latter employs a contrastive objective to encourage latent factors from paired
+- modalities to align within a unified representation space. Within the contrastive
+- learning framework, we incorporate structural inductive biases derived from the
+- ties into pre-trained large language models (LLMs) or MLLMs. For example,
+- capacity of pre-trained language models without full joint retraining. Unlike
+### Equations / Objectives
+- equiring substantial human effort to construct
+- contrastive
+- contrastive learning
+- Equal contribution.
+- equires all modalities, which is
+- equiring fully aligned multi-way data.
+- equipped with touch sensors.
+- contrastive objective to encourage latent factors from paired
+- contrastive
+- equire instruction tuning [35] or LoRA-based
+- contrastive learn-
+- contrastive
+- formulations that unify contrastive alignment
+- formulations further connect
+- contrastive learning [2, 15, 62]. Recent work aims
+- contrastive representation spaces, as in C-
+- equire any universal anchor modality,
+- eq:gen_single} \vec {z}^{(m)}_i = f_{m, i}(\text {Pa}(\vec {z}^{(m)}_i), \epsilon ^{(m)}_i) ,\qquad \vec {x}^{(m)} = g_{m}(\vec {z}^{(m)}_c, \vec {z}^{(m)}_s),
+- Eq. 1. Instead, it is
+- eq:pair_gen} \vec {x}^{(i)} = g_i\bigl (\vec {z}^{(i)}_c, \vec {z}^{(i)}_s\bigr ), \qquad \vec {x}^{(j)} = g_{j\leftarrow i}\bigl (\vec {z}^{(i)}_c, \tilde {\vec {z}}^{(j)}_{\setminu
+### Quantitative Claims
+- model achieves strong cross-modal performance.
+- aligned multimodal corpora significantly limits scalability to more modalities.
+- our method against previous state-of-the-art MLLMs as well as adapter-based
+- the modality graph, we observe samples jointly drawn from modalities i and j.
+- are accuracy (%). Results marked with a dagger are taken from the original PointLLM
+- one label from the 40 canonical categories and report top-1 accuracy. On 3D-
+- evaluation script to judge answer correctness. We compare against the frozen
+- Qwen3-Omni backbone. MPM outperforms all baselines on both benchmarks.
+- MPM achieves the best performance among tactile-capable baselines, and it does
+- significantly reduced training efficiency for MoE backbones in practice. Notably,
+- As shown in Tab. A2, MPM consistently outperforms the PointLLM-style baseline
+- under the unified backbone setting, suggesting that the gains are not solely due
+- MPM achieves the best results on aerial counting and pedestrian counting, and
+- frozen, and only modality-side modules are optimized. The full model achieves
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2604.25427_A Systematic Post-Train Framework for Video Generation.txt`
+### Abstract
+arXiv:2604.25427v1 [cs.CV] 28 Apr 2026 A Systematic Post-Train Framework for Video Generation Zeyue Xue1, Siming Fu2, Jie Huang2 Shuai Lu2 Haoran Li2 Yijun Liu3 Yuming Li4 Xiaoxuan He5 Mengzhao Chen1 Haoyang Huang2 Nan Duan2 Ping Luo1 1 The University of Hong Kong 2 JD Explore Academy 3 Tsinghua University 4 Peking University 5 Zhejiang University * denotes equal contribution. Abstract While large-scale video diffusion models have demonstrated impressive capabili- ties in generating high-resolution and semantically rich content, a significant gap remains between their pretraining performance and real-world deployment require- ments due to critical issues such as prompt sensitivity, temporal inconsistency, and prohibitive inference costs. To bridge this gap, we propose a comprehensive post- training framework that systematically aligns pretrained models with user intentions through four synergistic stages: we first employ Supervised Fine-Tuning (SFT) to transform the base model into a stable instruction-following policy, followed by a Reinforcement Learning from Human Feedback (RLHF) stage that utilizes a novel Group Relative Policy Optim
+### Methods / Architecture
+- arXiv:2604.25427v1 [cs.CV] 28 Apr 2026 A Systematic Post-Train Framework for Video
+- While large-scale video diffusion models have demonstrated impressive capabili-
+- remains between their pretraining performance and real-world deployment require-
+- prohibitive inference costs. To bridge this gap, we propose a comprehensive post-
+- training framework that systematically aligns pretrained models with user intentions
+- through four synergistic stages: we first employ Supervised Fine-Tuning (SFT) to
+- Reinforcement Learning from Human Feedback (RLHF) stage that utilizes a novel
+- Group Relative Policy Optimization (GRPO) method tailored for video diffusion
+- components provide a systematic approach to improving visual quality, temporal
+- during pretraining. The result is a practical blueprint for building scalable post-
+- training pipelines that are stable, adaptable, and effective in real-world deployment.
+- Recent years have seen rapid progress in large-scale diffusion models and diffusion-transformer
+- models [1, 2, 3, 4, 5, 6]. These models have advanced from generating short, low-resolution clips
+- Fine-Tuning (SFT) Learning (RLHF) Enhancement (PE) Distillation (AD)
+- Figure 1: Overview of our post-training framework for video generation. We organize the pipeline
+- supervised fine-tuning (SFT) uses curated data to establish a stable instruction-following baseline.
+- (PE) optimizes an LLM using the same reward loop to enrich user inputs for better robustness and
+- visual quality. Finally, Phase 4 applies autoregressive distillation (AD) with a self-forcing objective
+- to transfer these capabilities into a causal architecture, significantly boosting inference efficiency for
+- This gap between pretraining performance and deployment requirements motivates the need for post-
+### Equations / Objectives
+- equal contribution.
+- equire-
+- equently, we integrate
+- equirements [11, 12]. In practice, they are often sensitive to prompt wording,
+- equirements motivates the need for post-
+- kle instruction following,
+- equation formulation to optimize mea-
+- scores. RePrompt [18] incorporates chain-of-thought reasoning and reward-guided training for struc-
+- formulating deterministic ODE sampling as stochastic SDE processes,
+- kle the
+- equentially. While AR models are well-suited
+- equent post-training stages. This is a deliberate design choice, as SFT addresses
+- equent failures, such as refusal cascades, incoherent
+- equent phases, ultimately leading to a more robust
+- formulate the sampling process of flow-matching models under
+- formulation, the policy induces a trajectory over the discrete sampling process:
+- score function.
+- equation, Eq. (1) admits an equivalent reverse-time SDE that
+- score function, and S is the subset of time steps at which
+- gradient
+### Quantitative Claims
+- common artifacts and significantly improves controllability and visual aesthetics
+- [7, 8, 9, 10]. Despite these improvements, pretrained video generation models still fall short of
+- to transfer these capabilities into a causal architecture, significantly boosting inference efficiency for
+- significantly advancing visual synthesis and achieving state-of-the-art performance in image and
+- thereby introducing exploratory noise for group-based policy improvement. More recently, MixGRPO
+- this, Flow-CPS proposes a noise-consistent SDE sampling method that improves reward accuracy
+- issues of reward sparsity and inaccuracy arising from assigning a single global reward to multi-
+- The objective in Eq. (4) encourages reward improvement through terminal feedback while constrain-
+- ing policy updates via clipping. In this way, the proposed framework achieves a favorable balance
+- trade off semantic accuracy, motion consistency, frame-level fidelity, and overall video aesthetics,
+- For our internal model, our RLHF method achieves a substantial 31% improvement in the overall
+- GSB metric. When breaking down the performance across specific dimensions, the gains are most
+- contrast, the improvement in text alignment is relatively modest. We attribute this discrepancy to
+- the limited accuracy of the current text alignment reward model, which restricts the optimization
+- additional 20% improvement in overall GSB. This strong preference is similarly driven by significant
+- improvements in visual and motion quality, while preserving text alignment. Together, these results
+- found efficacy of our approach. Our RLHF stage achieved a substantial 31% improvement in
+- GSB improvement, elevating perceptual aesthetics and temporal dynamics while strictly preserving
+- While the framework significantly enhances generation quality and controllability, the relatively
+- modest improvements in text alignment highlight the limitations of current text-video reward models.
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2401.03048_Latte_ Latent Diffusion Transformer for Video Generation.txt`
+### Abstract
+arXiv:2401.03048v3 [cs.CV] 1 May 2025 Published in Transactions on Machine Learning Research (03/2025) Latte: Latent Diffusion Transformer for Video Generation Xin Ma1, Yaohui Wang2, Xinyuan Chen2, Gengyu Jia3, Ziwei Liu4, Yuan-Fang Li1, Cunjian Chen1 Yu Qiao2 1Department of Data Science & AI, Faculty of Information Technology, Monash University 2Shanghai AI Laboratory 3Nanjing University of Posts and Telecommunications 4S-Lab, Nanyang Technological University Reviewed on OpenReview: https://openreview.net/forum?id=ntGPYNUF3t Abstract We propose Latte, a novel Latent Diffusion Transformer for video generation. Latte first extracts spatio-temporal tokens from input videos and then adopts a series of Transformer blocks to model video distribution in the latent space. In order to model a substantial number of tokens extracted from videos, four efficient variants are introduced from the perspective of decomposing the spatial and temporal dimensions of input videos. To im- prove the quality of generated videos, we determine the best practices of Latte through rigorous experimental analysis, including video clip patch embedding, model variants, timestep-class information injection, temporal positional embedding, and learning strate- gies. Our comprehensive evaluation demonstrates that Latte achieves state-of-the-art per- formance across four standard video gener
+### Methods / Architecture
+- We propose Latte, a novel Latent Diffusion Transformer for video generation. Latte first
+- extracts spatio-temporal tokens from input videos and then adopts a series of Transformer
+- rigorous experimental analysis, including video clip patch embedding, model variants,
+- ing Transformers into diffusion models for video generation. The project page is available
+- Diffusion models Ho et al. (2020); Song et al. (2021b;a) are powerful deep generative models for many tasks
+- The significant role backbone models play in the success of diffusion models has also been investigated
+- and U-ViT Bao et al. (2023) adopt the architecture of ViT Dosovitskiy et al. (2021) in diffusion models
+- bias of U-Net is not crucial for the performance of latent diffusion models. On the other hand, attention-
+- based architectures Vaswani et al. (2017) present an intuitive option for capturing long-range contextual
+- relationships in videos. Therefore, a very natural question arises: Can Transformer-based latent diffusion
+- Figure 1: Sample videos with a resolution of 512 512. Latte can generate photorealistic videos with
+- temporal coherent content. Please click the image to play the video clip via Acrobat Reader.
+- In this paper, we propose Latte, the novel latent diffusion Transformers for video generation, which adopts
+- a video Transformer as the backbone. Latte employs a pre-trained variational autoencoder to encode input
+- transformer blocks is applied to encode these tokens. Considering the inherent disparities between spatial
+- we design four efficient Transformer-based model variants from the perspective of disentangling the spatial
+- decoupling between the temporal and spatial modules within the different models, which are lacking in
+- classification Pota et al. (2020), and network architecture design for image classification He et al. (2016), etc.
+- Nevertheless, Transformer-based latent diffusion models for video generation might demonstrate different
+- characteristics, necessitating the identification of optimal design choices for this architecture. Therefore,
+### Equations / Objectives
+- Score (IS). In addition, we
+- equiring significant computational resources. Finally, recent advances in video gener-
+- kly established a
+- equently, it learns the data
+- equences Spatial Layer Norm MHA MHA
+- L = - log p(z0|z1) + t DKL((q(zt-1|zt, z0)||p(zt-1|zt)). Here, is implemented using a denoising model
+- KL term and thus train with the full loss function,
+- equence of tokens,
+- equently, zs containing spatial
+- equal number of Transformer blocks as in Variant
+- equence to derive
+- equivalent to F , H , and W when non-overlapping image patches are extracted from every video frame. Here,
+- equivalent to F in contrast to non-overlapping uniform frame patch embedding. Compared to the
+- equently extracting tubes along
+- equation AdaLN (h, c) = cLayerNorm(h) + c, where h
+- equencies Vaswani et al. (2017) to enable the
+- equence; 2) the relative positional
+- scores
+- equently, we present ablation experiments for the
+- Score (IS) Saito et al. (2017). Our primary focus rests on FVD, as its image-based
+### Quantitative Claims
+- gies. Our comprehensive evaluation demonstrates that Latte achieves state-of-the-art per-
+- UCF101, and Taichi-HD. In addition, we extend Latte to the text-to-video generation
+- (T2V) task, where Latte achieves results that are competitive with recent T2V models.
+- (see Fig. 1) and achieve state-of-the-art performance across four standard video generation benchmarks,
+- including FaceForensics Rssler et al. (2018), SkyTimelapse Xiong et al. (2018), UCF101 Soomro et al.
+- ate photorealistic videos with temporal coherent content outperforming state-of-the-art methods.
+- about the four different model variants and show why variant 1 achieves the best performance in Sec. 4.2.
+- either lacks label information or encompasses a significantly smaller number of categories in comparison
+- evaluate the zero-shot capability on UCF101 using two different mask strategies. The FVD and FID scores
+- best practice choices and model size of Latte. Finally, we compare experimental results with state-of-the-art
+- et al. (2018), SkyTimelapse Xiong et al. (2018), UCF101 Soomro et al. (2012), and Taichi-HD Siarohin
+- et al. (2019). Following the experimental setup in Skorokhodov et al. (2022), except for UCF101, we use the
+- training split for all datasets if they are available. For UCF101, we use both training and testing splits. We
+- Method FaceForensics SkyTimelapse UCF101 Taichi-HD
+- frames. We only employ IS for assessing the generation quality on UCF101, as it leverages the UCF101-fine-
+- an extra comparison of IS between our proposed method and previous approaches on the UCF101 dataset.
+- Enhancing video generation with learning strategies. As illustrated in Fig. 5d, we observe that the
+- particularly relevant for small-scale datasets (e.g., UCF101), where the domain discrepancy may outweigh
+- significant improvement of FID and FVD. Concatenating additional randomly sampled frames with videos
+- performance improvement, which has also been pointed out in image
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2209.14792_Make-A-Video_ Text-to-Video Generation without Text-Video Data.txt`
+### Abstract
+MAKE-A-VIDEO: TEXT-TO-VIDEO GENERATION WITHOUT TEXT-VIDEO DATA Uriel Singer + Adam Polyak + Thomas Hayes + Xi Yin + Jie An Songyang Zhang Qiyuan Hu Harry Yang Oron Ashual Oran Gafni Devi Parikh + Sonal Gupta + Yaniv Taigman + arXiv:2209.14792v1 [cs.CV] 29 Sep 2022 Meta AI ABSTRACT We propose Make-A-Video an approach for directly translating the tremendous recent progress in Text-to-Image (T2I) generation to Text-to-Video (T2V). Our intuition is simple: learn what the world looks like and how it is described from paired text-image data, and learn how the world moves from unsupervised video footage. Make-A-Video has three advantages: (1) it accelerates training of the T2V model (it does not need to learn visual and multimodal representations from scratch), (2) it does not require paired text-video data, and (3) the generated videos inherit the vastness (diversity in aesthetic, fantastical depictions, etc.) of today's image generation models. We design a simple yet effective way to build on T2I models with novel and effective spatial-temporal modules. First, we decompose the full temporal U-Net and attention tensors and approximate them in space and time. Second, we design a spatial temporal pipeline to generate
+### Methods / Architecture
+- We propose Make-A-Video an approach for directly translating the tremendous
+- footage. Make-A-Video has three advantages: (1) it accelerates training of the
+- build on T2I models with novel and effective spatial-temporal modules. First, we
+- Inspired by these motivations, we propose Make-A-Video. Make-A-Video leverages T2I models
+- generating short videos, as demonstrated by our temporal diffusion-based method. Make-A-Video
+- tention modules that learn temporal world dynamics from a collection of videos. This procedure
+- significantly accelerates the T2V training process by instantaneously transferring the knowledge
+- We present Make-A-Video an effective method that extends a diffusion-based T2I model
+- to T2V through a spatiotemporally factorized diffusion model.
+- We present super-resolution strategies in space and time that, for the first time, generate
+- ing a discrete variational auto-encoder (VQVAE) and Transformer (Vaswani et al., 2017). Additional
+- aims for more diverse content generation through an encoder-decoder architecture and an improved
+- image tokenizer (Yu et al., 2021). On the other hand, Denoising Diffusion Probabilistic Models
+- 2021) trained a T2I and an upsampling diffusion model for cascade generation. GLIDE's proposed
+- text faithfulness. DALLE-2 (Ramesh et al., 2022) leverages the CLIP (Radford et al., 2021) latent
+- space and a prior model. VQ-diffusion (Gu et al., 2022) and stable diffusion (Rombach et al., 2022)
+- generation approach that leverages a VAE with recurrent attention. (Pan et al., 2017) and (Li et al.,
+- a frozen CogView-2 (Ding et al., 2022) T2I model by adding additional temporal attention modules.
+- Video Diffusion Models (VDM) (Ho et al., 2022) uses a space-time factorized U-Net with joint
+- image and video data training. While both CogVideo and VDM collected 10M private text-video
+### Equations / Objectives
+- equire paired text-video data, and (3) the generated
+- equence-to-sequence translation problem us-
+- formulates
+- equire large-scale paired text-video data (Hong et al., 2022;
+- formulated as:
+- equire not just spatial but also temporal dimensions in
+- equire specific handling when adding an additional dimension, as they are agnostic to structured
+- equent spatial attention remains 2D, and added 1D temporal attention through rel-
+- kle the limited volume of available videos at training time,
+- Score
+- kly learn to recognize people, places, things, and actions through observation, generative sys-
+- eqing Sun, Caroline Pantofaru, and Brian Curless.
+- contrastive
+### Quantitative Claims
+- quality, Make-A-Video sets the new state-of-the-art in text-to-video generation,
+- sets the new state-of-the-art in T2V generation.
+- significantly accelerates the T2V training process by instantaneously transferring the knowledge
+- We evaluate Make-A-Video against existing T2V systems and present: (a) State-of-the-art
+- Ho et al., 2022). Second, we fine-tune the T2I model for video generation, gaining the advantage
+- across spatial and temporal dimensions. In qualitative inspection we found this to significantly out-
+- Video has significantly better generalization capabilities than prior work.
+- Our finetuning setting achieves state-of-the-art results with a significant reduction in FVD, which
+- The results are shown in Table 3. Make-A-Video achieves much better performance in both video
+- significantly better results without any cherry-picking. We also evaluate our frame interpolation
+- 54% of the time on DrawBench. We observe that our method excels when there are large differences
+- Khurram Soomro, Amir Roshan Zamir, and Mubarak Shah. Ucf101: A dataset of 101 human actions
+- poral feature learning: Speed-accuracy trade-offs in video classification. In ECCV, pp. 305321,
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷅: conflict, contradiction, hallucination
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2210.02303_Imagen Video_ High Definition Video Generation with Diffusion Models.txt`
+### Abstract
+arXiv:2210.02303v1 [cs.CV] 5 Oct 2022 IMAGEN VIDEO: HIGH DEFINITION VIDEO GENERATION WITH DIFFUSION MODELS Jonathan Ho,William Chan,Chitwan Saharia, Jay Whang, Ruiqi Gao, Alexey Gritsenko, Diederik P. Kingma, Ben Poole, Mohammad Norouzi, David J. Fleet, Tim Salimans Google Research, Brain Team {jonathanho,williamchan,sahariac,jwhang,ruiqig,agritsenko, durk,pooleb,mnorouzi,davidfleet,salimans}@google.com ABSTRACT We present Imagen Video, a text-conditional video generation system based on a cascade of video diffusion models. Given a text prompt, Imagen Video generates high definition videos using a base video generation model and a sequence of in- terleaved spatial and temporal video super-resolution models. We describe how we scale up the system as a high definition text-to-video model including design decisions such as the choice of fully-convolutional temporal and spatial super- resolution models at certain resolutions, and the choice of the v-parameterization of diffusion models. In addition, we confirm and transfer findings from previous work on diffusion-based image generation to the video generation setting. Fi- nally, we apply progressive distillation to our video models with classifier-free guidance for fast, high quality sampling. We find Imagen Video not only capable
+### Methods / Architecture
+- We present Imagen Video, a text-conditional video generation system based on a
+- cascade of video diffusion models. Given a text prompt, Imagen Video generates
+- of diffusion models. In addition, we confirm and transfer findings from previous
+- work on diffusion-based image generation to the video generation setting. Fi-
+- guidance for fast, high quality sampling. We find Imagen Video not only capable
+- Figure 1: Imagen Video sample for the prompt: "A bunch of autumn leaves falling on a calm lake to
+- (Ding et al., 2021) and Latent Diffusion (Rombach et al., 2022). Diffusion models (Sohl-Dickstein
+- more recently non-autoregressive latent-variable approaches (Gupta et al., 2022). Diffusion models
+- (2022) showed autoregressive generation with a RNN-based model with conditional diffusion ob-
+- diffusion models, but built on a pretrained text-to-image model. Harvey et al. (2022) generates
+- videos up to 25 minutes in length with video diffusion models, however the domain is restricted.
+- In this work, we introduce Imagen Video, a text-to-video generation system based on video diffusion
+- video at 24 frames per second. Imagen Video has a simple architecture: The model consists of a
+- frozen T5 text encoder (Raffel et al., 2020), a base video diffusion model, and interleaved spatial
+- and temporal super-resolution diffusion models. Our key contributions are as follows:
+- 1. We demonstrate the simplicity and effectiveness of cascaded diffusion video models for
+- 3. We show new findings for video diffusion models that have implications for diffusion mod-
+- els in general, such as the effectiveness of the v-prediction parameterization for sample
+- quality and the effectiveness of progressive distillation of guided diffusion models for the
+- Our model, Imagen Video, is a cascade of video diffusion models (Ho et al., 2022a;b). It consists
+### Equations / Objectives
+- equence of in-
+- Equal contribution.
+- formulation of Kingma et al. (2021): the model is a latent variable model with
+- p(x). The
+- formulated by using a reversed description of the
+- equence from 1 to 0. See
+- equentially increase the resolution
+- equent stage.
+- equence of the same length as a video, and bypass
+- Equation 5 can equivalently be performed in v-space
+- p(x, -1, 1)), leads to significant saturation artifacts in the generated videos. A sim-
+- p(x, -s, s) / s) (Saharia et al., 2022b).
+- equired sampling steps each iteration. Meng et al. (2022)
+- equiring fewer sampling steps at the second stage.
+- scores (Hessel et al., 2021; Park et al., 2021) for video-
+- scores. We conclude that video modeling is a harder task for which performance is
+- Score 24
+- scores. (b) Scaling Comparison on CLIP scores.
+- scores (on
+- scores are computed on 4096 video samples. We see clear signs
+### Quantitative Claims
+- of Saharia et al. (2022b), we observe evidence of deeper language understanding, enabling us to
+- we did not find any significant improvements when using temporal attention over temporal con-
+- strategy allows us to use to train our video models on image-text datasets that are significantly larger
+- and more diverse than available video-text datasets. Consistent with Ho et al. (2022b), we observe
+- that joint training with images significantly increases the overall quality of video samples. Another
+- weight at each alternating sampling step, which we find significantly helps with these saturation
+- sampling step). We however observed no improvement in sample fidelity and more visual artifacts
+- citing indication of how general purpose generative models such as Imagen Video can significantly
+- of improvement on both metrics when scaling from 500M to 1.6B to 5.6B parameters.
+- olution SSR models, we observed that -prediction converges relatively slowly in terms of sample
+- parameterizations as a function of training steps. We observe that v parameterization converges
+- all frames. For CLIP R-Precision (Park et al., 2021) we compute the top-1 accuracy (i.e. R = 1),
+- noisy for the -prediction model. We observe that the sample quality of the -prediction model
+- progress in generative modeling, we believe there is ample scope for further improvements in video
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+---
+## 
+**File:** `2209.14988_DreamFusion_ Text-to-3D using 2D Diffusion.txt`
+### Abstract
+arXiv:2209.14988v1 [cs.CV] 29 Sep 2022 DREAMFUSION: TEXT-TO-3D USING 2D DIFFUSION Ben Poole1, Ajay Jain2, Jonathan T. Barron1, Ben Mildenhall1 1Google Research, 2UC Berkeley {pooleb, barron, bmild}@google.com, ajayj@berkeley.edu ABSTRACT Recent breakthroughs in text-to-image synthesis have been driven by diffusion models trained on billions of image-text pairs. Adapting this approach to 3D synthe- sis would require large-scale datasets of labeled 3D data and efficient architectures for denoising 3D data, neither of which currently exist. In this work, we circum- vent these limitations by using a pretrained 2D text-to-image diffusion model to perform text-to-3D synthesis. We introduce a loss based on probability density distillation that enables the use of a 2D diffusion model as a prior for optimization of a parametric image generator. Using this loss in a DeepDream-like procedure, we optimize a randomly-initialized 3D model (a Neural Radiance Field, or NeRF) via gradient descent such that its 2D renderings from random angles achieve a low loss. The resulting 3D model of the given text can be viewed from any angle, relit by arbitrary illumination, or composited into any 3D environment. Our approach requires no 3D training data and no modifications to the image diffusion model,
+### Methods / Architecture
+- arXiv:2209.14988v1 [cs.CV] 29 Sep 2022 DREAMFUSION: TEXT-TO-3D USING 2D DIFFUSION
+- Recent breakthroughs in text-to-image synthesis have been driven by diffusion
+- models trained on billions of image-text pairs. Adapting this approach to 3D synthe-
+- sis would require large-scale datasets of labeled 3D data and efficient architectures
+- vent these limitations by using a pretrained 2D text-to-image diffusion model to
+- perform text-to-3D synthesis. We introduce a loss based on probability density
+- distillation that enables the use of a 2D diffusion model as a prior for optimization
+- by arbitrary illumination, or composited into any 3D environment. Our approach
+- requires no 3D training data and no modifications to the image diffusion model,
+- demonstrating the effectiveness of pretrained image diffusion models as priors. See
+- datasets (Schuhmann et al., 2022) and scalable generative model architectures. Diffusion models are
+- objective (Ho et al., 2020; Sohl-Dickstein et al., 2015; Song et al., 2021). Applying diffusion models
+- to other modalities has been successful, but requires large amounts of modality-specific training data
+- pretrained 2D image-text diffusion models to 3D object synthesis, without any 3D data (see Figure 1).
+- the 3D data needed is relatively scarce compared to plentiful 2D images. Our approach learns 3D
+- structure using only a 2D diffusion model trained on images, and sidesteps this issue. GANs can learn
+- et al., 2019; Or-El et al., 2022). Though these approaches have yielded promising results on specific
+- Neural Radiance Fields, or NeRF (Mildenhall et al., 2020) are an approach towards inverse rendering
+- Figure 1: DreamFusion uses a pretrained text-to-image diffusion model to generate realistic 3D
+- Many 3D generative approaches have found success in incorporating NeRF-like models as a building
+### Equations / Objectives
+- equire large-scale datasets of labeled 3D data and efficient architectures
+- gradient descent such that its 2D renderings from random angles achieve a low
+- equires no 3D training data and no modifications to the image diffusion model,
+- equires large amounts of modality-specific training data
+- equiring a
+- KL
+- score functions learned by the pretrained diffusion model. The resulting
+- Score Distillation Sampling (SDS) method enables sampling via optimization in differentiable image
+- SCORE DISTILLATION SAMPLING
+- MSE denoiser (Sohl-Dickstein et al., 2015). Transitions
+- score function for the smoothed density zt log p(zt)
+- formula (Robbins, 1992): (zt; t) = -ts(zt; t).
+- score matching objective for parameters (Ho et al., 2020; Kingma et al., 2021):
+- equence of score functions corresponding to noisier versions of the data (Vincent,
+- score function is given by s(zt; t) = - (zt; t)/t.
+- score function to prefer regions where the ratio of the conditional density to the
+- Score Distillation Sampling
+- score distillation sampling, as an example we use an image
+- equire a loss function that can be applied to diffusion models.
+- Eqn. 1) to find modes of the learned conditional density p(x|y).
+### Quantitative Claims
+- 2022; Saharia et al., 2021b). These quality improvements have come from large aligned image-text
+- produced by this approach tend to lack realism and accuracy. CLIP has been used to guide other
+- originally designed for 3D reconstruction from images, its improvements are also helpful for our
+- the accuracy with which CLIP (Radford et al., 2021) retrieves the correct caption among a set of
+- image pairs in MS-COCO. We also compare against an enhanced reimplementation of Dream Fields
+- DreamFusion outperforms both baselines on color images, and approaches the performance of ground
+- geometric quality. Geometry significantly improves with each of these choices and full renderings
+- how the albedo renders can be deceiving: our base model achieves the highest score, but exhibits
+- Though DreamFusion produces compelling results and outperforms prior work on this task, it still
+- this, but synthesis would become impractically slow. Hopefully improvements in the efficiency of
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2204.03458_Video Diffusion Models.txt`
+### Abstract
+Video Diffusion Models Jonathan Ho Tim Salimans Alexey Gritsenko jonathanho@google.com salimans@google.com agritsenko@google.com arXiv:2204.03458v2 [cs.CV] 22 Jun 2022 William Chan Mohammad Norouzi David J. Fleet williamchan@google.com mnorouzi@google.com davidfleet@google.com Abstract Generating temporally coherent high fidelity video is an important milestone in generative modeling research. We make progress towards this milestone by propos- ing a diffusion model for video generation that shows very promising initial results. Our model is a natural extension of the standard image diffusion architecture, and it enables jointly training from image and video data, which we find to reduce the variance of minibatch gradients and speed up optimization. To generate long and higher resolution videos we introduce a new conditional sampling technique for spatial and temporal video extension that performs better than previously proposed methods. We present the first results on a large text-conditioned video generation task, as well as state-of-the-art results on established benchmarks for video predic- tion and unconditional video generation. Supplementary material is available at https://video-diffusion.github.io/. 1 Introduction Diffusion models have recently been producing high quality results in image generati
+### Methods / Architecture
+- ing a diffusion model for video generation that shows very promising initial results.
+- Our model is a natural extension of the standard image diffusion architecture, and
+- it enables jointly training from image and video data, which we find to reduce the
+- higher resolution videos we introduce a new conditional sampling technique for
+- methods. We present the first results on a large text-conditioned video generation
+- Diffusion models have recently been producing high quality results in image generation and audio
+- diffusion models in new data modalities. In this work, we present first results on video generation
+- using diffusion models, for both unconditional and conditional settings.
+- the Gaussian diffusion model [46], with little modification other than straightforward architectural
+- We train models that generate a fixed number of video frames using a 3D U-Net diffusion model
+- architecture, and we enable generating longer videos by applying this model autoregressively using a
+- new method for conditional generation. We additionally show the benefits of joint training on video
+- and image modeling objectives. We test our methods on video prediction and unconditional video
+- generation, where we achieve state-of-the-art sample quality scores, and we also show promising first
+- A diffusion model [46, 47, 22] specified in continuous time [53, 48, 10, 28] is a generative model
+- Training Learning to reverse the forward process for generation can be reduced to learning to
+- over uniformly sampled times t [0, 1]. This reduction of generation to denoising can be justified
+- as optimizing a weighted variational lower bound on the data log likelihood under the diffusion
+- in space with t sampled according to a cosine schedule [37]. This corresponds to a particular
+- Sampling We use a variety of diffusion model samplers in this work. One is the discrete time
+### Equations / Objectives
+- gradients and speed up optimization. To generate long and
+- formulation of
+- scores, and we also show promising first
+- p(x). The
+- Equal contribution
+- log likelihood under the diffusion
+- score matching [56, 47, 22, 28]. In practice, we use the -prediction
+- score estimate (zt) -tzt log p(zt), where p(zt) is the
+- p(x) [22, 28, 48]. We also train using the v-prediction parameterization
+- equence from 1 to 0.
+- p(x).
+- equipped with a conditioning signal c, which
+- p(x|c), the only modification that needs to be made is to provide c to the model as x^(zt, c).
+- equences of frames or higher spatial resolutions, we will repurpose our
+- equire an absolute notion of video time. We visualize the model
+- equirements of training our models,
+- p(x)
+- p(xb|xa). If xb consists of
+- equire one to sample from a conditional model, p(xb|xa). This conditional model
+- p(x) by imputation, which has the advantage of not requiring a separately trained model. For
+### Quantitative Claims
+- task, as well as state-of-the-art results on established benchmarks for video predic-
+- generation, where we achieve state-of-the-art sample quality scores, and we also show promising first
+- Improvements to sample quality can be obtained in this setting by using classifier-free guidance [20].
+- our model, and we compare against methods from the literature, finding that our method strongly
+- improves upon the previous state-of-the-art.
+- Table 1: Unconditional video modeling results on UCF101.
+- against the 256 examples in the evaluation set.
+- report two numbers which are measured against the training and validation sets, respectively. For IS,
+- generation. As expected, there is clear improvement in the Inception Score-like metrics with higher
+- diffusion models, an improvement over the replacement method of [48]. In Table 6 we present
+- introduced a new reconstruction-guided conditional sampling method that outperforms existing
+- [6] Joy Buolamwini and Timnit Gebru. Gender shades: Intersectional accuracy disparities in
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.24652_AVBench_ Human-Aligned and Automated Evaluation Benchmark for Audio-Video Genera.txt`
+### Abstract
+arXiv:2605.24652v1 [cs.AI] 23 May 2026 AVBench: Human-Aligned and Automated Evaluation Benchmark for Audio-Video Generative Models Jialiang Yang1, Bin Xia2, Ruihang Chu1, Dingdong Wang2, Wanke Xia1, Zhun Mou1, Tianyang Zhong1, Yiting Zhao1, and Wenming Yang1 1 Tsinghua University 2 The Chinese University of Hong Kong Project Page: https://yajialiang.github.io/AVBench-site/ Abstract. Rapid advances in audio-video (AV) generation have en- abled high-fidelity synthesis with synchronized sound, particularly for human-related scenarios involving speech and interactions. Yet evalua- tion for AV generation remains at an early stage, with only a few coarse- grained benchmarks for human-related scenarios and relying on limited preset evaluations with generic multimodal LLMs, leading to inaccu- rate assessments of model capabilities. To address these issues, we intro- duce AVBench, a fully automated benchmark tailored for human-centric AV generation. AVBench is built on two key designs for comprehen- sive and accurate evaluation: (i) Human-centric and fine-grained metrics. AVBench integrates ten evaluation dimensions designed for human-centered real-world scenarios, covering visual qualit
+### Methods / Architecture
+- lack of specialized training data, we construct large-scale supervision by
+- transforming real-world videos into diverse training pairs with controlled
+- perturbations. After fine-tuning on this high-quality dataset, the evalua-
+- serving as a differentiable reward signal for Reinforcement Learning from
+- normal and hard subsets. The framework supports automated large-scale assessment
+- generic models: Pretrained embeddings (e.g., CLAP [8], ViCLIP [31]) capture
+- pipelines. Crucially, existing MLLMs are not specifically trained for audio-video
+- shelf MLLMs lack targeted training on fine-grained hard negatives, making them
+- To address these critical gaps, we introduce AVBench, a fully automated
+- abling our evaluation framework to comprehensively assess a model's capability
+- In addition, we trained specialized MLLMs for the automated evaluation of
+- clips and expanded them into a 100K training set for each dimension by in-
+- ing full supervised fine-tuning (SFT) on this meticulously designed dataset, the
+- a strategy to create negative samples and built a large, diverse training
+- framework that demonstrates superior human alignment and offers a differentiable
+- Benchmark Evaluation Paradigm Training Data Human-Centric Automated Eval Human Aligned Differentiable Signal
+- This framework allows for a thorough assessment, specifically in core human-
+- ation to the unified modeling of audio-video streams. Early approaches to Text-
+- fied framework [12,13,20,30]. This paradigm shift is driven by the scaling of Diffu-
+- sion Transformers (DiT) [23] and multimodal tokenizers. State-of-the-art systems
+### Equations / Objectives
+- scores from the model's prediction confidence on binary
+- equently generated in T2AV applications
+- scores, rendering
+- scores by normalizing the predicted probabilities of the Yes/No to-
+- scores,providing a more granular and
+- equired in
+- mseatl 148.3% E1xc4i.t2e%d SHuabrsdet 340.0%
+- scores.
+- equence
+- MSe1ism8m.a0an%ttcich MR2ias5nm.d0ao%tmch L7og.0i%cal M7o.5ti%on Te1m0p.0o%ral Spee7c.5h%Attr. Logic7a.l5(%Audi
+- equency filtering--typical sources of distortion in
+- equently lead to errors in current audio-video generation models. These
+- equipped with an
+- equip the discrimina-
+- score, allowing for a more accurate assessment of
+- score that effectively
+- score by weighting three specific components:
+- score (MOS) pre-
+- score as (CE + CU + P Q - P C)/4. This
+- score provides a balanced metric to quantify the overall aesthetic value of
+### Quantitative Claims
+- Speech Content Accuracy Reliable Perceptual Proxy
+- a new trend in industrial development. State-of-the-art (SOTA) systems like
+- erated content, achieving significantly higher precision than generic evaluators.
+- centric scenarios. Extensive experiments demonstrate that AVBench achieves
+- sion Transformers (DiT) [23] and multimodal tokenizers. State-of-the-art systems
+- models significantly improve global coherence but introduce new challenges in
+- accuracy during complex multi-talker scenarios.
+- reflects the accuracy of lip-sync alignment in the generated video, ensuring
+- Speech Content Accuracy: current audio-video generation models fre-
+- keyword completeness (Scomp), lexical accuracy (Sacc), and a hallucination
+- videos, we utilize DOVER++ [32]. As a state-of-the-art multi-perspective
+- 4.1 Main Results: Evaluating State-of-the-Art T2AV Models
+- all models. In the Normal Split, Sora 2 achieves an AT score of 0.8675 but a lower
+- Table 2: Quantitative evaluation of state-of-the-art T2AV models on the AVBench test
+- content accuracy (SC), speech realism (DF-Arena), audio quality (NISQA MOS), au-
+- Lip-Sync, Speech Content, & Realism. Results show a clear decoupling
+- between synchronization, content accuracy, and vocal realism. Kling 2.6 achieves
+- weaker in speech content accuracy and realism. Wan 2.6 attains the highest SC
+- voices while maintaining competitive content accuracy across both splits.
+- ized evaluators against zero-shot foundational models (CLAP, ViCLIP, Image-
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2404.10351_Stable Audio_ Fast Timing-Conditioned Latent Audio Diffusion.txt`
+### Abstract
+On the Use of Relative Validity Indices for Comparing Clustering Approaches Luke W. Yerbury, Ricardo J.G.B. Campello, G. C. Livingston Jr, Mark Goldsworthy, Lachlan O'Neil arXiv:2404.10351v2 [stat.ML] 21 Nov 2024 Abstract Relative Validity Indices (RVIs) such as the Silhouette Width Criterion, Calinski-Harabasz and Davies Bouldin indices are the most widely used tools for evaluating and optimising clustering outcomes. Traditionally, their ability to rank collections of candidate dataset partitions has been used to guide the selection of the number of clusters, and to compare partitions from different clustering algorithms. However, there is a growing trend in the literature to use RVIs when selecting a Similarity Paradigm (SP) for clustering -- the combination of normalisation procedure, representation method, and distance measure which affects the computation of object dissimilarities used in clustering. Despite the growing prevalence of this practice, there has been no empirical or theoretical investigation into the suitability of RVIs for this purpose. Moreover, since RVIs are computed using object dissimilarities, it remains unclear how they would need to be implemented for fair comparisons of different SPs. This study presents the first comprehensive investigation into the reliability of RVIs for SP selection. We con-
+### Methods / Architecture
+- and to compare partitions from different clustering algorithms. However, there is a growing trend in the literature
+- quality labelled datasets or carefully designed outcome-oriented objective criteria, both of which should be informed
+- tions for clustering methodology and evaluation, suggesting the need for more rigorous approaches to SP selection in
+- domains [116], which has resulted in a vast array of clustering approaches and components ranging from the generic to
+- the highly task-specific. Broadly speaking, a majority of clustering approaches can be disassembled into five fundamental
+- components: a data normalisation procedure, a data representation method, a distance measure, a clustering algorithm
+- clustering algorithm, or as an optional data abstraction post-clustering to compactly represent clusters. These five
+- components should be selected carefully when designing candidate clustering approaches for particular domains and
+- component selection problem is a daunting task, and has been approached in various ways throughout the literature. An
+- consider that other model selection problems could also be approached using RVIs, such as selecting the ideal SP for
+- computing an RVI using the same non-Euclidean distance or SP that was employed for clustering.
+- evaluated using the same SP applied to obtain the partition (hereafter referred to as the "matching-SP" evaluation
+- suggested that the same distance measure should be used for evaluation that was used for clustering. This approach is
+- produced with the same or similar paradigms. In an attempt to avoid this theorised bias, the authors of [94] proposed a
+- the best SP. These approaches are highly sensitive to the set of candidate SPs, and are more complicated to interpret.
+- introducing a comprehensive nomenclature for uniquely describing clustering approaches by their components;
+- including a review of alternative approaches to the problem of SP-selection. Finally, Section 7 will conclude the paper.
+- clustering approaches, disambiguating key terminology used throughout the remainder of the paper. Section 2.2 then
+- tion method, a distance measure, a clustering algorithm and a prototype definition. A single combination of these is
+- collectively referred to within this paper as a clustering approach (see Figure 1).
+### Equations / Objectives
+- equirements. Our findings have important implica-
+- equently select the best partition. These
+- equently been used to infer the ideal number of clusters (k) for a dataset, referred to hereon as the
+- equires a pairwise distance matrix at the very least. Both classic and more
+- equipped with a fixed-SP evaluation scheme demonstrate an observable bias towards partitions generated
+- equires examining three key areas: their current usage
+- equired for the
+- equality. These properties can be leveraged to increase computational efficiency [93], but partial violations of them
+- formulated as dissimilarity measures; thus from
+- equired for producing cluster prototypes for some RVIs or various downstream purposes.
+- equires the user to select whether the evaluation SP is independent of, or matches the SP used to
+- equired for most clustering approaches, but are involved within subroutines of some clustering
+- equences. Any normalisation or prototype definition can be incorporated into this clustering
+- equired or explicitly specified. Regardless, adoption of this nomenclature within
+- equipped
+- equacy (MIA), Modified Hubert's Gamma (MHG), Pakhira-Bandyopadhyay-Maulik Index
+- equested RVI. User can select one com-
+- equired meticulous
+- equested normalisations, distance measures,
+- formulating/computing
+### Quantitative Claims
+- [77] Area Under Curve AUCC Max against theoretical best and worst cases
+- intended outcomes. Though these newer indices have shown clear improvements in some of these contexts, the continual
+- is worse again. Thus it is very likely that partitions which are more consistent with the similarity structure induced by
+- against the baseline task of k-selection. A similar level of performance on both tasks would be taken to suggest that,
+- approach, which gained prominence in the seminal work on RVI comparison by Milligan and Cooper [105]. Milligan
+- and Cooper's methodology assumed that the accuracy of an RVI could be quantified by the frequency with which it
+- implemented in a comparative study [11], and whilst an improvement on [105], observing the coincidence of optima
+- for k {12, 14, 16}, and the remainder are again approximately evenly distributed amongst the remaining clusters. The
+- sipu/worms 2 and sipu/worms 64 as they are significantly larger than the other datasets in this battery (at least 10
+- measures have been used to define the unique similarity paradigms. The BIRCH threshold parameter was again set
+- z-normalisation. These datasets are larger on average again than in the Gagolewski battery, hence we have considered
+- ACSF1 200 1460 10 [5, 15] Mallat 2400 1024 8 [3, 13]
+- label suggests failure to reject. These indicate that the medians for AUCC, SWC and DBI were statistically significantly
+- that consequently there is significantly less value in comparing them to select the "best" performer, which may at that
+- of the RVIs than CoD and CaD. Interestingly, there doesn't appear to be any notable improvement to the k-selection
+- The success rates for the Vendramin battery deteriorate significantly when the task shifts to selecting the optimal
+- significantly differently from the fixed-SP schemes for this battery on both tasks. The mean-SP scheme was however,
+- improvements were overall higher for the time series specific SPs, such as MSM, than for the generic SPs, such as ED
+- For the Vendramin battery, both modes of scaling caused a slight improvement in the performance of PBM when
+- UCR battery, an improvement was only noted for maximum scaling (from 0.061 to 0.087), whilst global scaling resulted
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷅: conflict, contradiction, hallucination
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2605.19242_PhyWorld_ Physics-Faithful World Model for Video Generation.txt`
+### Abstract
+arXiv:2605.19242v1 [cs.CV] 19 May 2026 PhyWorld: Physics-Faithful World Model for Video Generation Pu Zhao1, Juyi Lin1, Timothy Rupprecht1, Arash Akbari1, Chence Yang2, Rahul Chowdhury1, Elaheh Motamedi1, Arman Akbari1, Yumei He3, Chen Wang4, Geng Yuan2, Weiwei Chen4, Yanzhi Wang1 1Northeastern University, 2University of Georgia, 3Tulane University, 4EmbodyX {p.zhao, lin.juy, yanzhiwang}@northeastern.edu PhyWorld: https://huggingface.co/NU-World-Model-Embodied-AI/phyworld Abstract World simulators can provide safe and scalable environments for training Physical AI systems before real-world deployment. Large video generation models are emerging as a promising basis for such simulators because they can generate diverse and realistic visual futures. However, using them as world simulators requires physically faithful video continuations, namely, generated videos that preserve the physical state implied by the conditioning input, and evolve in ways consistent with basic physical principles. We propose PhyWorld, a video generation world model designed to produce temporally coherent and physically faithful scene continuations through two-stage post-training. In the first stage, we improve video-to-video
+### Methods / Architecture
+- World simulators can provide safe and scalable environments for training Physical
+- basic physical principles. We propose PhyWorld, a video generation world model
+- through two-stage post-training. In the first stage, we improve video-to-video
+- continuation with flow matching fine-tuning, encouraging stable visual attributes
+- for the strongest baseline. These results suggest that post-training large video
+- actuators. Training these agents directly in the real world is slow, expensive, and risky, especially
+- scene continuations from text, images, or preceding clips. This makes video-to-video continuation
+- and image-to-video approaches are similarly inadequate, as neither modality provides sufficient
+- physical law enforcement is largely absent from existing model architectures. Prevailing world models
+- are trained on empirical video data without incorporating explicit supervisory signals or loss functions
+- To address the above challenges, we propose our video-generation world model, PhyWorld, to
+- generate more consistent and physically faithful videos. It includes two stage training: (1) physical
+- consistency enhancement, and (2) physics enforcement through reinforcement learning. The first
+- performance through flow matching fine-tuning, thus continuing the scene with consistent physical
+- quality, the second stage targets to enforce physics through reinforcement learning, with explicit
+- supervisory signals or loss functions designed to instill knowledge of physical principles. This
+- Physical Consistency Enhancement. We introduce a video-to-video training pipeline to
+- Physics Enforcement with Reinforcement Learning and Benchmarking. To further align
+- Optimization (DPO) to finetune the model obtained from the first training stage. This
+- approach incentivizes the model to preferentially generate outputs that adhere to physically
+### Equations / Objectives
+- equires
+- score of 0.769 on VBench compared with 0.756 or below for state-
+- score of 3.09 on our physical-faithfulness benchmark compared with 2.99
+- equire hand-
+- equally.
+- equently observed, undermining temporal coherence and visual realism. Text-to-video
+- equate, as neither modality provides sufficient
+- equently, these models lack a structured
+- scored on a 1-5 Likert scale across general quality dimensions and physics-specific dimensions
+- score of 0.769 v.s. 0.756 or below from SOTA baselines on VBench
+- score of 3.09 v.s. 2.99 from SOTA baselines on our
+- equences through a context-aware tokenization strategy. However, these methods are relatively
+- equently exhibit notable limitations in generation quality,
+- equirements.
+- score, precluding the kind of per-law diagnostic analysis necessary to identify
+- scores on shadow and reflection phenomena.
+- equently
+- equently rearranged to the shape s t h w, where s denotes the temporal stride
+- equently projected into the model's feature space via a three-layer multi-
+- scores (indicative of near-static content), as well as those yielding excessively low
+### Quantitative Claims
+- maintain across generated frames. As a result, the generation quality of state-of-the-art models in
+- quality (an average score of 0.769 v.s. 0.756 or below from SOTA baselines on VBench
+- [6]) and physics alignment (an average score of 3.09 v.s. 2.99 from SOTA baselines on our
+- A synthesis of recent surveys on state-of-the-art world models [7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+- abstract taxonomic frameworks [7, 15]. Beyond the established contributions from SOTA world
+- by (i.e., adds on top of the frozen base weights). It is optimized against a fixed reference
+- Table 3: Evaluation results on VBench. Our PhyWorld achieves an average score of 0.769, demon-
+- strating non-marginal improvements over SOTA baselines with averages scores below 0.756.
+- compare against, we generate videos on the benchmark's prompt set under each model's default
+- VBench benchmark [6]. As shown in Table 3, our method achieves superior performance consistently
+- and so on. The average score is 0.769, demonstrating non-marginal improvements over SOTA
+- model to provide scores for the generated videos. We compare our model with SOTA I2V/T2V
+- I2V-A14B (2.99) and other five open SOTA models (Cosmos-14B, OmniWeaving, LTX-2.3-22B,
+- Wan2.2-TI2V-5B, LTX-2-19B). Our non-marginal improvements over the initial base model concen-
+- consistency. The SOTA baseline models suffer from artifacts or flaws such as color shift or background
+- benchmark for evaluating physics faithfulness in generated video, against which PhyWorld demon-
+- models for high accuracy without retraining. In Findings of the Association for Computational Linguistics:
+- combined effect is that judge accuracy on the four held-out splits is bounded by the quality of the
+- score Pphys (15) for each model and the gain .
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷁: receptive, grounding, spatial
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷄: waiting, video generation, timing
+- ䷆: army, systematic, framework
+- ䷇: union, multimodal, fusion
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷋: opposition, object localization, localize
+- ䷌: fellowship, clip, contrastive
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷏: enthusiasm, audio, music
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷕: splitting apart, split, pathway
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---
+## 
+**File:** `2106.08389_Graph World Models.txt`
+### Abstract
+Plane and Sample: Maximizing Information about Autonomous Vehicle Performance using Submodular Optimization Anne Collin1, Amitai Y. Bin-Nun1, Radboud Duintjer Tebbens1 arXiv:2106.08389v1 [cs.RO] 15 Jun 2021 Abstract-- As autonomous vehicles (AVs) take on growing pre-defined criterion, but does not allow the estimation of Operational Design Domains (ODDs), they need to go through the violation rate of that criterion. In both methods, even a systematic, transparent, and scalable evaluation process to a small change of ODD would require a re-estimation of demonstrate their benefits to society. Current scenario sampling frequencies or analysis of new functionalities. techniques for AV performance evaluation usually focus on a specific functionality, such as lane changing, and do not In this paper, we propose a hierarchical statistical represen- accommodate a transfer of information about an AV system tation of AV performance, as well as a method to determine a from one ODD to the next. In this paper, we reformulate the scenario set to evaluate this performance across ODDs. The scenario sampling problem across ODDs and functionalities as hierarchical structure supports the reuse of information from a submodular optimization problem. To do so, we abstract AV one ODD to the next, and mitigates the sensitivity of the performance as a Bayesian Hierarchical Model, which we use performance estimation to event frequencies, as the method to infer information gained by revealing performance in new
+### Methods / Architecture
+- Plane and Sample: Maximizing Information about Autonomous Vehicle
+- demonstrate their benefits to society. Current scenario sampling frequencies or analysis of new functionalities.
+- a specific functionality, such as lane changing, and do not In this paper, we propose a hierarchical statistical represen-
+- scenario sampling problem across ODDs and functionalities as hierarchical structure supports the reuse of information from
+- scenarios. We propose the information gain as a measure of the value of testing on a specific scenario, and our sampling
+- improvement over Latin Hypercube Sampling. Fig. 1): first, we model AV performance as a Bayesian Hier-
+- of the AV. new scenario, which is the metric we propose to evaluate
+- Systematic sampling methods for the validation of the The Bayesian Hierarchical Model provides conditional in-
+- lane changing or vehicle following. The former method the greedy algorithm for submodular optimization to provide
+- frequency of specific events in the AV's ODD. The latter information gain (sample). Our stopping criterion is when the
+- planes because of the legal, ethical, safety objectives the system
+- Submodular optimization Sample collisions, staying within lane, and driving below the speed
+- information gain, which is the objective function of the is at a later stage of development.
+- Latin Hypercube Sampling needs to explore to obtain the space. Using a finer feature representation increases the
+- same quantity of information. probability of having interesting scenarios, however it also
+- To summarize, this work makes the following contribu- metrics and clustering techniques can be used to downsample
+- guarantees: the greedy algorithm for submodular op- Some well-established sampling techniques aim at cov-
+- given statistical confidence. independence between the scenario features they sample
+- Section II reviews related work in the scenario sampling looks specifically for rare events. None of these techniques
+- described above, and section IV shows the results of the ODDs to inform future sampling.
+### Equations / Objectives
+- equire a re-estimation of
+- equencies or analysis of new functionalities.
+- formulate the scenario set to evaluate this performance across ODDs. The
+- equencies, as the method
+- equency of specific events in the AV's ODD. The latter information gain (sample). Our stopping criterion is when the
+- kle the
+- equency
+- equire
+- formulate our assumption in the
+- equate priors and hyperpriors are
+- mselves
+- equires distribution, but the average could be higher in a dense town
+- score [12]. B. Sample
+- equation (1).
+- equivalent
+- kly informative priors.
+- equally shows that the average value of the graph-based re-generated
+- kli, and N. Papanikolopoulos, "Multi-class batch-
+- klis, Introduction to Probability.
+### Quantitative Claims
+- to infer information gained by revealing performance in new does not use them directly. We offer a criterion for assessing
+- scenarios. We propose the information gain as a measure of the value of testing on a specific scenario, and our sampling
+- the information gain not only to find a near-optimal scenario set, study that offers such a guarantee with a scenario selection
+- improvement over Latin Hypercube Sampling. Fig. 1): first, we model AV performance as a Bayesian Hier-
+- options are necessary to efficiently evaluate the performance tion of information gain on the system provided by each
+- representative of real world event rates [5][7], or search scenario space hyperplanes, causing the information gain to
+- for scenarios in which weaknesses or abrupt performance be submodular. This means that the information gain has a
+- frequency of specific events in the AV's ODD. The latter information gain (sample). Our stopping criterion is when the
+- method converges to scenarios in which systems violate a information gain does not grow anymore given a statistical
+- Potential new Information gain from any AV behavior as features that they learn preferences from
+- information gain, which is the objective function of the is at a later stage of development.
+- mation gain with a 90% confidence after only testing about blocks, as coordinates of a scenario vector [18], [19]. This
+- set: when the information gain is plateauing, with a tems [20], [21]. However, these techniques usually require
+- such as traffic laws, courteous driving manners, or ride information gain and the algorithm would therefore optimize
+- If A is the set of scenarios we observe, the information per route in that town. This means that, in our example, we
+- gain about from observing performance in A is defined as assume that the probability distribution of the number of
+- There are kn scenario sets of size a in this scenario the information gain about upon revelation of XA is
+- and choose the set that maximizes information gain before [33] to provide a near-optimal solution to equation (1).
+- having to generate the scenarios in a simulation engine or in the next scenario with the highest information gain at each
+- when the approximated information gain stops increasing in
+### King Wen Hexagram Mapping
+- ䷀: creation, generation, origin
+- ䷂: obstruction, adversarial, fragility
+- ䷃: youthful, learning, instruction tuning
+- ䷆: army, systematic, framework
+- ䷈: smallness, efficiency, quantization
+- ䷉: treading, action, driving
+- ䷊: peace, alignment, grounding
+- ䷍: greatness, visual autoregressive, scalable
+- ䷎: humility, mitigation, bias
+- ䷐: following, distillation, bootstrapping
+- ䷑: work on, interpretability, mechanism
+- ䷒: boundary, world model, simulation
+- ䷓: observation, evaluation, benchmark
+- ䷔: grace, beauty, image
+- ䷖: return, brain-llm, alignment
+- ䷗: innocence, event-grounded, sparse
+---

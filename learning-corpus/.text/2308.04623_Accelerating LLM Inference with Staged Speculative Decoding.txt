@@ -1,0 +1,313 @@
+                                       Accelerating LLM Inference with Staged Speculative Decoding
+
+                                       Benjamin Spector 1 Chris Re 1
+
+arXiv:2308.04623v1 [cs.AI] 8 Aug 2023                          Abstract                                    low-latency responses (Wang et al., 2023) or those where
+                                                                                                           data privacy is paramount (Carlini et al., 2021).
+                                             Recent advances with large language models
+                                             (LLM) illustrate their diverse capabilities. We               Our paper addresses these challenges by accelerating local
+                                             propose a novel algorithm, staged speculative                 (small-batch) inference for LLMs, which suffers from poor
+                                             decoding, to accelerate LLM inference in small-               compute utilization due to its low arithmetic intensity. We
+                                             batch, on-device scenarios. We address the low                view this problem as crucial for three reasons: latency, per-
+                                             arithmetic intensity of small-batch inference by              sonalization, and privacy. First, optimizing local inference
+                                             improving upon previous work in speculative de-               latency improves real-time interactivity and responsiveness.
+                                             coding. First, we restructure the speculative batch           Accelerating local inference also opens the door for more
+                                             as a tree, which reduces generation costs and in-             personalized LLM experiences as it allows models to be
+                                             creases the expected tokens per batch. Second,                locally tailored to individual users. Finally, local inference
+                                             we add a second stage of speculative decoding.                enhances data privacy, as it removes the need for data to
+                                             Taken together, we reduce single-batch decoding               leave the user's device.
+                                             latency by 3.16x with a 762M parameter GPT-2-L
+                                             model while perfectly preserving output quality.              More philosophically, we believe that methods to efficiently
+                                                                                                           run LLMs locally promote AI democratization by empower-
+                                       1. Introduction                                                     ing individuals with limited computational resources.
+
+                                       Large Language Models (LLMs) have witnessed tremen-                 In this work, we build on the speculative decoding tech-
+                                       dous growth over the last few years, demonstrating ca-              niques introduced by (Leviathan et al., 2022; Chen et al.,
+                                       pabilities that range from high-quality text generation to          2023), which use a fast but inaccurate draft model to an-
+                                       complex reasoning, decision-making, and problem-solving             ticipate the oracle model and batch queries to it, which
+                                       tasks (Brown et al., 2020; OpenAI, 2023; Chowdhery et al.,          improves sequential decoding performance while perfectly
+                                       2022). These strides, enabled by advances in deep learning          retaining the model distribution. These techniques scale
+                                       architectures (Vaswani et al., 2017), training methodologies        well at first but their performance gains quickly saturate,
+                                       (Kingma & Ba, 2014), and vast amounts of data (Halevy               because the probability of a draft model correctly guessing
+                                       et al., 2009; Gao et al., 2020; Kocetkov et al., 2022), have        many sequential tokens is exponentially small. We improve
+                                       paved the way for applications in fields as varied as natural       speculative methods in two key ways:
+                                       language processing (Brown et al., 2020), machine transla-
+                                       tion (Raffel et al., 2020), code synthesis (Chen et al., 2021),       1. We restructure the speculative batch as a tree of pos-
+                                       and beyond (OpenAI, 2023).                                                sible token sequences, so as to more quickly create
+                                                                                                                 larger and higher quality speculative batches.
+                                       However, this exciting progress comes with its own set
+                                       of system-level challenges. As LLMs have become more                  2. We speculatively decode the draft model, too, to further
+                                       powerful, their computational demands have increased in                   improve performance.
+                                       tandem, often requiring substantial cloud resources for in-
+                                       ference (Sheng et al., 2023). This requirement is prohibitive       We find these techniques significantly improve the perfor-
+                                       for many potential applications, especially those requiring         mance of speculative decoding in both deterministic and
+                                                                                                           sampling-based decoding.
+                                           1Department of Computer Science, Stanford University, Cal-
+                                       ifornia, United States. Correspondence to: Benjamin Spector         2. Background
+                                       <bfs@stanford.edu>.
+                                                                                                           In this section, we provide a brief overview of autoregres-
+                                       Proceedings of the 40 th International Conference on Machine        sive LLM inference, key principles of GPU performance
+                                       Learning, Honolulu, Hawaii, USA. PMLR 202, 2023. Copyright          optimization, and prior work in optimizing LLM inference.
+                                       2023 by the author(s).
+
+                                                                                                        1
+Submission and Formatting Instructions for ICML 2023
+
+2.1. Autoregressive LLM Inference                                    Figure 1: A roofline plot for single-query GPT-2-L inference on an
+                                                                     RTX 4090. At small batch sizes, inference is completely memory
+Autoregressive generation from decoder-only LLMs is gen-             bandwidth bound. Thus this plot shows that the only way to
+erally split into two phases. First, the prompt is run through       significantly increase performance is to increase the arithmetic
+the model to generate the KV cache and the first output log-         intensity of inference.
+its. This is usually fast, as the entire prompt can be handled
+in parallel.                                                         batch, which saves considerable memory bandwidth, and
+                                                                     thus time, per token. However, if the larger model rejects
+The second phase is decoding. A token is selected from               the tokens predicted by the draft model, then the rest of the
+the outputted logits and fed back into the model, which              batch is discarded and the algorithm naturally reverts to stan-
+produces logits for the following token. This is repeated            dard token-by-token decoding. Speculative decoding may
+until the desired number of tokens is produced. Because              also be accompanied by a rejection sampling scheme to sam-
+decoding must be done sequentially, with the entire model's          ple from the original distribution. Note this is only useful
+weights streamed through the compute units each time in              in small-batch settings where bandwidth is the bottleneck.
+order to generate a single token, the arithmetic intensity           Speculative decoding trades compute for bandwidth.
+(that is, FLOP of compute / byte of memory bandwidth)
+of this second phase is extremely low when run in small              There are two key reasons why speculative decoding is an
+batches. As such, decoding is usually the most expensive             attractive performance engineering target. First, it does not
+part of autoregressive generation. (Leviathan et al., 2022)          degrade model quality at all. Second, the gains it provides
+                                                                     are generally orthogonal to other methods, because its per-
+2.2. GPU optimization                                                formance comes from converting sequential execution to
+                                                                     parallel execution. (Leviathan et al., 2022)
+Modern LLM inference is most often conducted on GPUs
+due to the highly parallel nature of the workload, which             3. Methods
+consists principally of large matrix multiplications.
+                                                                     We make two improvements to speculative decoding: tree-
+GPUs consist of thousands of extremely small efficient cores         structured batches, and additional stages. We term the com-
+supported by a multi-level memory hierarchy. The key chal-           bination of these methods "staged speculative decoding".
+lenge of optimizing small-batch LLM inference for GPUs is
+to deal with the extremely low arithmetic intensity. Operat-         3.1. Tree-structured batches
+ing in 16-bit precision with a batch size of 1, decoding has
+an arithmetic intensity of 1. For example, for a reference Py-       Current speculative methods predict a single sequence for
+Torch (Paszke et al., 2019) implementation of GPT-2 Large            the batch. However, this doesn't scale well to large batch
+(762M parameters), inference requires approximately 1.4              sizes or low draft model alignments. Intuitively, the proba-
+GFLOP, and yet a quiesced NVIDIA RTX 4090 achieves                   bility that two models agree for long consecutive sequences
+only 150 tokens/second, for a compute utilization of a mere          of tokens is exponentially low, which means that speculative
+0.13% (NVIDIA, 2022). This abysmal performance is sub-               decoding has rapidly diminishing returns as one scales its
+stantially due to the GPU roofline (Ofenbeck et al., 2014),          arithmetic intensity.
+which is governed by memory bandwidth at low arithmetic
+intensities (visualized in Figure 1).
+
+2.3. Speculative Decoding
+
+There are many techniques under investigation today to
+accelerate inference, such as quantization (Dettmers et al.,
+2022; Frantar et al., 2022), flash attention (Dao et al., 2022),
+and speculative decoding (Leviathan et al., 2022; Chen et al.,
+2023). In this section, we'll briefly examine speculative
+decoding as described in (Leviathan et al., 2022; Chen et al.,
+2023), as it is the primary subject of this work.
+
+The basic idea of speculative decoding is to use a smaller,
+faster draft model to decode several tokens in advance, and
+then feeds them into the oracle model as a single batch. If
+the draft model was right about its predictions ­ the larger
+model agrees ­ one can decode several tokens with a single
+
+                                                                  2
+                               Submission and Formatting Instructions for ICML 2023
+
+  Sampling        Baseline      Speculative     Staged spec.          Sampling      Baseline   Speculative  Staged spec.
+   method      rel. bandwidth  rel. bandwidth  rel. bandwidth          method      tokens/sec  tokens/sec    tokens/sec
+
+Deterministic        1.00            0.31           0.23            Deterministic      150         350          475
+     Topk            1.00            0.48           0.35                 Topk          150         219          298
+
+Table 1: Memory bandwidth consumption (relative to baseline) of     Table 2: Relative performance (in tokens/second decoded) with
+speculative and staged speculative decoding methods.                baseline (non-speculative), standard speculative, and staged specu-
+                                                                    lative decoding methods.
+
+Our approach is to dynamically build a tree of the possible         However, under naive speculative decoding, assembling
+sequences, which provides three benefits: more expected             large batches inverts the cost structure, with more time spent
+true tokens per batch, an increased number of leaf nodes,           on the draft model than the oracle. So, one should accel-
+and better parallelism for the small draft model.                   erate the draft model in generating sequences of tokens,
+                                                                    and speculative decoding is a natural solution for this, too.
+First, by reallocating computation from the end of very long        We correspondingly add speculative decoding to the draft
+sequences to the beginning, and considering the second or           model in our approach. Thus the overall method of "staged
+third most likely tokens to be produced by the model, one           speculative decoding", consists of oracle, draft, and draft2
+increases the expected number of tokens per batch compared          models with tree-structured batches.
+to the naive approach.
+                                                                    4. Results
+Second, the cost of running the draft model to produce the
+batch is non-negligible in standard speculative decoding.           For our experiments, we use three models: a GPT-2-Large
+However, in a tree of predictions which constitute the batch        (762M) parameter oracle model (Radford et al., 2019) fine-
+to the oracle model, the draft model is only run at internal        tuned on the Python subsection of the Stack (Kocetkov et al.,
+nodes of the tree. So, a wider tree increases the number of         2022), a small (40M) parameter GPT-2 draft model trained
+leaf nodes, which means that one gets more of the batch for         on the same, and a Katz backoff trigram model (Katz, 1987)
+free.                                                               as the draft2 model. The Katz backoff model was generated
+                                                                    by running the draft model for two hours at a sampling
+A third benefit of the wider tree is that one can parallelize       temperature of 1.5 to generate 120M tokens. All evaluations
+execution for the small model across the tree, which also           were conducted on a quiesced RTX 4090 GPU (NVIDIA,
+decreases its cost. In the limit, one only needs to run the         2022), which is top-end consumer hardware.
+draft on a number of batches equal to the depth of the tree.
+This is important because draft models are usually smaller          We evaluate against two alternative inference methods. First,
+transformer-based models and are thus memory-bound in               our standard baseline is simple token-by-token decoding
+small-batch inference, too.                                         with the oracle. Second, we also evaluate against speculative
+                                                                    decoding as proposed by (Leviathan et al., 2022), so as to
+Implementing a tree-structured batch requires some care.            isolate the effects of our improvements.
+The simplest approach is to partition self-attention while
+decoding into cross-attention with the KV cache and self-           To evaluate, we ran the 164 prompts from HumanEval (Chen
+attention within the batch. The tree-structured batch can           et al., 2021), using non-speculative, speculative, and our
+then be constructed by controlling both the positional em-          staged speculative methods, and with both deterministic and
+beddings and causally masking the batch self-attention ma-          topk sampling (Radford et al., 2019). Details of batch sizes
+trix according to the tree. Finally, the new KV cache for the       and internal heuristics can be found in our code.
+whole batch must be stored separately, and then the appro-
+priate slices appended to the main KV cache after tokens            We first measured the memory bandwidth requirements of
+are sampled.                                                        each method, to validate that our approach saves appre-
+                                                                    ciable bandwidth. We detail the results in table 1, which
+3.2. Staged Speculation                                             illustrate that staged speculative decoding uses substantially
+                                                                    less memory bandwidth than either alternative method.
+Current speculative methods use a single smaller model as
+the draft, usually a smaller LLM (Chen et al., 2023). In this       Second, we measure sequential decoding throughput for
+setting, the size of the draft model is an important hyperpa-       each approach. The results are summarized in table 2 and
+rameter: a larger draft model will have better alignment with       detailed in Figure 2.
+the oracle, but will cost more, whereas a smaller model will
+produce lower quality speculative batches, but at a lower           With deterministic sampling, our implementation provides
+cost. In practice, draft models that are about 15-20x smaller       an average performance boost of 3.16x over our reference
+than the oracle seem optimal.
+
+                                                                 3
+Submission and Formatting Instructions for ICML 2023
+
+                                                                     Figure 3: A visualization of the origin of tokens in an example
+                                                                     T=1 HumanEval completion. Green background originates with
+                                                                     the N-gram draft2 model, blue the draft model, and red the oracle
+                                                                     model. (Of course, all tokens are eventually checked by the oracle
+                                                                     model.) Obvious tokens ­ like whitespace ­ are preferentially
+                                                                     accelerated relative to difficult ones.
+
+Figure 2: Relative performance distribution over different prob-     the most critical tokens (like the token following the "if"
+lems in the HumanEval dataset. (A) shows greedy decoding,            token) come from the oracle model. Note that due to the
+whereas (B) shows Topk decoding. Problem indices are sorted by       finite batch size, the above is only a trend and should not be
+staged speculative performance for clarity.                          expected to apply universally to every token. Some tokens
+                                                                     which could have been accurately predicted by a smaller
+implementation, and 1.36x over standard speculative sam-             model will still end up originating from larger models.
+pling. Furthermore, we evaluate on relatively small mod-
+els, whereas prior work uses much larger models on which             We also wish to acknowledge the extreme range of the
+one would expect greater benefits. Profiling data shows              performance benefits as a downside of the work. While
+our implementation has 35% overhead from the Python in-              performance benefits run as high as 10x on realistic prompts,
+frastructure, which could be reduced by a more efficient             they can also be limited to only 2x. To a large degree, this
+implementation or amortized over larger models.                      depends on the denseness or sparseness of difficult content.
+                                                                     For example, highly indented Python code will make better
+With topk (k = 50, T = 1) sampling, although both specu-             use of the N-gram models than unindented code, and thus
+lative methods are significantly degraded due to stochastic          reap greater performance benefits.
+rejection of tokens provided in the batch, staged speculation
+nonetheless retains its lead, providing an average perfor-           We speculate that these models represent an approximately
+mance boost of 1.98x over baseline and 1.36x again over              fixed cost per entropy of the data. Extremely low entropy
+standard speculative sampling.                                       generation, like pure whitespace, will be generated very
+                                                                     quickly by staged speculative decoding, with performance
+In Figure 3, we show the origin of different tokens in the           approaching that of large-batch inference, whereas dense
+completed model. (The performance gain on the shown                  generations with high entropy will need to rely on small-
+prompt is approximately 2.5x over baseline.) The model is            batch decoding at all stages. So, a corollary implication
+usually able to decode the easiest, most obvious tokens, like        of this work is that most of the text generated by LLMs
+whitespace, in batch through both transformer models, as             has entropy lower than the capabilities of their authoring
+they originate with the N-gram models. Somewhat more                 models, and that the increased accuracy of big models is
+difficult tokens are generated by the small model, while             isolated to a relatively small number of key tokens.
+
+                                                                     We see several paths for future work:
+
+                                                                       1. We suspect it may be possible to speculatively sample
+                                                                           with T > 0 even faster by generating the multinomial
+                                                                           CDFs first, and then using this sequence to help choose
+
+                                                                  4
+Submission and Formatting Instructions for ICML 2023
+
+      the tokens to assemble into the full batch. For example,         Gehrmann, S., et al. Palm: Scaling language modeling
+      if the multinomial CDF sampled is 0.99, it may be               with pathways. arXiv preprint arXiv:2204.02311, 2022.
+      best to only include in the batch the draft model's fifth
+      through tenth most likely tokens.                             Dao, T., Fu, D., Ermon, S., Rudra, A., and Re´, C. Flashat-
+                                                                       tention: Fast and memory-efficient exact attention with
+  2. Running with larger models would likely yield even                io-awareness. Advances in Neural Information Process-
+      greater performance boosts while still fitting on-device.        ing Systems, 35:16344­16359, 2022.
+     With 8-bit quantization, it should be possible to fit 20B
+      models on consumer GPUs in small-batch, allowing              Dettmers, T., Lewis, M., Belkada, Y., and Zettlemoyer, L.
+      for an entire additional stage of speculation.                   Llm. int8 (): 8-bit matrix multiplication for transformers
+     (20B  1B  50M  N-gram).                                           at scale. arXiv preprint arXiv:2208.07339, 2022.
+
+  3. Investigating better lowest-level draft models could           Frantar, E., Ashkboos, S., Hoefler, T., and Alistarh, D. Gptq:
+      also improve performance ­ models which perform                 Accurate post-training quantization for generative pre-
+      better than N-gram models but still run in < 10µs.               trained transformers. arXiv preprint arXiv:2210.17323,
+                                                                       2022.
+5. Conclusions
+                                                                    Gao, L., Biderman, S., Black, S., Golding, L., Hoppe, T.,
+In this work, we described and implemented several im-                 Foster, C., Phang, J., He, H., Thite, A., Nabeshima, N.,
+provements over previous work in speculative decoding.                 et al. The pile: An 800gb dataset of diverse text for
+First, we restructured the batch provided to the oracle model          language modeling. arXiv preprint arXiv:2101.00027,
+as a tree, in order to decrease the cost of generation and in-         2020.
+crease the expected number of tokens per batch. Second, we
+added a second stage of speculation to accelerate the decod-        Halevy, A., Norvig, P., and Pereira, F. The unreasonable
+ing of the draft model. Altogether, we achieved an average             effectiveness of data. IEEE intelligent systems, 24(2):
+speedup of 3.16x over standard single-batch inference.                 8­12, 2009.
+
+Acknowledgements                                                    Katz, S. Estimation of probabilities from sparse data for the
+                                                                       language model component of a speech recognizer. IEEE
+[Left blank for blind review.]                                         transactions on acoustics, speech, and signal processing,
+                                                                       35(3):400­401, 1987.
+References
+                                                                    Kingma, D. P. and Ba, J. Adam: A method for stochastic
+Brown, T., Mann, B., Ryder, N., Subbiah, M., Kaplan, J. D.,            optimization. arXiv preprint arXiv:1412.6980, 2014.
+   Dhariwal, P., Neelakantan, A., Shyam, P., Sastry, G.,
+  Askell, A., et al. Language models are few-shot learners.         Kocetkov, D., Li, R., Allal, L. B., Li, J., Mou, C., Ferrandis,
+  Advances in neural information processing systems, 33:               C. M., Jernite, Y., Mitchell, M., Hughes, S., Wolf, T.,
+  1877­1901, 2020.                                                     et al. The stack: 3 tb of permissively licensed source
+                                                                       code. arXiv preprint arXiv:2211.15533, 2022.
+Carlini, N., Tramer, F., Wallace, E., Jagielski, M., Herbert-
+  Voss, A., Lee, K., Roberts, A., Brown, T. B., Song, D.,           Langley, P. Crafting papers on machine learning. In Langley,
+   Erlingsson, U., et al. Extracting training data from large          P. (ed.), Proceedings of the 17th International Conference
+   language models. In USENIX Security Symposium, vol-                 on Machine Learning (ICML 2000), pp. 1207­1216, Stan-
+   ume 6, 2021.                                                        ford, CA, 2000. Morgan Kaufmann.
+
+Chen, C., Borgeaud, S., Irving, G., Lespiau, J.-B., Sifre,          Leviathan, Y., Kalman, M., and Matias, Y. Fast infer-
+   L., and Jumper, J. Accelerating large language model                ence from transformers via speculative decoding. arXiv
+   decoding with speculative sampling. arXiv preprint                  preprint arXiv:2211.17192, 2022.
+   arXiv:2302.01318, 2023.
+                                                                    NVIDIA. Nvidia RTX 4090 GPU architecture, 2022.
+Chen, M., Tworek, J., Jun, H., Yuan, Q., Pinto, H. P. d. O.,
+   Kaplan, J., Edwards, H., Burda, Y., Joseph, N., Brockman,        Ofenbeck, G., Steinmann, R., Caparros, V., Spampinato,
+   G., et al. Evaluating large language models trained on              D. G., and Pu¨schel, M. Applying the roofline model.
+   code. arXiv preprint arXiv:2107.03374, 2021.                        In 2014 IEEE International Symposium on Performance
+                                                                      Analysis of Systems and Software (ISPASS), pp. 76­85.
+Chowdhery, A., Narang, S., Devlin, J., Bosma, M., Mishra,              IEEE, 2014.
+   G., Roberts, A., Barham, P., Chung, H. W., Sutton, C.,
+                                                                    OpenAI. Gpt-4 technical report, 2023.
+
+                                                                 5
+                                             Submission and Formatting Instructions for ICML 2023
+Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J.,
+
+   Chanan, G., Killeen, T., Lin, Z., Gimelshein, N., Antiga,
+   L., Desmaison, A., Ko¨pf, A., Yang, E., DeVito, Z., Rai-
+   son, M., Tejani, A., Chilamkurthy, S., Steiner, B., Fang,
+   L., Bai, J., and Chintala, S. Pytorch: An imperative style,
+   high-performance deep learning library, 2019.
+Radford, A., Wu, J., Child, R., Luan, D., Amodei, D.,
+   Sutskever, I., et al. Language models are unsupervised
+   multitask learners. OpenAI blog, 1(8):9, 2019.
+Raffel, C., Shazeer, N., Roberts, A., Lee, K., Narang, S.,
+   Matena, M., Zhou, Y., Li, W., and Liu, P. J. Exploring
+   the limits of transfer learning with a unified text-to-text
+   transformer. The Journal of Machine Learning Research,
+   21(1):5485­5551, 2020.
+Sheng, Y., Zheng, L., Yuan, B., Li, Z., Ryabinin, M., Fu,
+   D. Y., Xie, Z., Chen, B., Barrett, C., Gonzalez, J. E.,
+   et al. High-throughput generative inference of large
+   language models with a single gpu. arXiv preprint
+   arXiv:2303.06865, 2023.
+Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones,
+   L., Gomez, A. N., Kaiser, L., and Polosukhin, I. At-
+   tention is all you need. Advances in neural information
+   processing systems, 30, 2017.
+Wang, Y., Chen, K., Tan, H., and Guo, K. Tabi: An efficient
+   multi-level inference system for large language models.
+   In Proceedings of the Eighteenth European Conference
+   on Computer Systems, pp. 233­248, 2023.
+
+                                                                         6
+

@@ -1,0 +1,114 @@
+Up or Down? Adaptive Rounding for Post-Training Quantization
+
+arXiv:2004.10568v2 [cs.LG] 30 Jun 2020
+
+Markus Nagel * 1 Rana Ali Amjad * 1 Mart van Baalen 1 Christos Louizos 1 Tijmen Blankevoort 1
+
+Abstract
+When quantizing neural networks, assigning each floating-point weight to its nearest fixed-point value is the predominant approach. We find that, perhaps surprisingly, this is not the best we can do. In this paper, we propose AdaRound, a better weight-rounding mechanism for post-training quantization that adapts to the data and the task loss. AdaRound is fast, does not require finetuning of the network, and only uses a small amount of unlabelled data. We start by theoretically analyzing the rounding problem for a pre-trained neural network. By approximating the task loss with a Taylor series expansion, the rounding task is posed as a quadratic unconstrained binary optimization problem. We simplify this to a layer-wise local loss and propose to optimize this loss with a soft relaxation. AdaRound not only outperforms rounding-to-nearest by a significant margin but also establishes a new state-of-the-art for post-training quantization on several networks and tasks. Without fine-tuning, we can quantize the weights of Resnet18 and Resnet50 to 4 bits while staying within an accuracy loss of 1%.
+1. Introduction
+Deep neural networks are being used in many real-world applications as the standard technique for solving tasks in computer vision, machine translation, voice recognition, ranking, and many other domains. Owing to this success and widespread applicability, making these neural networks efficient has become an important research topic. Improved efficiency translates into reduced cloud-infrastructure costs and makes it possible to run these networks on heterogeneous devices such as smartphones, internet-of-things appli-
+*Equal contribution 1Qualcomm AI Research, an initiative of Qualcomm Technologies, Inc.. Correspondence to: Markus Nagel <markusn@qti.qualcomm.com>, Rana Ali Amjad <ramjad@qti.qualcomm.com>, Tijmen Blankevoort <tijmen@qti.qualcomm.com>.
+Proceedings of the 37 th International Conference on Machine Learning, Vienna, Austria, PMLR 119, 2020. Copyright 2020 by the author(s).
+
+cations, and even dedicated low-power hardware.
+
+One effective way to optimize neural networks for inference is neural network quantization (Krishnamoorthi, 2018; Guo, 2018). In quantization, neural network weights and activations are kept in a low-bit representation for both memory transfer and calculations in order to reduce power consumption and inference time. The process of quantizing a network generally introduces noise, which results in a loss of performance. Various prior works adapt the quantization procedure to minimize the loss in performance while going as low as possible in the number of bits used.
+
+As Nagel et al. (2019) explained, the practicality of neural network quantization methods is important to take into consideration. Although many methods exist that do quantization-aware training (Jacob et al., 2018; Louizos et al., 2019) and get excellent results, these methods require a user to spend significant time on re-training models and hyperparameter tuning.
+
+On the other hand, much attention has recently been dedicated to post-training quantization methods (Nagel et al., 2019; Cai et al., 2020; Choukroun et al., 2019; Banner et al., 2019), which can be more easily applied in practice. These types of methods allow for network quantization to happen on-the-fly when deploying models, without the user of the model spending time and energy on quantization. Our work focuses on this type of network quantization.
+
+Rounding-to-nearest is the predominant approach for all
+
+neural network weight quantization work that came out thus
+
+far. This means that the weight vector w is rounded to the
+
+nearest representable quantization grid value in a fixed-point
+
+grid by
+
+w
+
+w = s · clip
+
+, n, p ,
+
+(1)
+
+s
+
+where s denotes the quantization scale parameter and, n and p denote the negative and positive integer thresholds for clipping. We could round any weight down by replacing · with · , or up using · . But, rounding-to-nearest seems the most sensible, as it minimizes the difference per-weight in the weight matrix. Perhaps surprisingly, we show that for post-training quantization, rounding-to-nearest is not optimal.
+
+Our contributions in this work are threefold:
+
+Adaptive Rounding for Post-Training Quantization
+
+· We establish a theoretical framework to analyze the effect of rounding in a way that considers the characteristics of both the input data as well as the task loss. Using this framework, we formulate rounding as a perlayer Quadratic Unconstrained Binary Optimization (QUBO) problem.
+· We propose AdaRound, a novel method that finds a good solution to this per-layer formulation via a continuous relaxation. AdaRound requires only a small amount of unlabelled data, is computationally efficient, and applicable to any neural network architecture with convolutional or fully-connected layers.
+· In a comprehensive study, we show that AdaRound defines a new state-of-the-art for post-training quantization on several networks and tasks, including Resnet18, Resnet50, MobilenetV2, InceptionV3 and DeeplabV3.
+Notation We use x and y to denote the input and the target variable, respectively. E [·] denotes the expectation operator. All the expectations in this work are w.r.t. x and y. Wi(,j) denotes weight matrix (or tensor as clear from the context), with the bracketed superscript and the subscript denoting the layer and the element indices, respectively. We also use w( ) to denote flattened version of W( ). All vectors are considered to be column vectors and represented by small bold letters, e.g., z, while matrices (or tensors) are denoted by capital bold letters, e.g., Z. Functions are denoted by f (·), except the task loss, which is denoted by L. Constants are denoted by small upright letters, e.g., s.
+
+All the gradient and Hessian terms in this paper are of task loss L with respect to the specified variables. Ignoring the higher order terms in the Taylor series expansion is a good approximation as long as w is not too large. Assuming the network is trained to convergence, we can also ignore the gradient term as it will be close to 0. Therefore, H(w) defines the interactions between different perturbed weights in terms of their joint impact on the task loss L (x, y, w + w). The following toy example illustrates how rounding-to-nearest may not be optimal.
+Example 1. Assume wT = [w1 w2] and
+
+H(w) =
+
+1 0.5
+
+0.5 1
+
+,
+
+(7)
+
+then the increase in task loss due to the perturbation is (approximately) proportional to
+wT · H(w) · w = w12 + w22 + w1w2. (8)
+For the terms corresponding to the diagonal entries w12 and w22, only the magnitude of the perturbations matters. Hence rounding-to-nearest is optimal when we only consider these diagonal terms in this example. However, for the terms corresponding to the w1w2, the sign of the perturbation matters, where opposite signs of the two perturbations improve the loss. To minimize the overall impact of quantization on the task loss, we need to trade-off between the contribution of the diagonal terms and the off-diagonal terms. Rounding-to-nearest ignores the off-diagonal contributions, making it often sub-optimal.
+
+2. Motivation
+
+To gain an intuitive understanding for why rounding-tonearest may not be optimal, let's look at what happens when we perturb the weights of a pretrained model. Consider a neural network parametrized by the (flattened) weights w. Let w denote a small perturbation and L(x, y, w) denote the task loss that we want to minimize. Then
+
+E [L (x, y, w + w) - L (x, y, w)]
+
+(2)
+
+(a)
+E
+
+wT
+
+· wL (x, y, w)
+
++
+
+1 wT 2
+
+· w2 L (x, y, w) · w
+
+(3)
+
+= wT · g(w) + 1 wT · H(w) · w,
+
+(4)
+
+2
+
+where (a) uses the second order Taylor series expansion. g(w) and H(w) denote the expected gradient and Hessian
+of the task loss L w.r.t. w, i.e.,
+
+g(w) = E [wL (x, y, w)]
+
+(5)
+
+H(w) = E 2wL(x, y, w) .
+
+(6)
+
+The previous analysis is valid for the quantization of any parametric system. We show that this effect also holds for neural networks. To illustrate this, we generate 100 stochastic rounding (Gupta et al., 2015) choices for the first layer of Resnet18 and evaluate the performance of the network with only the first layer quantized. The results are presented in Table 1. Among 100 runs, we find that 48 stochastically sampled rounding choices lead to a better performance than rounding-to-nearest. This implies that many rounding solutions exist that are better than rounding-to-nearest. Furthermore, the best among these 100 stochastic samples provides more than 10% improvement in the accuracy of the network. We also see that accidentally rounding all values up, or all down, has an catastrophic effect. This implies that we can gain a lot by carefully rounding weights when doing post-training quantization. The rest of this paper is aimed at devising a well-founded and computationally efficient rounding mechanism.
+3. Method
+In this section, we propose AdaRound, a new rounding procedure for post-training quantization that is theoretically
+
+

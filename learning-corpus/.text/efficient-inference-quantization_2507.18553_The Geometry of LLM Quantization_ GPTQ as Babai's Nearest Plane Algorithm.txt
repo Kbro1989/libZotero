@@ -1,0 +1,100 @@
+arXiv:2507.18553v4 [cs.LG] 13 May 2026
+
+Published as a conference paper at ICLR 2026
+THE GEOMETRY OF LLM QUANTIZATION: GPTQ AS BABAI'S NEAREST PLANE ALGORITHM
+Jiale Chen1, Yalda Shabanzadeh1, Elvir Crncevic´2, Torsten Hoefler3, Dan Alistarh1,2 1Institute of Science and Technology Austria (ISTA), 2Red Hat, Inc., 3ETH Zürich jiale.chen@ist.ac.at
+ABSTRACT
+Quantizing the weights of large language models (LLMs) from 16-bit to lower bitwidth is the de facto approach to deploy massive transformers onto more affordable accelerators. While GPTQ emerged as one of the standard methods for one-shot post-training quantization at LLM scale, its inner workings are described as a sequence of algebraic updates that obscure geometric meaning or worst-case guarantees. In this work, we show that, when executed back-to-front (from the last to first dimension) for a linear layer, GPTQ is mathematically identical to Babai's nearest plane algorithm for the classical closest vector problem (CVP) on a lattice defined by the Hessian matrix of the layer's inputs. This equivalence is based on a sophisticated mathematical argument, and has two analytical consequences: first, the GPTQ error propagation step gains an intuitive geometric interpretation; second, GPTQ inherits the error upper bound of Babai's algorithm under the assumption that no weights are clipped. Leveraging this bound, we design post-training quantization methods that avoid clipping, and outperform the original GPTQ. In addition, we provide efficient GPU inference kernels for the resulting representation. Taken together, these results place GPTQ on a firm theoretical footing and open the door to importing decades of progress in lattice algorithms towards the design of future quantization algorithms for billion-parameter models. Source code is available at https://github.com/IST-DASLab/GPTQ-Babai.
+1 INTRODUCTION
+Generative pre-trained transformers (GPT) models contain hundreds of billions of parameters and have massive computational and memory costs (Luccioni et al., 2024). Post-training quantization (PTQ) has emerged as a practical solution for reducing their footprint (Gholami et al., 2021). Among a growing family of methods, GPTQ (Frantar et al., 2023) was the first to push one-shot quantization down to the 4-bit regime, while retaining near-baseline accuracies. GPTQ is still very popular nowadays and yields state-of-the-art results in some regimes (Kurtic et al., 2025).
+Despite its empirical success, the GPTQ algorithm was only presented as a sequence of greedily applied algebraic operations: the procedure picks one weight at a time, quantizes it via rounding or clipping, and then optimally updates the not-yet-quantized weights to correct for the remaining per-layer loss; it then continues with the next weight, and so on. This procedure leaves an obvious open question: why does a local greedy rule work so well globally? Current literature does not answer this question, leaving little guidance for principled extensions or failure case analysis. Our contribution. This paper is the first1 to provide a geometric interpretation for GPTQ, which implies a layer-wise global error bound. Our main theoretical results (Section 4) are (i) the GPTQ optimization problem, i.e., linear-layer quantization with the L2 objective on the output, is equivalent to the closest vector problem (CVP) w.r.t. L2 distance; (ii) the GPTQ algorithm executed from the last to first dimension is the same as Babai's nearest plane algorithm on the basis of the factorized Hessian matrix, without LLL basis reduction, and this finding holds independently of whether large weights are clipped to the quantization grid (a process known as weight clipping); and (iii) the worst-case layer-wise error in the no-clipping setting is bound tightly by the trace of the diagonal matrix of the
+1The concurrent work of Birnick (2025) appeared on arXiv slightly later than our preprint (Chen et al., 2025).
+1
+
+Published as a conference paper at ICLR 2026
+
+LDL decomposition of the Hessian matrix. In addition (Section 5), we tie our theoretical findings to practical quantization by introducing new no-clipping methods of better accuracy than the original GPTQ, together with efficient GPU inference kernels for the resulting representation.
+
+2 RELATED WORK
+Second-order compression (pruning and quantization). The idea of using Hessian information to guide parameter removal dates back to Optimal Brain Damage (LeCun et al., 1989) and Optimal Brain Surgeon (OBS) (Hassibi et al., 1993). Optimal Brain Compression (OBC) (Frantar & Alistarh, 2022) generalizes OBS to the post-training setting and unifies structured pruning and quantization (also called Optimal Brain Quantizer, OBQ) under a single exact solver. GPTQ (Frantar et al., 2023) inherits OBQ's error propagation method but applies it in a fixed order, so that the inverse Hessian can be shared and only needs to be computed once. GPTQ only has cubic computational complexity in the column/row dimension, making it suitable for LLMs. QuIP (Chee et al., 2023) proves an error guarantee for GPTQ and proposes the LDLQ method as an equivalent variant of GPTQ.
+Lattices, CVP algorithms, and hardness. The closest vector problem (CVP) is NP-complete to approximate within any constant factor under polynomial-time reductions (van Emde Boas, 1981; Micciancio & Goldwasser, 2002; Dinur et al., 2003), motivating decades of approximation algorithms. Babai's nearest plane heuristic (Babai, 1986) delivers a solution in polynomial time and, when preceded by LLL basis reduction (Lenstra et al., 1982), enjoys a 2O(n) approximation. BKZ basis reduction (Kannan, 1987) further tightens the constant in an exponential-time solver.
+
+3 PRELIMINARIES AND NOTATIONS
+
+We use Python-style indexing inside square brackets to select elements and sub-matrices from a
+tensor, e.g., [j, :] selects the j-th row vector, [:, j] selects the j-th column vector, and [j :, j] selects
+the sub-column consisting of rows after the j-th (inclusive) row in the j-th column, [:, J] selects the column vectors indexed by set J as a sub-matrix, etc2.
+
+3.1 LINEAR-LAYER QUANTIZATION PROBLEM
+
+Problem. Let X = [x1, . . . , xn]  Rn×c be the sampled calibration input data of batch size
+
+n and input dimension c with xi  Rc and n  c = rank (X). Let W = [w1, . . . , wr] 
+
+Rc×r be the linear layer weights of input dimension c and output dimension r with wi  Rc. Let S = [s1, . . . , sr]  Rc=×0r be the non-zero quantization scales with si  R=c 0. Here we
+
+consider a general case that applies to any grouping pattern: each weight element wi[j] has its
+
+own scaling factor si[j]. Assume S is statically computed using methods like AbsMax or MSE
+
+before any weight updates. Let Z  Z be the quantization grid (representable integers). In the
+
+clipping setting, e.g., for INT4 format, Z = {-8, . . . , -1, 0, 1, . . . , 7}. In the no-clipping setting,
+
+Z = Z, which allows any integer as the quantization results. Let Z = [z1, . . . , zr]  Zc×r
+
+be the (unknown) quantized integers with zi  Zc. Denote Q = [q1, . . . , qr]  Rc×r as the
+
+dequantized weights with qi = diag (si) zi  Rc. The goal is to minimize the L2 error on the
+
+layer output XW  Rn×r: XQ - XW F2 =
+
+r i=1
+
+X
+
+diag (si) zi
+
+-
+
+X wi 2
+
+,
+
+i.e,
+
+finding
+
+argminziZc X diag (si) zi - Xwi2 for all 1  i  r.
+
+OBQ algorithm. Let set Ji initialized to {1, . . . , c} be the set of not-yet-quantized indices of wi. We denote Ji as J as a short-hand notation. For each weight vector wi, OBQ chooses
+
+j
+
+
+
+argminjJ
+
+(qi[j] - wi[j])2 (X[:, J ]X[:, J ])-1 [j,
+
+j]
+
+(1)
+
+as the next dimension to quantize. OBQ quantizes the chosen element wi[j] as qi[j]  si[j] ·
+
+ROUND
+
+wi [j ] si [j ]
+
+,
+
+Z
+
+via the ROUND (·, Z) function which rounds the inputs to the nearest values
+
+2For more details, please see (NumPy): https://numpy.org/doc/stable/user/basics.ind exing.html
+
+2
+
+

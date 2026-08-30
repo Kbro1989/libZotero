@@ -1,0 +1,199 @@
+Published as a conference paper at ICLR 2024
+
+arXiv:2311.12023v4 [cs.CL] 27 Aug 2024
+
+LQ-LORA: LOW-RANK PLUS QUANTIZED MATRIX DECOMPOSITION FOR EFFICIENT LANGUAGE MODEL FINETUNING
+
+Han Guo
+
+Philip Greengard
+
+Eric P. Xing
+
+Yoon Kim
+
+Carnegie Mellon University, Columbia University Mohamed bin Zayed University of Artificial Intelligence, Petuum Inc. Massachusetts Institute of Technology
+hanguo@cs.cmu.edu, pg2118@columbia.edu, epxing@cs.cmu.edu, yoonkim@mit.edu
+
+ABSTRACT
+We propose a simple approach for memory-efficient adaptation of pretrained language models. Our approach uses an iterative algorithm to decompose each pretrained matrix into a high-precision low-rank component and a memory-efficient quantized component. During finetuning, the quantized component remains fixed and only the low-rank component is updated. We present an integer linear programming formulation of the quantization component which enables dynamic configuration of quantization parameters (e.g., bit-width, block size) for each matrix given an overall target memory budget. We further explore a data-aware version of the algorithm which uses an approximation of the Fisher information matrix to weight the reconstruction objective during matrix decomposition. Experiments on finetuning RoBERTa and LLaMA-2 (7B and 70B) demonstrate that our low-rank plus quantized matrix decomposition approach (LQ-LoRA) outperforms strong QLoRA and GPTQ-LoRA baselines and enables aggressive quantization to sub-3 bits with only minor performance degradations. When finetuned on a language modeling calibration dataset, LQ-LoRA can also be used for model compression; in this setting our 2.75-bit LLaMA-2-70B model (which has 2.85 bits on average when including the low-rank components and requires 27GB of GPU memory) performs respectably compared to the 16-bit baseline.1
+1 INTRODUCTION
+Despite the increased availability of large language models (LLMs) and their pretrained parameters (Zhang et al., 2022; Scao et al., 2022; Touvron et al., 2023a;b), their sheer size makes them expensive to adapt to new datasets via full finetuning. This is particularly unideal since a small amount of supervised finetuning on instruction following data has been shown to be an effecive approach for learning interactive agents that can follow general instructions (Wang et al., 2023; Taori et al., 2023; Team, 2023; Zhou et al., 2023), and moreover, LLMs finetuned via reinforcement learning with human feedback (Ouyang et al., 2022) represent some of the most capable AI systems that exist today (OpenAI, 2023; Bubeck et al., 2023). Improving the memory-efficiency of LLM finetuning thus remains a key step in widening the scope of problems to which LLMs can be practically applied.
+One promising framework for memory-efficient LLM adaptation is through parameter-efficient finetuning methods, which typically learn a smaller finetunable extension to the base pretrained model (see Ding et al. (2023) for a survey). These methods can reduce the amount of memory required for finetuning as the pretrained parameters remain fixed--thus reducing the need to allocate memory for storing gradients and optimizer states for these parameters--while the number of new parameters to be optimized is a fraction of the fixed parameters. Of the many existing parameter-efficient finetuning methods, low-rank adaptation (LoRA; Hu et al., 2022) has emerged as a popular technique for efficient LLM adaptation. In LoRA, the pretrained model's weight matrix W is reparameterized as W + L1L2, and only L1 and L2 are finetuned. Recent works have improved the memory-efficiency of LoRA further by applying it to a quantized pretrained model, i.e., using the reparameterization q(W) + L1L2 where q(·) is some quantization function (Dettmers et al., 2023a; Chai et al., 2023).
+1Our code and models are available at https://github.com/HanGuo97/lq-lora. This work was completed while Han Guo was a visiting student at MIT.
+
+1
+
+Published as a conference paper at ICLR 2024
+
+In LoRA, L2 is initialized to 0 to ensure that the model output is the same as the pretrained model at the beginning of finetuning (i.e., X(W + L1L2) = XW). However, if the pretrained matrices are quantized to the extent where there is substantial quantization error (which has been empirically found to occur at sub-4-bit regimes), zero initialization may not be optimal since q(W) + L1L2 = W. In this paper, we exploit the fact that LoRA only performs low-rank updates to the quantized model to derive an initialization scheme that takes the quantization error into account. We use an iterative algorithm similar to those used in the robust PCA literature (Wright et al., 2009; Cande`s et al., 2011; Zhou & Tao, 2011) to decompose W such that W  Q + L1L2. Here Q is the quantized component which remains fixed and L1L2 is the low-rank component. During adaptation only L1 and L2 (which captures the high-variance subspaces of W) are finetuned. Instead of applying the same quantization configuration to all layers, we use integer linear programming to find a mixed quantization strategy that allows for the assignment of different configurations (bits, block size, etc.) to each matrix given an overall target bit rate. Finally, we explore a data-aware version of the algorithm which modifies the decomposition objective with an approximation of the Fisher information matrix obtained from calibration samples.
+We apply LQ-LoRA to adapt RoBERTa (Liu et al., 2019) and LLaMA-2 (Touvron et al., 2023b) models and find that it can meaningfully improve upon strong QLoRA (Dettmers et al., 2023a) and GPTQ-LoRA (Frantar et al., 2022; Chai et al., 2023) baselines while enabling users to flexibly set a target memory budget. LQ-LoRA can also be applied on standard language modeling datasets to serve as a weight-only post-training quantization (PTQ) method. In this setting we find that we are able to compress LLaMA-2-70B to 2.85 bits with only a small perplexity degradation.
+
+2 BACKGROUND
+2.1 LOW-RANK ADAPTATION OF LARGE LANGUAGE MODELS
+Low-rank adaptation of large language models (LoRA; Hu et al., 2022) has emerged as a simple but effective approach for reducing the memory footprint during LLM finetuning. Given a matrix W  Rd×k of a pretrained linear layer, LoRA initializes two matrices L1  Rd×r, L2  Rr×k with r < min(d, k), where L1 is initialized to Gaussian noise and L2 is initialized to 0 (in order to ensure that L1L2 = 0 at the start of training). LoRA then reparameterizes the linear layer as X(W + L1L2) (here X is the previous layer's activation), and only finetunes L1 and L2 during language model adaptation. (The bias vector is omitted for brevity.)
+LoRA is more memory-efficient than full finetuning as there is no need to allocate GPU memory for the gradients and the associated optimizer states (e.g., the momentum and variance statistics in Adam (Kingma & Ba, 2015)) for W. Perhaps more so that other strategies for memory-efficient finetuning which also learn a small number of parameters on top of the pretrained model (e.g., Adapters (Houlsby et al., 2019) and Prompt Tuning (Li & Liang, 2021; Lester et al., 2021)), LoRA has become popular for adapting LLMs, especially for supervised finetuning on instruction-following benchmarks.
+
+2.2 WEIGHT QUANTIZATION OF LARGE LANGUAGE MODELS
+
+Standard round-to-nearest (RTN) quantization, which quantizes/dequantizes a block of weights as
+
+u  s × clamp
+
+1 s
+
+u
+
+; -2b-1, 2b-1 - 1
+
+with scaling factor s =
+
+max(|u|) 2b-1 -1
+
+and
+
+bit
+
+size
+
+b,
+
+has
+
+been shown to be effective for quantizing a pretrained LLM's weights to 8-bits (Yao et al., 2022).
+
+However, (sub) 4-bit quantization has been empirically found to be difficult with RTN, and recent
+
+methods generally employ a data-aware strategy which uses calibration samples to obtain better
+
+weight quantization (Frantar et al., 2022; Dettmers et al., 2022; Xiao et al., 2022; Kim et al., 2023b;
+
+Lin et al., 2023; Dettmers et al., 2023b; Shao et al., 2023, inter alia).
+
+Our approach relies on the recently proposed NormalFloat (NF) quantization scheme (Dettmers
+
+et al., 2023a), which exploits the fact that the distribution of the weights of a trained model is ap-
+
+proximately Gaussian. Following the presentation from Yoshida (2023), NF quantization calculates
+
+2b-1
+
+evenly-spaced
+
+values
+
+from
+
+[,
+
+1 2
+
+],
+
+and
+
+2b-1
+
++
+
+1
+
+evenly-spaced
+
+values
+
+from
+
+[
+
+1 2
+
+,
+
+1
+
+-
+
+],
+
+where
+
+
+
+=
+
+1 2
+
+(
+
+1 30
+
++
+
+1 32
+
+).
+
+This results in
+
+2b
+
+probability values
+
+[p1, . . . , p2b ] where p1
+
+=
+
+, p2b-1
+
+=
+
+1 2
+
+,
+
+and
+
+p2b = 1 - . These probabilities are converted into quantiles [q1, . . . , q2b ] where qi = -1(pi) is
+
+the
+
+Gaussian
+
+quantile
+
+for
+
+pi,
+
+and
+
+these
+
+quantiles
+
+are
+
+normalized
+
+to
+
+[-1, 1]
+
+by
+
+q~i
+
+=
+
+qi q2b
+
+.
+
+Then,
+
+given
+
+2
+
+

@@ -1,0 +1,107 @@
+SpQR: A Sparse-Quantized Representation for Near-Lossless LLM Weight Compression
+
+arXiv:2306.03078v1 [cs.CL] 5 Jun 2023
+
+Tim Dettmers University of Washington
+
+Ruslan Svirschevski HSE University & Yandex
+
+Vage Egiazarian HSE University & Yandex
+
+Denis Kuznedelev Elias Frantar
+
+Yandex & Skoltech
+
+IST Austria
+
+Saleh Ashkboos ETH Zurich
+
+Alexander Borzunov HSE University & Yandex
+
+Torsten Hoefler ETH Zurich
+
+Dan Alistarh IST Austria & NeuralMagic
+
+Abstract
+Recent advances in large language model (LLM) pretraining have led to highquality LLMs with impressive abilities. By compressing such LLMs via quantization to 3-4 bits per parameter, they can fit into memory-limited devices such as laptops and mobile phones, enabling personalized use. However, quantization down to 3-4 bits per parameter usually leads to moderate-to-high accuracy losses, especially for smaller models in the 1-10B parameter range, which are well-suited for edge deployments. To address this accuracy issue, we introduce the Sparse-Quantized Representation (SpQR), a new compressed format and quantization technique which enables for the first time near-lossless compression of LLMs across model scales, while reaching similar compression levels to previous methods. SpQR works by identifying and isolating outlier weights, which cause particularlylarge quantization errors, and storing them in higher precision, while compressing all other weights to 3-4 bits, and achieves relative accuracy losses of less than 1% in perplexity for highly-accurate LLaMA and Falcon LLMs. This makes it possible to run 33B parameter LLM on a single 24 GB consumer GPU without any performance degradation at 15% speedup thus making powerful LLMs available to consumer without any downsides. SpQR comes with efficient algorithms for both encoding weights into its format, as well as decoding them efficiently at runtime3. Specifically, we provide an efficient GPU inference algorithm for SpQR which yields faster inference than 16-bit baselines at similar accuracy, while enabling memory compression gains of more than 4x.
+
+1 Introduction
+Pretrained large language models (LLMs) improved rapidly from task-specific performance [WSM+18, DCLT19, RWC+19], to performing well on general tasks if prompted with instructions [BMR+20, WBZ+21, Ope23]. While the improved performance can be attributed to scaling in training data and parameters [KMH+20, CND+22] recent trends focused on smaller models trained on more data, that are easier to use at inference time [HBM+22, BSA+23, TLI+23]. For example, the 7B parameter LLaMA model trained on 1T tokens achieved an average performance only slightly lower than GPT-3 [BMR+20] despite being 25x smaller. Current techniques for LLM compression can shrink these models further by a factor of about 4x, while preserving their performance
+Equal contribution Corresponding author: dettmers@cs.washington.edu 3github.com/Vahe1994/SpQR; to be integrated into github.com/TimDettmers/bitsandbytes
+
+Perplexity on WikiText2 Average zero-shot accuracy
+
+6.5
+
+6.0 5.5 7B
+
+5.0
+
+13B
+
+RTN GPTQ SpQR fp16
+
+4.5
+
+4.0
+
+30B
+
+3.5
+
+65B
+
+4
+
+8
+
+16
+
+32
+
+64
+
+128
+
+Model size (GiB)
+
+70 65B
+
+68
+
+30B
+
+66
+
+13B
+
+64
+
+62
+
+7B
+
+60
+
+RTN GPTQ SpQR fp16
+
+4
+
+8
+
+16
+
+32
+
+64
+
+128
+
+Model size (GiB)
+
+Figure 1: Compressed LLM performance for LLaMA models. (left) LM loss on WikiText2 vs model size. (right) Average performance on zero-shot tasks vs model size.
+
+[DLBZ22, XLS+22, FAHA22, DZ22]. This yields performance levels comparable to the largest GPT-3 model, with major reductions in terms of memory requirements. With such improvements, well-performing models could be efficiently served on end-user devices, such as laptops. The main challenge is to compress models enough to fit into such devices while also preserving generative quality. Specifically, studies show that, although accurate, existing techniques for 3 to 4-bit quantization still lead to significant accuracy degradation [DZ22, FAHA22]. Since LLM generation is sequential, depending on previously-generated tokens, small relative errors can accumulate and lead to severely corrupted outputs. To ensure reliable quality, it is critical to design low-bitwidth quantization that does not degrade predictive performance compared to the 16-bit model. In this work, we introduce Sparse-Quantized Representations (SpQR), a hybrid sparse-quantized format which can compress accurate pretrained LLMs to 3-4 bits per parameter while staying nearlossless: specifically, SpQR is the first weight quantization method which is able to reach such compression ratios while inducing end-to-end accuracy error as measured in perplexity of less than 1% relative to the dense baseline. SpQR works by combining two innovations. First, we isolate outlier weights, whose quantization we show to induce disproportionately high errors: these weights are kept in high precision, while the other weights are stored in a much lower, e.g. 3-bit, format. Second, we implement a variant of grouped quantization with very small group size, e.g. 16 contiguous elements, but we show that one can quantize the quantization scales themselves to a 3-bit representation. To convert a given pretrained LLM into SpQR format, we adopt an extended version of the posttraining quantization (PTQ) approach recently introduced by GPTQ [FAHA22]. Specifically, the method passes calibration data through the uncompressed model; to compress each layer, it applies a layer-wise solver with respect to the L2 error between the outputs of the uncompressed model, and those of the quantized weights. Our approach splits this process into two steps: an "outlier detection" step, in which we isolate weights whose direct quantization has outsize impact on layer output behavior, and an actual compression step, in which most ( 99%) of weights are compressed to low-bitwidth, the outliers are extracted, and the whole representation is rendered more efficient by further compressing the quantization metadata. Our method is motivated by a new analysis showing that LLM weight quantization errors exhibit both vertical and horizontal group correlations, corresponding to systematic large errors corresponding to input feature dimensions and output hidden dimensions. While outlier input features have been observed before [DLBZ22, XLS+22], our work is the first to demonstrate that similar outliers occur in the weights, for particular output hidden dimensions. Unlike input feature outliers, the output hidden dimension outliers occur only in small segments for a particular output hidden dimension. Our quantization algorithm isolates such outliers and efficiently encodes a given model in SpQR format. To exploit the resulting structure, we develop a specialized sparse-matrix multiplication algorithm based on the compressed sparse row (CSR) format. To use SpQR for token-by-token generation, we combine this sparse algorithm together with a dense-quantized matrix multiplication for 3-4 bit weights. With this, SpQR reduces the memory footprint of LLMs by a factor of about 3.4x or more without degradation in accuracy, measured as language modeling loss or perplexity, while also being 20-30% faster for LLM generation compared to 16-bit inference.
+2
+
+

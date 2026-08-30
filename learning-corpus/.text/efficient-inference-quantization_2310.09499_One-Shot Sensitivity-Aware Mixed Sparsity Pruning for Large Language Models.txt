@@ -1,0 +1,129 @@
+ONE-SHOT SENSITIVITY-AWARE MIXED SPARSITY PRUNING FOR LARGE LANGUAGE MODELS
+Hang Shao1, Bei Liu1, Bo Xiao2, Ke Zeng2, Guanglu Wan2, Yanmin Qian1
+1Auditory Cognition and Computational Acoustics Lab MoE Key Lab of Artificial Intelligence, AI Institute
+Department of Computer Science and Engineering, Shanghai Jiao Tong University, Shanghai, China 2Meituan, Beijing, China
+
+arXiv:2310.09499v4 [cs.CL] 23 Apr 2024
+
+ABSTRACT
+Various Large Language Models (LLMs) from the Generative Pretrained Transformer (GPT) family have achieved outstanding performances in a wide range of text generation tasks. However, the enormous model sizes have hindered their practical use in real-world applications due to high inference latency. Therefore, improving the efficiencies of LLMs through quantization, pruning, and other means has been a key issue in LLM studies. In this work, we propose a method based on Hessian sensitivity-aware mixed sparsity pruning to prune LLMs to at least 50% sparsity without the need of any retraining. It allocates sparsity adaptively based on sensitivity, allowing us to reduce pruning-induced error while maintaining the overall sparsity level. The advantages of the proposed method exhibit even more when the sparsity is extremely high. Furthermore, our method is compatible with quantization, enabling further compression of LLMs. We have released the available code1.
+Index Terms-- model compression, sparsity pruning, large language models, mixed sparsity
+1. INTRODUCTION
+Large language models (LLMs) from the GPT family have demonstrated exceptional performances across a wide range of tasks. However, due to their large sizes and high computational costs, model deployment face new challenges upon GPU memory consumption as well as inference latency. Consequently, there's a prominent need to compress LLM models to a feasible range in order to make use of them in real applications. In the literature, there have been various mainstream model compression techniques available, for pre-trained models in particular, including knowledge distillation [1­4], model quantization [5­9], model sparsity pruning [10­14], and etc.
+Knowledge distillation focuses on transferring knowledge from a large teacher model to a smaller student model by predicting pseudolabels or leveraging the knowledge from intermediate hidden layers. This process enables the compact student model to achieve approximate accuracy comparable to that of the teacher model. Model quantization involves replacing high-precision floating-point parameters with lower-precision integer parameters, thereby reducing the model's storage capacity and inference latency. Quantization methods can be categorized into Post-Training Quantization (PTQ) [15] and Quantization-Aware Training (QAT) [16] approaches. At present, 4-bit quantization [6] and mixed-precision quantization [9]
+ corresponding author 1https://github.com/talkking/MixGPT
+
+techniques are able to reduce memory cost of each weight element from 16-bit as a float point number to equivalently 3-4 bits.
+In addition, Model sparsity pruning method mainly involves removing network elements by individual weights (unstructured pruning) or by entire rows and columns of weight matrices (structured pruning). Pruning can also be applied to various parts of the model, including entire layers [17], heads, intermediate dimensions [18], and blocks of weight matrices [19]. The study of model pruning emerged since the 1980s' [20­22], and it has demonstrated favorable outcomes across Computer Vision and NLP tasks. However, these methods require extensive retraining of pruned models to restore the performance level of the original models [13]. While this is feasible for smaller-scale models, it becomes prohibitive for LLMs due to the associated computational costs. While there are some one-shot pruning methods that don't require retraining [22,23], their effectiveness are limited. Therefore, extending the existing pruning methods to models with 10-100+ billion parameters is still an open and challenging problem.
+Recently, SparseGPT [14] further developed the Optimal Brain Surgeon (OBS) [21] approach. It achieved at least 50% pruning ratio on LLMs with over a billion parameters in one shot, minimizing performance loss without requiring any retraining. Based on previous studies in this area, we believe there is still considerable room for further improvements. Firstly, saliency criterion for weight element selection, such as OBS and OBD [21], each captured one aspect of the weight element's saliency. We show that fusing the two criteria of OBS and OBD yields a better option for selecting the weights to be pruned, as observed in our experiments.
+Moreover, SparseGPT assumes a uniform sparsity across all layers. Inspired by the analysis of weight sensitivity in mixed-precision quantization methods [24,25], we investigated the sensitivity properties of different LLM layers. The magnitude of pruning ratios (sparsity) for each layer are then determined based on their respective sensitivities. Specifically, we utilize second-order information (the Hessian matrix) to assess the sensitivity of each layer.
+Furthermore, we extend pruning to individual weight-level, an even finer granularity, for more precise trade-off. This means that each weight matrix is assigned a distinct sparsity level according to its sensitivity. In experiments with multiple cutting edge LLMs, our approach beats SparseGPT in terms of both perplexity and zero-shot downstream task performances.
+In summary, our contributions are as follows: (1) We introduce a more comprehensive criterion for selecting the pruned weight elements. (2) We propose a novel sensitivity-aware mixed sparsity pruning strategy based on Hessian information. (3) To the best of our knowledge, this work achieves a new state-of-the-art performance in
+
+the field of LLM pruning. 2. METHODOLOGY
+This section describes the Improved Saliency Criterion (ISC) and the sensitivity-aware mixed sparsity pruning method. ISC serves the purpose of selecting the optimal weight elements to be pruned, and the sensitivity level facilitates the allocation of the pruning ratios for different layers.
+
+2.1. Mask Selection and Weight Reconstruction Based on OBS
+
+In this sub-section, we review the OBS algorithm [21] adopted in
+
+SparseGPT [14], which serves as a part of our saliency criterion. The
+
+OBS algorithm firstly prunes some weight elements, then updates
+
+the rest for error compensation. Denoting the original weights as W , the objective is to ensure that the optimally pruned weights W 
+
+satisfy equation (1), where X is the input data used for calibration
+
+purpose.
+
+W  = arg min ||W X - W^ X||22,
+
+(1)
+
+W^
+
+In the first step, to-be-pruned weight elements are determined
+through the saliency criterion, denoted e.g., m for the m-th row.
+In OBS, m is given by (2), where wm represents the original weight elements of the m-th row. H-1 denotes the inverse matrix of H = XXT (the Hessian matrix of the objective function). One can
+select the weight elements associated with the smallest p% (sparsity
+level) of m, and set them to 0.
+
+m
+
+=
+
+wm 2 [H -1 ]mm
+
+(2)
+
+Secondly, one need to update the remaining weights to compensate for the error. Let W = W  - W be the optimal adjustment
+of the remaining weight elements. The objective then becomes minimizing the expectation of ||W X - (W + W )X||22. Following Taylor expansion, the update formula is given by (3) for the m-th
+row of W .
+
+Wm
+
+=
+
+-
+
+[H
+
+wm -1 ]mm
+
+H:-,m1
+
+(3)
+
+2.2. Improved Saliency Criterion
+
+An alternative saliency criterion s had been proposed in the Optimal Brain Damage (OBD) [20] work, where s = wm 2 Hmm. The first step involves computing the second-order derivative of the loss with respect to the weights W , which is the Hessian matrix H = XXT , derived from (1). The weight elements are then sorted according to the saliency levels, and elements with lower saliency are pruned. This approach aimed to achieve the minimal error in the pruning process. However, it only focused on minimizing the direct error and did not take error compensation into account.
+Building upon the OBS and OBD approaches, this work considers combining the saliency criteria  and s, in order to balance the different aspects of previously used methods. We also apply error compensation following the approach in 2.1. We define a more comprehensive saliency criterion ­ ISC (Improved Saliency Criterion) in (4). This criterion allows for a more precise determination of pruning targets.
+
+ISC
+
+=
+
+wm 2 (Hmm
+
++
+
+1 [H -1 ]mm
+
+)
+
+(4)
+
+2.3. Mixed Sparsity Pruning Based on Hessian Sensitivity Awareness
+
+In Section 2.1 we assumed a constant sparsity ratio p. In this section, we propose a sensitivity-aware pruning strategy.
+
+Fig. 1: Sensitivity level of different layers for three LLM models: LLaMA-7B, LLaMA2-7B, and Baichuan-7B.
+2.3.1. Calculation of Sensitivity Based on Hessian Average Trace
+Sensitivity level is defined as the degree to which perturbations in model weights would affect the output error. Inspired by mixedprecision quantization [25], we extend the sensitivity of model weights in mixed-precision quantization to the field of LLM pruning. The sensitivity level is derived from the trace of the Hessian matrix H. Direct computation of H for LLM is challenging because explicit calculation the Hessian matrix under cross-entropy loss would be time-and-space consuming. Nevertheless, we can address this issue using stochastic linear algebra [26] based methods for fast trace estimation. As shown in (5), I denotes identity matrix, and z is a random vector with i.i.d. components, sampled from a standard Gaussian distribution. N denotes the number of sampled data points. The second line in (5) uses the Hutchinson algorithm [27] for efficient approximation, which we follow in the implementation.
+
+T r(H) = T r(HI) = T r(HE[zzT ]) = E[T r(HzzT )]
+
+= E[zT Hz]  1 N
+
+N
+
+ziT Hzi
+
+(5)
+
+i=1
+
+For each weight matrix, we select the average trace of the Hessian as its sensitivity sen, as shown in (6), where T r(H)i,j represents the trace of the Hessian matrix for the j-th weight matrix in the i-th layer, and n denotes the number of diagonal elements in the Hessian matrix. seni,j represents the sensitivity of the corresponding weight matrix.
+
+1
+
+seni,j = n T r(H)i,j
+
+(6)
+
+2.3.2. Rational Mixed Sparsity Assignment Based on Sensitivity
+After obtaining the sensitivity level of weight matrices, we can allocate sparsity ratio individually to each one. This is referred to as weight-level mixed sparsity allocation. Pruning targets are selected adaptively within each weight matrix. We can also sum the sensitivities of all weight matrices in the same layer to obtain the sensitivity level of that layer. This is referred to as layer-level mixed sparsity allocation.
+Layer-level sensitivity analysis can be seen in Figure 1. The three different models exhibit some commonalities in that the bottom and
+
+

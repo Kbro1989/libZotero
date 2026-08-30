@@ -1,0 +1,790 @@
+                                        PREFINE: Preference-Based Implicit Reward and Cost
+                                                     Fine-Tuning for Safety Alignment
+
+arXiv:2605.21225v1 [cs.LG] 20 May 2026             Richa Verma                                                                                    Bavish Kulur
+
+                                                     TCS Research,                                                                        Department of Computing Science,
+                                           Department of CSE, IIT Madras                                                                           University of Alberta
+                                                                                                                                                           Canada
+                                                           India                                                                                    bavish@ualberta.ca
+                                                richa.verma4@tcs.com
+                                                                                                                                             Balaraman Ravindran
+                                                 Sanjay Chawla
+                                                                                                                                           Department of Data Science & AI,
+                                        Qatar Computing Research Institute,                                                     Wadhwani School of Data Science & AI, IIT Madras
+                                           Hamad Bin Khalifa University
+                                                           Qatar                                                                                            India
+                                                schawla@hbku.edu.qa                                                                                ravi@dsai.iitm.ac.in
+
+                                        ABSTRACT                                                                                1 INTRODUCTION
+
+                                        We address the problem of making a pre-trained reinforcement                            As the focus in machine learning and AI shifts from prediction
+                                        learning (RL) policy safety-aware by incorporating cost constraints                     to prescription, safety of AI applications is now of paramount im-
+                                        without retraining it from scratch. While costs could be numeri-                        portance. In RL [25], safety constraints are modeled by extend-
+                                        cally encoded, we assume a more general setting is when costs are                       ing the MDP with cost constraints and using Lagrangian meth-
+                                        provided as preferences. Given a reward-optimized policy and a                          ods [1, 16, 24, 27] to solve the resulting constrained optimization
+                                        small dataset of preferred (low-cost) and dispreferred (high-cost)                      problem. However, this approach is not computationally feasible
+                                        trajectories, our goal is to fine-tune the policy to generate low-cost                  as it involves solving a nested optimization problem. Likewise,
+                                        behaviors while retaining high rewards. Unlike standard RLHF in                         standard imitation learning (IL) [3, 22, 23] focuses solely on repli-
+                                        language models, where preferences are defined over responses                           cating expert demonstrations and disregards non-preferred, unsafe
+                                        to the same prompt, our setting involves trajectory-level prefer-                       trajectories, leaving no mechanism to enforce safety constraints.
+                                        ences in continuous control environments. We introduce PREFINE:                         Instead, there is a growing demand for solutions that can lever-
+                                        Preference-based Implicit Reward and Cost Fine-Tuning for Safety                        age offline data and fine-tune a policy to meet safety constraints.
+                                        Alignment which is a preference-based fine-tuning method that                           Inspired by the work in RLHF in LLMs [5], we propose using an
+                                        adapts Direct Preference Optimization (DPO), which is now                               extension of Direct Preference Optimization (DPO) to incorporate
+                                        widely used for LLM fine-tuning, to the sequential decision mak-                        safety constraints while ensuring that the safety alignment is fully
+                                        ing setting. PREFINE constructs policy-sampled counterfactual tra-                      offline. We introduce PREFINE: Preference-based Implicit Reward
+                                        jectories to establish meaningful preference contrasts and jointly                      Fine-Tuning for Safety Alignment, a fully offline framework that
+                                        optimizes for reward retention and safety alignment. Empirically,                       transforms safety alignment into a preference-based learning prob-
+                                        PREFINE reduces constraint violations and catastrophic failures                         lem. Rather than requiring hand-crafted cost signals or reward
+                                        by over 60% while maintaining original reward behavior. PREFINE                         information, PREFINE relies on pairwise comparisons between safe
+                                        produces policies that achieve low-cost, high-reward performance                        (preferred) and unsafe (non-preferred) trajectories to implicitly en-
+                                        with significantly improved data and computational efficiency com-                      code safety without any online interaction. We combine Direct
+                                        pared to full offline RL or imitation learning, bridging preference                     Preference Optimization (DPO) [21] with supervised fine-tuning
+                                        alignment and safe policy adaptation in continuous domains.                             (SFT) [20] to incorporate cost constraints into any differentiable
+                                                                                                                                pre-trained policy (RL or IL) without explicit cost estimation. DPO
+                                        KEYWORDS                                                                                is widely used to fine-tune Large Language Models (LLMs) using
+                                                                                                                                human preferences. We adapt it to the sequential decision making
+                                        Policy adaptation, Preference-based Optimization, Safe RL                               setting in two steps: (i) we create a set of counterfactual trajec-
+                                                                                                                                tories using an existing pre-trained policy which share common
+                                        ACM Reference Format:                                                                   states with the given trajectories in the preference dataset, and
+                                        Richa Verma, Bavish Kulur, Sanjay Chawla, and Balaraman Ravindran.                      (ii) we use both reward and preference optimization to fine-tune
+                                        2026. PREFINE: Preference-Based Implicit Reward and Cost Fine-Tuning for                the policy. Note that in a real world setting, such as autonomous
+                                        Safety Alignment. In Proc. of the 25th International Conference on Autonomous           driving, unsafe (or high cost) data is hard to collect. Therefore,
+                                        Agents and Multiagent Systems (AAMAS 2026), Paphos, Cyprus, May 25 ­ 29,                PREFINE uses a mix of abundant safe (preferred) data and scarce
+                                        2026, IFAAMAS, 14 pages.                                                                unsafe (non-preferred) data to perform safety alignment. We show
+                                                                                                                                an overview of our approach in Figure 1. The expert policy 
+                                        Proc. of the 25th International Conference on Autonomous Agents and Multiagent Systems  learns from the high-reward region of the underlying DSRL [17]
+                                        (AAMAS 2026), C. Amato, L. Dennis, V. Mascardi, J. Thangarajah (eds.), May 25 ­ 29,     dataset (see Figure 1(Top-left). PREFINE leverages mixed-quality
+                                        2026, Paphos, Cyprus. © 2026 International Foundation for Autonomous Agents and
+                                        Multiagent Systems (www.ifaamas.org). This work is licenced under the Creative
+                                        Commons Attribution 4.0 International (CC-BY 4.0) licence.
+Figure 1: Overview of the PREFINE pipeline. (Top-left) The DSRL HalfCheetah offline dataset (grey) contains trajectories with a wide range of
+costs and rewards; we pre-train a reference policy ref on the high-reward, low-cost subset (purple). (Bottom-left) We sample a small preferred
+set D (green) of safe trajectories and a non-preferred set D (red) of unsafe trajectories to form pairwise comparisons. (Center) PREFINE
+ingests ref and these preference pairs, then fine-tunes in a single-stage DPO­SFT loop to produce a new policy  . (Right) Rollouts of  (blue)
+shift into the low-cost, high-reward region, retaining the performance of original ref rollouts (black) and avoiding unsafe behaviors (red)
+without any online interaction.
+
+datasets spanning the reward-cost Pareto frontier. Safe (i.e. pre-         For evaluation, we use the well-established DSRL benchmark [17],
+ferred) demonstrations are marked in green while the unsafe (i.e.          a safe offline RL evaluation benchmark. We present the results of
+non-preferred) demonstrations have been highlighted in red (see            extensive experiments that we conducted to compare our method
+Figure 1(Bottom-left)). In Figure 1(Right), we see that expert policy      with several state-of-the-art baselines in terms of normalized re-
+( ) rollouts show that it achieves high rewards but exhibits un-           ward and normalized cost across 12 continuous control tasks in
+safe cost variations (black). PREFINE learns the policy   and              two popular domains. Note that preserving policy performance in
+it is evident from the rollouts that   avoids high-cost regions            terms of reward is prioritized over minimizing cost, which here
+while retaining expert-level performance (blue).                           serves as a proxy for safety. PREFINE is designed for scenarios
+                                                                           where costs are better defined as preferences and multiple decision
+   Our hybrid DPO+SFT objective mirrors the Regularized Pref-              trajectories achieve the same goal but differ in safety, such as au-
+erence Optimization [18] principle i.e., combining a preference            tonomous driving or surgical interventions. In driving, for instance,
+optimization term with an imitation (SFT) regularizer to mitigate          reaching a destination is the objective, yet overspeeding makes the
+over-optimization, formalized for RLHF settings. We adapt this             trajectory unsafe. Similarly, a surgery may succeed overall, even
+structure to sequential decision-making with offline safety prefer-        if certain intermediate actions are risky. In such settings, humans
+ences, using SFT to anchor policy updates under partial coverage           can more naturally express relative safety preferences (e.g., "which
+while optimizing preference-consistent comparisons. Our approach           driving trajectory is safer?") than assign precise numerical safety
+has several advantages and novel features including (i) We show            scores (e.g., "this driving trajectory rates 7.3/10"). We show that
+that we can create policies which result in low-cost trajectories          PREFINE successfully learns policies in the setting where
+while maintaining high rewards and (ii) PREFINE is substantially
+more cost (time) efficient and (iii) we work in a setting that is neither  costs are not quantitatively defined but expressed as pref-
+imitation learning nor complete offline RL.
+                                                                           erences and it retains the high rewards of the pre-trained
+   The main contributions of the work are as follows:
+                                                                           reference policy while becoming safety-aware, outperform-
+     · We formulate safety alignment as a preference-based learn-
+        ing problem, using trajectory preferences, enabling fully          ing the state-of-the-art baselines. We demonstrate that PREFINE
+        offline policy updates for retrofitting cost constraints into      provides a fast, scalable recipe for retrofitting pre-trained policies
+        existing RL policies.                                              with safety (cost constraints) using safety alignment, paving the
+                                                                           way for a broader real-world deployment of RL systems. PREFINE
+     · We introduce PREFINE, a novel approach to combine DPO's             code and datasets are available here 1.
+        preference ranking with SFT's stability that enables direct
+        policy learning while eliminating the need for challenging         2 PRELIMINARIES
+        min-max optimization. We adapt DPO (for the first time)
+        from LLMs to safety alignment in RL.                               In principle, safe RL problems are often modeled as using Con-
+                                                                           strained Markov Decision Processes (CMDPs) [2], defined by a tuple
+     · We show that PREFINE reduces constraint violations and cat-         M = (S, A, , , , 0, ), where S is the state space, A is the ac-
+        astrophic failures by 60% - 92% while retaining expert-level       tion space,  : S × A  (S) describes the transition dynamics,
+        task performance, and converges with a wall-clock time              : S × A  R is the reward function, and  : S × A  [0, max]
+        an order of magnitude smaller compared to cost-based and           is the cost function, where max denotes the maximum allowable
+        distribution-matching baselines.
+                                                                           1 https://github.com/zxXhVi/PREFINE
+cost. The distribution 0 : S  [0, 1] represents the initial state
+distribution, and   [0, 1) is the discount factor. Let  ( | )
+
+denote the probability of taking action  in state  under policy
+
+ .  The  reward-based             state-value     function is   defined  as      ( )  =
+
+                                                                               
+
+E                  (  ,    )    | 0  =       , and the cost-based value function as
+         =0
+                      
+    ()  =  E           =0         (  ,    )  | 0  =   .
+
+  
+
+    While CMDPs assume access to explicit cost signals, in many real-
+
+world safety-critical domains such costs are unavailable or hard to
+
+specify. Instead, we have pairwise preferences between trajecto-
+
+ries, reflecting which behaviors are safer and desirable. Preference-
+
+based learning provides a way to incorporate such feedback.
+
+2.1 Reinforcement Learning from Human                                                      Figure 2: Evolution of total label mismatch percentage across train-
+                                                                                           ing quartiles. Each bar denotes the fraction of pairwise comparisons
+      Feedback (RLHF)                                                                      exhibiting contradictory binary cost labels between dataset and coun-
+                                                                                           terfactual trajectories (preferred + dispreferred combined). Results
+In reinforcement learning from human feedback (RLHF), the goal                             are shown for HalfCheetah and Walker tasks under two counter-
+is to align a policy  with human preferences using a dataset                               factual sampling strategies: policy-sampled (PREFINE) and mixed
+of pairwise comparisons D = {(, ,  )}, where  is a prompt                                  (dataset+policy). PREFINE consistently yields fewer mismatches and
+or context,  is a preferred response, and  is a less preferred                             a clearer downward trend over training, indicating reduced label
+one. A common probabilistic formulation for such comparisons is                            noise and more coherent preference supervision as fine-tuning pro-
+the Bradley­Terry model [4], which expresses the probability of                            gresses. In contrast, mixed sampling produces persistently higher
+preferring  over  as a softmax over their latent rewards:                                  mismatch rates, reflecting noisier counterfactual comparisons and
+                                                                                           weaker safety alignment.
+           Pr [                 |  ] =            exp  (,  )                          (1)
+
+                                                                         ,
+
+                                        exp  (,  ) + exp  (,  )
+
+where  (, ) denotes an implicit reward function. This provides                             3.1 Problem Formulation
+a probabilistic link between preference data and latent rewards.
+Direct Preference Optimization (DPO) [21] builds on this by
+directly optimizing the policy  with respect to preference data,
+without learning  explicitly. Given (, ,  ), DPO minimizes:
+
+      LDPO ( ; ref ) = - log                 log   ( | )     -  log   ( | )     ,     (2)  We consider the task of offline post-hoc safety alignment, where the
+                                                  ref ( | )          ref ( | )             goal is not to learn a safe policy from scratch, but to retrofit an exist-
+                                                                                           ing policy ref with safety (or cost constraints). The reference policy
+where ref is a reference policy and  controls preference sharp-                            ref is assumed to be a differentiable policy trained beforehand (via
+                                                                                           RL or IL) to achieve high reward. The environment is modeled as a
+ness. This objective implicitly defines a reward model ^ (, ) =                            constrained Markov Decision Process (CMDP), defined by reward
+                                                                                            (, ), cost  (, ), and a cost threshold . A trajectory is considered
+ log   ( | )       ,  encouraging            to   assign  higher  likelihood    to  pre-   safe enough if its cumulative cost lies below .
+      ref ( | )                                                                            Problem Definition: Given a reference policy  , a preference
+                                                                                           data set  of high reward and low cost trajectories from  and a
+ferred responses while remaining close to ref.                                             data set  of non-preferred high reward and high cost trajectories.
+                                                                                           Let  be a trajectory and let  () be the probability of selecting
+Supervised Fine-Tuning (SFT) complements this by maximizing                                a trajectory  when using policy  . Let  be the cost threshold.
+                                                                                           The objective is to finetune  using cost preferences in an offline
+the likelihood of desirable responses:                                                     manner such that the resulting  satisfies the following:
+
+                      LSFT ( ) = - E(, )D log  ( | ) ,                                (3)
+
+which stabilizes optimization by anchoring the policy on preferred                         E [()]  E [()]           (4)
+data, although it does not explicitly penalize undesirable outputs.                            
+
+   In this work, we adapt these methods, which are originally devel-                          E [ ()]               (5)
+oped for aligning large language models with human preferences, to                             
+the offline sequential decision-making setting. Bradley-Terry model
+provides the statistical foundation for modeling preferences, DPO                          This distinguishes our setting from imitation learning (which learns
+introduces a principled contrastive loss against a reference policy,                       directly from demonstrations) and offline RL (which learns from
+and SFT anchors learning to safe demonstrations. Together, these                           scratch with batch data and focuses on reward maximization). In-
+components form the basis for our preference-guided fine-tuning                            stead, we formulate PREFINE as a preference-based policy refinement
+framework for sequential decision making.                                                  problem, aligning ref with safety preferences while retaining its
+                                                                                           original reward capabilities. This means that PREFINE starts from
+3 PREFINE                                                                                  a strong policy ref and only wants to reduce the costs without sac-
+                                                                                           rificing the reward. This hybrid positioning is coherent: PREFINE
+In this section, we describe PREFINE's formulation as a preference-                        uses costs defined as preferences (safe vs unsafe actions) rather than
+based fine-tuning procedure for post-hoc safety alignment in an
+offline sequential decision-making setting. We present a hybrid
+loss combining Direct Preference Optimization (DPO) [21] with
+supervised fine-tuning (SFT) [20], and the training algorithm.
+explicit costs, and fine-tunes a base policy rather than re-training                and  (T ) <  (T ) if T  D . Sampling the set of counterfactual
+from scratch. Note that the "cost" is just a proxy for the notion                   actions from the current policy  ensure that those actions reflect
+                                                                                    actual deployment behavior and creates a progressively harder set
+of safety. PREEFINe is designed to work in settings where
+                                                                                    of contrasts as  improves, thereby improving the safety signal.
+costs are better expressed as preferences e.g., safe vs. rash
+                                                                                    Note  that  the  cost  of  each  individual  action      sampled  from  
+driving by an autonomous vehicle, as explained in Section1.
+We achieve this through a hybrid preference optimization objective,                                                                        
+combining Direct Preference Optimization (DPO) to align with pair-
+wise cost preferences, and a supervised fine-tuning (SFT) anchor                    may not always be higher (when dataset action   D ) or lower
+for reward retention. The trajectory dataset D is partitioned into
+preferred (safe) trajectories  and non-preferred (unsafe) trajec-                   (  D ) and this may introduce noise in the training process. To
+tories  based on the cost threshold and the reward. PREFINE
+then aligns ref with  using pairwise cost preferences derived                       avoid the label noise introduced in this manner, using a supervised
+from (,  ), while ensuring reward retention through super-
+vised fine-tuning and without any environment interaction. This                     fine-tuning (SFT) anchor to the reference policy to preserve reward
+post-hoc offline safety alignment ensures  reduces cost constraint
+violations without sacrificing the rewards.                                         capability helps and it acts as an implicit regularizer. Our ablation
+Dynamic sampling strategy: We propose a novel way to apply
+DPO, a preference optimization loss function from i.i.d. language                   (Fig. 6) shows that removing the SFT anchor leads to catastrophic
+modeling setting, to the dynamic, sequential decision-making con-
+text of Reinforcement Learning. DPO is used for LLM fine-tuning                     drops in performance, corroborating its necessity. This sampling
+with a preference dataset consisting of triples of the format <prompt,
+preferred response, non-preferred response>. To map DPO to the se-                  strategy creates an adaptive self-critique signal where the policy is
+quential decision-making setting, for a given state  (analogous to a
+user prompt) and the associated action + (analogous to a preferred                  continually compared against alternatives it would actually propose.
+response) in the static offline preference dataset, PREFINE generates
+a counterfactual action - for the state-action pair (, +)  D                        Essentially, it sharpens learning as  improves and the sampled
+to construct per-state action triples < , +, - >. The resulting                     actions become more informative. Note that it is desired that the
+data triples are further utilized by a DPO-inspired loss function. We
+explain this in detail in Section 3.2.                                              only the expected cost of a counterfactual trajectory T is higher, when
+Data and notation: We assume offline trajectory logs partitioned
+into: (i) D : safe trajectories with low cost and high reward (pre-                 T  D , and lower when T  D . For the sake of completion,
+ferred), and (ii) D : unsafe trajectories with high cost (non-preferred).
+We extract state-action pairs from these for training.                              we provide a comparison of the percentage of noisy (false)
+
+                                                                                    labels encountered for policy-sampling and dataset-based
+
+                                                                                    nearest neighbour with policy fallback when dataset actions
+
+3.2 Practical Implementation for Trajectory                                         are not available (mixed) sampling strategies in Figure 2.
+
+   Datasets                                                                         Interpretation of training-phase trends: Figure2 reports the
+                                                                                    evolution of the total label-mismatch percentage (preferred + dis-
+Computing the DPO loss theoretically requires a preference pair                     preferred binary cost mismatches) computed per training quartile
+per state, that is, < , +, - > [21]. For the counterfactual ac-                     over the first 200K fine-tuning steps. A "binary label flip" indicates
+                                                                                    that the cost (safe/unsafe) indicator differs between the dataset
+tion in a preference pair, a natural choice is to sample directly                   trajectory and the counterfactual trajectory sampled from the cur-
+                                                                                    rent policy for the same state. The plots show a consistent pattern
+from the datasets whenever possible. Concretely, when we wish                       on both HalfCheetahVelocity and Walker2dVelocity: when coun-
+to draw a preferred pair (, +) from  , we can locate the near-                      terfactuals are sampled from the current policy (i.e., PREFINE),
+est state  in the opposite dataset ( ) and use the paired ac-                       mismatch rates begin high and decline during training and we see
+tion of that state as counterfactual action (-). However, in prac-                  HalfCheetahVelocity  70%  62%, Walker  54%  38%,
+                                                                                    indicating that pairwise comparisons become more coherent as the
+tice, exact matches of high-dimensional states across offline tra-                  policy learns safer actions. By contrast, the mixed (dataset+policy
+                                                                                    fallback) sampling strategy exhibits substantially larger and more
+jectory datasets (e.g., DSRL) are often unavailable. Moreover, if                   persistent mismatch rates (HalfCheetahVelocity  90%  75%,
+                                                                                    Walker2dVelocity  75%  60%). We attribute this systematic
+dataset nearest-neighbor counterfactuals are often unrealistic/off-                 excess of contradictions under mixed sampling to label noise intro-
+                                                                                    duced by dataset-sampled counterfactuals: dataset actions can be
+distribution, they produce weak or misleading contrasts. This is                    stale or distributionally mismatched relative to the evolving policy,
+                                                                                    which produces contradictory preference labels and corrupts the
+further exacerbated by our chosen setting of keeping the size of                    supervision signal. In summary, policy-sampled counterfactuals
+                                                                                    produce a cleaner, more stable preference signal.
+D as small as possible to maintain similarity with real-world
+                                                                                       Together, these complementary trends demonstrate that the pol-
+scenarios. As a workaround, we sample counterfactual actions from                   icy sampling-based counterfactual action generation mechanism
+                                                                                    successfully differentiates between safe and unsafe state regions
+the current policy  simply because policy-sampled alternatives                      thereby improving safety and reducing the average number of cost
+                                                                                    constraint violations. These conclusions assume that the offline
+are closer to the decision boundary and therefore more informative.                 dataset affords reasonable local coverage of the policy's state dis-
+                                                                                    tribution. The preferred and nonpreferred trajectory sets exhibit
+                                                                                    roughly 70% Jaccard similarity across our tasks and UMAP visual-
+                                                                                    izations (Figure 13) show substantial overlap in visited states.
+
+Justification for using policy-sampled counterfactuals: Given
+
+a trajectory T = {(1, 1), (2, 2), ..., ( ,  )}, we want to generate
+
+a  contrasting  trajectory  T    =  {(1, 1 ),  (2, 2 ),  ...,  (  ,     )},  where
+
+                    { }      , such that  (T )                        
+
+the set of actions                                       >   (T )    if T      D
+3.3 Hybrid DPO+SFT Objective with                                                 Algorithm 1 PREFINE -- policy-sampled counterfactual trajecto-
+                                                                                  ries (algpseudocode)
+Policy-sampled Actions
+
+We optimize a hybrid objective that combines a DPO-style prefer-                  Require: Preferred trajectory dataset  , non-preferred trajectory dataset
+ence loss with an SFT anchor. Let ref be the reference policy. Our                      , reference policy ref (frozen), learnable policy  , batch size ,
+implemented loss is as follows:                                                        trajectory length  , hyperparameters , , 
+
+                              (+ | )              (- | )                          1: Pretrain ref via BC on offline dataset and keep it fixed.
+                             ref (+ | )          ref (- | )
+  (  ,    +    -  )  =  log              -  log              .            (6)     2: for each training iteration do
+
+         ,
+
+                                                                                  3:     Sample     minibatch          of      preferred        trajectories   { T       }=1  from    &
+
+                                                                                                                                                                  
+
+                                                                                         non-preferred      trajectories       { T      }           from      .
+                                                                                                                                            =1
+                                                            +   - )                                                                
+
+ ( ; ref ) = - E(,+ )D , -                  log       (,   ,                      4:     T    =  {  (,   ,  +    )  }  ,  T    =  {  (       ,     -   )  }
+                                                                                                                                                    ,
+                                                                                                              ,                           ,
+
+                             +  log  (+ | ) ,                             (7)     5: Initialize empty sets B   and B  .
+
+                                                               +  - )             6: for each preferred trajectory T do
+
+                                                              ,                                                                                
+
+ ( ; ref ) = - E(,- )D , +                  log       (,               ,  (8)     7:          for   1 to  do
+
+LPREFINE ( ; ref ) =  ( ; ref ) +  ( ; ref ) .                            (9)     8:                Sample counterfactual action -                              (·    |  , ).
+
+                                                                                                                                                       ,
+
+                                                                                  9:                Add  triple      (, ,      + ,    -    )    to  B .
+
+                                                                                                                                 ,     ,
+
+The first expectation in Eq.7 pushes up the relative logit of known-safe          10:         end for
++ against policy-sampled counterfactual action -, while the SFT term
+ log  (+ | ) anchors reward retention; the second expectation in Eq.8             11: end for
+pushes down known-unsafe - against policy-sampled counterfactual ac-
+tion +. Here,  (> 0) balances safety alignment against reward retention           12: for each non-preferred trajectory T do
+and  (> 0) controls the strength of KL-divergence in the original DPO loss
+function [21]. Empirically,  and  are selected via validation set to achieve                                                                             
+the desired safety­performance trade-off.
+                                                                                  13:         for   1 to  do
+   This operationalizes a regularized preference optimization pattern anal-
+ogous to RPO (DPO loss + SFT loss combination) [18]. The combined                 14:               Sample counterfactual action +                               (·   |   , ).
+objective,LPREFINE = LDPO +  LSFT, is functionally identical to RPO's
+LRPO = LDPO +  · LSFT, with  playing the role of . Consequently,                                                                                        ,
+PREFINE aligns structurally with and is motivated by RPO. While RPO's
+theory is developed for language models with bandit feedback, we adopt its        15:               Add  triple      ( , ,     + ,    -      )  to     B .
+structural insight for fine-tuning with offline cost preferences in sequential
+control and empirically validate its benefits here.                                                                               ,     ,
+
+   In RPO, the SFT loss is a regularizer that prevents the policy from ex-        16:         end for
+ploiting gaps in the static data coverage (i.e., over-optimization). In Prefine,
+it serves a dual, even more critical purpose: (i) It acts as a powerful anchor    17: end for
+that stabilizes the entire learning process. By constantly pulling the policy
+ towards high-reward behaviors of policy  . (ii) It ensures that the              18:    for  all   (,    +    -  )        B      B        do              Compute for every triple
+actions + or - sampled from  remain reasonable. Without the SFT
+anchor,  could drift into a state where the generated actions might be                                   ,
+too noisy, completely corrupting the DPO learning signal. We show the
+importance of including the SFT term in PREFINE's loss function in Fig. 6.        19:         (, +, - )                   log   (+ | )          -   log    (- | )     .
+                                                                                                                               ref (+ | )                 ref (- | )
+
+                                                                                  20: end for
+
+                                                                                  21: Compute PREFINE loss as per Eq. 9:
+
+                                                                                  22:    -   PREFINE                                                            Gradient step (Adam)
+
+                                                                                  23: end for
+
+3.4 Efficient Single-Stage Training Procedure                                     heavier than our single-stage fine-tuning. For these reasons we evaluate
+                                                                                  against SafeDICE as a strong offline baseline.
+The fine-tuning procedure outlined in Algorithm 1 requires only a single
+backward pass per batch i.e., no nested loops or separate models for es-             TraC [6] uses the same benchmark but addresses a different problem: it
+timating reward and cost. We construct per-state counterfactual actions           actively rebalances preference datasets via relabeling and querying to obtain
+via policy sampling (as discussed in Section 3.2) and optimize Eq. (9). This      near-uniform coverage of preferred/dispreferred behaviors. PREFINE explic-
+single-stage update circumvents the need for nested optimization loops,           itly assumes a more challenging setting of fixed, highly unbalanced offline
+yielding up to 10× less wall-clock time than cost-based methods (as shown         dataset with very few unsafe trajectories and performs preference-based
+in Section 5), making PREFINE practical for large-scale offline safety-critical   fine-tuning without any active data curation; hence a direct comparison
+tasks. For the exact implementation details, see Appendix.                        to TraC is not warranted because the methods operate under different
+                                                                                  assumptions and evaluation goals.
+4 RELATED WORK
+                                                                                     Other recent approaches--e.g., latent safety-constrained policy learn-
+Several recent lines of work address safe offline RL and imitation learn-         ing [14] and constraint-conditioned actor-critic methods [8] seek to encode
+ing via preferences, distribution matching, or explicit constraint modeling.      safety in latent spaces or via constraint-conditioned optimization. PREFINE
+SafeDPO [11] adapts Direct Preference Optimization with cost-based regu-          differs from these by requiring only a small number of unsafe demonstra-
+larization, but it is fundamentally different from PREFINE: SafeDPO depends       tions, and using a single-stage fine-tuning objective without explicit cost
+on explicit cost signals and is not designed for the highly imbalanced, of-       estimation that both preserves task performance and enforces safety align-
+fline regimes we target. By contrast, the DICE family (e.g., SafeDICE [9],        ment efficiently. Together, these distinctions motivate our baseline choices.
+[12, 15]) performs stationary distribution matching with learned cost critics
+and nested or adversarial optimizations--making them natural and mean-            5 EXPERIMENTS
+ingful baselines for offline imitation-style objectives, but computationally
+                                                                                  In this section, we present an extensive empirical study conducted for
+                                                                                  PREFINE across various safety-critical control tasks. We specifically address
+                                                                                  the following three key questions:
+
+                                                                                     Q1 Effectiveness: Can PREFINE meaningfully reduce cost violations
+                                                                                  compared to other baselines, while preserving the task performance?
+
+                                                                                     Q2 Efficiency: How quickly does PREFINE converge in terms of wall-
+                                                                                  clock time relative to the baseline methods?
+
+                                                                                     Q3 Robustness & Sensitivity: How does PREFINE respond to preferred
+                                                                                  datasets (| D |) collected at various cost thresholds ? How does PREFINE's
+Figure 3: Comparison of PREFINE against baselines in Safety Gym (top) and Bullet Gym (bottom). Each dot denotes a task; green indicates
+satisfaction of the safety constraint (normalized cost  1), while red indicates a violation. The vertical dotted line corresponds to the normalized
+cost threshold of 1. PREFINE consistently concentrates points in the top-left region (high reward, low cost), whereas baselines either violate
+constraints (BC, PPL, SafeDICE) or trade-off reward for cost (CPQ). Each dot has an abbreviated task label mapped to full task names in Table 1.
+
+                                                                       Safety Gym
+
+Task                      Reference policy (ref)        BC              PPL                    SafeDICE           CPQ   PREFINE (Ours)
+
+                          Reward         Cost  Reward       Cost   Reward       Cost  Reward             Cost  Reward   Cost  Reward   Cost 
+
+AntVelocity (a)             0.93         8.04 0.81 ± 0.05 4.23 ± 0.06 0.90 ± 0.04 0.66 ± 0.02 0.79 ± 0.04 0.50 ± 0.02 0.24 ± 0.05 0.10 ± 0.09 0.93 ± 0.04 0.13 ± 0.03
+                                         3.69 0.28 ± 0.06 0.31 ± 0.06 -0.01 ± 0.05 0.40 ± 0.02 0.32 ± 0.05 0.44 ± 0.07 0.28 ± 0.01 0.20 ± 0.04 0.38 ± 0.01 0.30 ± 0.01
+CarGoal (cg)                0.44         8.01 0.57 ± 0.01 4.10 ± 0.04 0.28 ± 0.01 0.00 ± 0.06 0.70 ± 0.05 0.31 ± 0.04 0.19 ± 0.03 0.71 ± 0.03 0.86 ± 0.05 0.15 ± 0.33
+                                         8.24 0.60 ± 0.00 5.22 ± 0.04 0.38 ± 0.02 1.19 ± 0.03 0.51 ± 0.08 2.12 ± 0.03 0.16 ± 0.05 2.10 ± 0.08 0.66 ± 0.03 0.33 ± 0.05
+HalfCheetahVelocity (hc)    0.99         2.82 0.22 ± 0.05 0.82 ± 0.05 0.46 ± 0.01 0.95 ± 0.05 0.24 ± 0.09 0.26 ± 0.00 0.25 ± 0.08 0.20 ± 0.05 0.40 ± 0.03 0.24 ± 0.11
+                                         6.34 0.52 ± 0.07 4.83 ± 0.01 -0.03 ± 0.05 1.25 ± 0.07 0.50 ± 0.04 0.20 ± 0.07 0.14 ± 0.05 2.79 ± 0.07 0.62 ± 0.09 0.36 ± 0.03
+HopperVelocity (h)          0.93         9.81 0.65 ± 0.06 3.21 ± 0.04 0.61 ± 0.05 0.39 ± 0.01 0.68 ± 0.03 0.29 ± 0.04 0.20 ± 0.08 0.04 ± 0.08 0.75 ± 0.01 0.03 ± 0.04
+
+PointGoal (pg)              0.64
+
+SwimmerVelocity (s)         0.94
+
+Walker2dVelocity (w)        0.93
+
+                                                                       Bullet Gym
+
+Task             Reference policy (ref)           BC               PPL             SafeDICE              CPQ            PREFINE (Ours)
+
+                 Reward     Cost  Reward                Cost  Reward            Cost  Reward   Cost      Reward         Cost  Reward   Cost 
+
+BallCircle (bc)       0.89         3.73 0.72 ± 0.07 0.70 ± 0.01 0.65 ± 0.04 1.82 ± 0.05 0.59 ± 0.09 0.82 ± 0.07 0.18 ± 0.04 0.21 ± 0.04 0.71 ± 0.04 0.35 ± 0.10
+                                   3.88 0.32 ± 0.04 0.97 ± 0.04 0.22 ± 0.06 1.99 ± 0.05 0.21 ± 0.04 1.71 ± 0.02 0.07 ± 0.05 0.28 ± 0.04 0.41 ± 0.08 0.41 ± 0.07
+BallRun (br)          0.95         1.89 0.86 ± 0.05 0.11 ± 0.07 0.71 ± 0.04 0.39 ± 0.08 0.81 ± 0.05 0.28 ± 0.07 -0.18 ± 0.01 0.06 ± 0.06 0.93 ± 0.04 0.38 ± 0.01
+                                   4.58 0.77 ± 0.04 1.17 ± 0.02 0.59 ± 0.05 1.73 ± 0.12 0.62 ± 0.03 0.91 ± 0.03 0.19 ± 0.06 0.33 ± 0.06 0.54 ± 0.04 1.23 ± 0.04
+CarRun (cr)           0.99         6.77 0.55 ± 0.07 0.01 ± 0.07 0.54 ± 0.02 0.79 ± 0.05 0.46 ± 0.05 0.40 ± 0.02 0.13 ± 0.06 0.04 ± 0.02 0.57 ± 0.08 0.42 ± 0.06
+
+CarCircle (cc)        0.97
+
+DroneRun (dr)         0.84
+
+Table 1: Comprehensive per-task results. Normalized reward (higher is better) and normalized cost (lower is better). Blue indicates the highest-
+reward safe agent per task; bold marks agents with cost less than the cost threshold < 1.
+
+performance vary with the size of preferred dataset (| D |), non-preferred      cost thresholds and across five random seeds, allowing for a fair comparison.
+dataset (| D |), and the choice of important hyperparameters.                   The evaluation is based on normalized reward and normalized cost [17],
+                                                                                where achieving a normalized cost value below 1 signifies that the policy is
+5.1 Experimental Setup                                                          safe. In the case of implementing PREFINE, we begin by pretraining an ex-
+                                                                                pert policy through behavior cloning (BC) using high-reward (irrespective
+For our experiments, we use the well-established DSRL benchmark [17]            of the cost) trajectories of the offline dataset (as shown in Figure 1), which
+which provides trajectory datasets with wide-ranging rewards and costs          serves as the reference policy  to be used for safety alignment. Next,
+for offline safe RL. DSRL datasets have been collected by training multiple     PREFINE is applied to learn a new policy from the constructed sets of desir-
+policies with SOTA safe RL algorithms with varying cost thresholds. Each        able and undesirable trajectories. PREFINE is agnostic to the choice of the
+dataset consists of a mix of trajectories ranging from safe to highly unsafe    underlying training method as long as  is differentiable in nature. We
+generated by different policies, which makes it multimodal in nature. The       use variational autoencoder (VAE) architecture [13] with PREFINE, mainly
+offline datasets have been collected for 38 tasks across widely recognized      to capture the multimodality of the DSRL datasets.
+environments. We choose 12 tasks out of those due to compute limitations:       Dataset construction: All trajectory subsets (preferred  and non-preferred
+7 from SafetyGym [10] and 5 from BulletSafetyGym [7]. To evaluate perfor-        ) are constructed by a deterministic, pre-specified protocol applied to
+mance, we follow the constraint variation evaluation protocol proposed in       the same offline task-specific datasets provided by DSRL benchmark suite
+DSRL [17], which is designed to test the adaptability of different algorithms.  [17]. For a fixed cost threshold  we first split the corpus into SAFE = { |
+Specifically, we run each algorithm on every dataset under three separate
+cumulative_cost( ) <  } and UNSAFE = { | cumulative_cost( )   }.                  reaching 100% in Safety Gym and 80% in Bullet Gym. In contrast, while
+To form  , we select  trajectories from SAFE by stratified sampling               baselines such as SafeDICE and CPQ demonstrate moderate levels of safety
+across the top reward quantiles (ties resolved by dataset index); to form         (83% and 71% in Safety Gym; 60% and 100% in Bullet Gym, respectively),
+we sample  trajectories from the bottom 100 trajectories from UNSAFE              they either fail to generalize across both environments or sacrifice reward
+(sorted by cost) so that  spans the reward range. The values  and                 excessively to remain safe. Other approaches, including BC and PPL, show
+ are fixed prior to model training (we use  = 100 and  = 20) and                  much lower safe task fractions and frequently violate cost thresholds. These
+the sampling code is published with the released code. We ran experiments         results highlight that PREFINE is able to combine broad safety coverage
+with multiple values of  and  , and finally chose the smallest ones               with competitive rewards, unlike baselines that trade one for the other.
+that consistently gave good results in multiple tasks. Note that we present
+results averaged across three values of  and 5 different sampled datasets            These results demonstrate PREFINE's ability to retain expert-level be-
+and  for each value of  to avoid any bias in dataset construction. Also           havior while dramatically improving safety. It manages to achieve that
+note that not all actions within a "safe" trajectory are individually safe;       without learning a reward model explicitly (like PPL), performing distri-
+our state-level objective works with expected cost of a trajectory, with SFT      bution correction and learning a cost model explicitly (like SafeDICE) or
+regularization mitigating noise from occasional mislabeled steps.                 performing complex nested optimization to learn a seperate cost model (like
+Baselines: We compare against the following baselines: (1) BC: Behaviour          CPQ), and without any online environment interactions. This reduction in
+Cloning trained on trajectories from preferred dataset D that satisfy safety      cost is achieved with minimal loss in task reward. This balance between
+constraints. (2) PPL (Bradley-Terry preference learning) [4]: Direct pref-        performance and safety arises from our hybrid DPO+SFT objective: the DPO
+erence learning without SFT anchoring initialized by the reference policy         component sculpts the fine-tuned policy's ( ) decision boundary to favor
+ for a fair comparison. (3) SafeDICE [9]: Offline safe imitation learning         low-cost actions, while the SFT anchor preserves high-reward behaviors
+via distribution matching and cost critics. SafeDICE performs distribution        learned by the expert policy  .
+correction explicitly and uses a mixture of unlabelled and labelled trajectory
+datasets to learn safe behaviour. We modify our datasets in the same way             Overall, PREFINE achieves the best balance between reward and safety
+to check SafeDICE performance fairly. (4) CPQ [27]: a Q-learning based            across all tasks, remaining consistently below the cost threshold. These re-
+approach that treats unsafe actions as out-of-distribution actions and pe-        sults highlight PREFINE's practical deployability, as it yields high-performing
+nalizes them. The hyperparameters for all baselines follow their original         yet reliably safe policies across diverse environments. We provide the train-
+publications; code and seeds are fixed across methods to ensure fair com-         ing curves in Appendix.
+parison. We perform hyperparameter tuning for PREFINE to choose the
+values of  and  and use the same values for each group of tasks i.e., Safe-       Figure 4: Wall-clock running time (proportional to marker size)
+tyGym and BulletSafetyGym, respectively (see Appendix for more). We               comparison of PREFINE with baselines. PREFINE is more scalable.
+intentionally skip comparing PREFINE against other relevant methods such
+as DWBC [26] and DExperts [19] because SafeDICE already outperforms               5.3 Efficiency (Q2)
+those [9]. All the experiments are run on an NVIDIA A100 GPU. The results
+are averaged over 5 different sampled datasets across 3 values of the cost        Efficiency is critical for deploying safety alignment at scale. Figure 4 shows
+threshold (), five random seeds and 100 rollouts at each evaluation step.         the comparison of PREFINE wall-clock running time with the baselines
+                                                                                  for the task Walker2dVelocity. The running time is proportional to the
+5.2 Effectiveness (Q1)                                                            marker size. PREFINE achieves a dramatic runtime advantage over compet-
+                                                                                  ing baselines (e.g., SafeDICE, CPQ). In our experiments Prefine completes
+Figure 3 contrasts normalized reward versus normalized cost across tasks.         end-to-end fine-tuning in about 1.5 hours, roughly an order of magnitude
+Points to the left of the vertical line (normalized cost = 1) satisfy the safety  faster (10× speedup) than CPQ and SafeDICE, which take more than 10 hours
+constraint. PREFINE concentrates in the upper-left region on both suites,         to finish running. This improvement stems from Prefine's single-stage
+indicating higher reward and lower cost relative to baselines. In Safety Gym,     preference fine-tuning (one backward pass per minibatch) versus the nested
+PREFINE is safe on all tasks while achieving the highest rewards; in Bullet       optimization or distribution-matching updates required by SafeDICE/CPQ.
+Gym it is safe on most tasks with competitive rewards, exhibiting only a          To ensure an apples-to-apples comparison all methods were executed on
+single violation. In contrast, BC and PPL often violate constraints, SafeDICE     identical hardware (NVIDIA Tesla V100, 20 GB), used the same dataset splits
+shows occasional unsafe outliers with reduced reward, and CPQ attains             and random seeds, and shared implementation-level settings (matched
+safety (low cost) by substantially under-optimizing reward. These results         network architectures, optimizer, batch size and number of training itera-
+support our claim that preference-guided fine-tuning from policy samples          tions). We measured wall-clock training time excluding evaluation, used
+yields a policy that is safe without being over-conservative.                     authors' reference code when available or reimplemented baselines using
+                                                                                  PyTorch with hyperparameters taken from the original papers; these con-
+   The main results are presented in Table 1, which reports the performance       trols ensure the observed timing gap reflects algorithmic cost rather than
+of all approaches in terms of normalized reward and normalized cost across        implementation-based differences.
+12 tasks averaged over 5 seeds and 3 cost thresholds. PREFINE consistently
+attains the best trade-off between reward and cost. In Safety Gym, PREFINE
+achieves the highest average normalized reward (except on PointGoal) while
+keeping costs well below the safety threshold, clearly outperforming all
+baselines. In Bullet Gym, PREFINE matches or exceeds the reward levels
+of the baselines while reducing violations substantially (except on BallRun
+and CarCircle). When averaged across environments, PREFINE delivers
+the strongest overall performance. In contrast, other baselines either incur
+frequent violations (BC, PPL, SafeDICE in Safety Gym) or achieve only
+marginal rewards while remaining conservative (CPQ).
+
+   Regarding safety constraint satisfaction, we present the proportion of
+tasks solved safely by each approach in Figure 8 (see Appendix). PREFINE
+consistently achieves the highest fraction of safe tasks across environments,
+Figure 5: Robustness of PREFINE to dataset size. PREFINE maintains consistently high normalized rewards and strong safety across varying
+dataset sizes for D (left) and D (right), demonstrating stability and data efficiency.
+
+Figure 6: Ablation study: (Left) Safety alignment of reference policy       high normalized rewards while safety (measured as 1 - cost) remains robust
+ using PREFINE(red) vs vanilla DPO loss(blue). PREFINE uses                 across  = 30, 40, 50. The cost slightly increases (and safety decreases)
+DPO + SFT loss terms. DPO return (left) rapidly falls down due to           as the cost threshold becomes relaxed which is expected. This indicates
+unlearning, while PREFINE avoids unsafe behavior while retaining            that PREFINE does not overfit to a particular safety threshold and reliably
+high task performance. Vanilla DPO(blue) shows lower cost in com-           balances reward and safety across a wide range of cost threshold values.
+parison to PREFINE (right) but at the same time, struggles to keep
+the expert ( ) performance intact.                                             We also study PREFINE's robustness with respect to dataset size, as
+                                                                            shown in Figure 5. On both AntVelocity and Walker2dVelocity, PREFINE
+Figure 7: Robustness of PREFINE to cost thresholds. PREFINE main-           achieves stable performance even with relatively small offline datasets. Both
+tains consistently high rewards and strong safety across different          normalized rewards and safety stay consistently high. This demonstrates
+values of , demonstrating stability.                                        that PREFINE is data-efficient, able to learn safe and rewarding policies even
+                                                                            when training data is limited. This quality is especially useful for real-world
+5.4 Robustness & Sensitivity (Q3)                                           scenarios where collecting a large number of unsafe demonstrations for
+                                                                            training task agents can be challenging.
+A key strength of PREFINE is its stability under different cost thresholds
+and dataset configurations. In Figure 7, we examine the effect of varying      Next, we sweep the SFT weight  across {0.1, 1.0, 1.6, 2.0} and DPO
+the cost threshold  across multiple tasks. PREFINE maintains consistently   hyperparameter  across {0.05, 0.2, 0.6, 0.95} (see Figure 9 in Appendix).
+                                                                            We find that PREFINE performs well for   1.0, 1.6 and   0.05, 0.2 on
+                                                                            the tasks we tested. In summary, higher value of  and a lower value of 
+                                                                            work well. Note that  controls the influence of the KL-divergence term in
+                                                                            vanilla DPO loss thereby deciding the closeness of the fine-tuned policy to
+                                                                            the reference policy. For PREFINE, using a large  with vanilla DPO loss
+                                                                            alone was not working well, as evident by the rapid unlearning effect at the
+                                                                            beginning of the fine-tuning process (see Section 5.5).
+                                                                            Discussion These results illustrate a fundamental shift: rather than labori-
+                                                                            ously engineering cost functions or performing expensive online interac-
+                                                                            tions, we can leverage naturally occurring preferences to retrofit safety into
+                                                                            a differentiable pre-trained policy quickly and robustly. PREFINE thus paves
+                                                                            a practical path towards safe deployment in domains where data is not easily
+                                                                            available and safety is non-negotiable such as autonomous driving systems
+                                                                            (reducing collisions) to healthcare (avoiding dangerous drug interactions).
+                                                                            However, policy-sampled counterfactual actions for computing DPO loss
+                                                                            can introduce noise when sampled actions are not strictly safer/more unsafe.
+                                                                            SFT regularization mitigates but does not eliminate this. Future work should
+                                                                            explore ways to mitigate adversarial or erroneous feedback.
+
+                                                                            5.5 Ablation Study
+
+                                                                            We conduct an ablation study for evaluating the impact of the supervised
+                                                                            fine-tuning (SFT) loss LSFT. We compare PREFINE which combines DPO
+                                                                            with SFT against vanilla DPO (Figure 6). Without the SFT term, the
+
+                                                                            policy reduces constraint violations but suffers a sharp drop in task
+
+                                                                            performance, becoming overly conservative. Return collapses below
+
+                                                                            88% within the first 10K steps (see Fig. 6). In contrast, including SFT
+enables the policy to balance safety and reward, maintaining high returns                  [19] Eric Mitchell, Charles Lin, Antoine Bosselut, Chelsea Finn, and Christopher D.
+while enforcing constraints. This highlights SFT as essential for preventing                     Manning. Dexperts: Decoding-time controlled text generation with experts and
+catastrophic unlearning and achieving a robust safety­performance trade-                         anti-experts. In ACL, pages 6691­6713, 2022.
+off. Additional ablation results are provided in the Appendix.
+                                                                                           [20] Long Ouyang, Jeff Wu, Xu Jiang, Diogo Almeida, Carroll Wainwright, Pamela
+6 CONCLUSION                                                                                     Mishkin, Chong Zhang, Sandhini Agarwal, Katarina Slama, Alex Ray, et al. Train-
+                                                                                                 ing language models to follow instructions with human feedback. arXiv preprint
+We present PREFINE, a fully offline framework for post-hoc safety alignment                      arXiv:2203.02155, 2022.
+of pre-trained differentiable policies. By creating counterfactual trajecto-
+ries from offline data in continuous domains, PREFINE casts safety as a                    [21] Rafael Rafailov, Archit Sharma, Eric Mitchell, Christopher D. Manning, Stefano
+preference learning problem and makes it amenable to Direct Preference                           Ermon, and Chelsea Finn. Direct preference optimization: Your language model
+Optimization (DPO) and supervised fine-tuning (SFT). PREFINE does not                            is secretly a reward model. In Advances in Neural Information Processing Systems
+perform nested optimization and explicit cost estimation. Our experiments                        (NeurIPS), 2023.
+diverse on continuous control and navigation benchmarks show that it
+substantially reduces constraint violations by over 60% while maintaining                  [22] Stephane Ross, Geoffrey J. Gordon, and J. Andrew Bagnell. A reduction of
+expert-level task performance. It runs an order of magnitude faster than the                     imitation learning and structured prediction to no-regret online learning. In
+baseline methods, completing end-to-end training in under 1.5 hours. These                       Proceedings of the International Conference on Artificial Intelligence and Statistics
+results underscore PREFINE's potential as a scalable recipe for retrofitting                     (AISTATS), volume 15 of PMLR, pages 627­635, 2011.
+safety into existing policies and paves the way for fast deployment.
+                                                                                           [23] Stefan Schaal. Learning from demonstration. In Advances in Neural Information
+REFERENCES                                                                                       Processing Systems (NeurIPS), volume 9, pages 1040­1046, 1996.
+
+ [1] Joshua Achiam, David Held, Aviv Tamar, and Pieter Abbeel. Constrained policy          [24] Adam Stooke, Joshua Achiam, and Pieter Abbeel. Responsive safety in rein-
+      optimization. In ICML, pages 22­31, 2017.                                                  forcement learning by pid lagrangian methods. In NeurIPS, pages 11244­11255,
+                                                                                                 2020.
+ [2] Eitan Altman. Constrained Markov Decision Processes. Chapman and Hall/CRC,
+      1999.                                                                                [25] Richard S. Sutton and Andrew G. Barto. Reinforcement Learning: An Introduction.
+                                                                                                 MIT Press, 1998.
+ [3] Brenna D. Argall, Sonia Chernova, Manuela Veloso, and Brett Browning. A
+      survey of robot learning from demonstration. Robotics and Autonomous Systems,        [26] Yue Wu, Shuangrui Zhai, and Nitish Srivastava. Dwbc: Mitigating catastrophic
+      57(5):469­483, 2009.                                                                       forgetting in dynamic imitation learning via weight-based consolidation. In
+                                                                                                 NeurIPS, volume 35, pages 3722­3734, 2022.
+ [4] Ralph Allan Bradley and Milton E. Terry. Rank analysis of incomplete block
+      designs: I. the method of paired comparisons. Biometrika, 39(3/4):324­345, 1952.     [27] Haoran Xu, Xingyu Zhan, Honglei Yin, and Huiling Qin. Constraints penalized
+                                                                                                 q-learning for safe offline reinforcement learning. In AAAI, volume 36, pages
+ [5] Paul F. Christiano, Jan Leike, Tom B. Brown, Miljan Martic, Shane Legg, and Dario           8753­8760, 2022.
+      Amodei. Deep reinforcement learning from human preferences. In Advances in
+      Neural Information Processing Systems (NeurIPS), volume 30, pages 4299­4311,
+      2017.
+
+ [6] Ze Gong, Akshat Kumar, and Pradeep Varakantham. Offline safe reinforcement
+      learning using trajectory classification. In Proceedings of the AAAI Conference on
+      Artificial Intelligence, volume 39, pages 16880­16887, 2025.
+
+ [7] Sven Gronauer. Bullet-safety-gym: A framework for constrained reinforcement
+      learning. 2022.
+
+ [8] Zijian Guo, Weichao Zhou, Shengao Wang, and Wenchao Li. Constraint-
+      conditioned actor-critic for offline safe reinforcement learning. In The Thirteenth
+      International Conference on Learning Representations, 2025.
+
+ [9] Youngsoo Jang, Geon-Hyeong Kim, Jongmin Lee, Sungryull Sohn, Byoungjip
+      Kim, Honglak Lee, and Moontae Lee. Safedice: Offline safe imitation learning
+      with non-preferred demonstrations. In NeurIPS, volume 36, 2023.
+
+[10] Jiaming Ji, Borong Zhang, Jiayi Zhou, Xuehai Pan, Weidong Huang, Ruiyang Sun,
+      Yiran Geng, Yifan Zhong, Josef Dai, and Yaodong Yang. Safety gymnasium: A
+      unified safe reinforcement learning benchmark. Advances in Neural Information
+      Processing Systems, 36:18964­18993, 2023.
+
+[11] Geon-Hyeong Kim, Youngsoo Jang, Yu Jin Kim, Byoungjip Kim, Honglak Lee,
+      Kyunghoon Bae, and Moontae Lee. Safedpo: A simple approach to direct prefer-
+      ence optimization with enhanced safety. arXiv preprint arXiv:2505.20065, 2025.
+
+[12] Geon-Hyeong Kim, Seokin Seo, Jongmin Lee, Wonseok Jeon, HyeongJoo Hwang,
+      Hongseok Yang, and Kee-Eung Kim. Demodice: Offline imitation learning with
+      supplementary imperfect demonstrations. In ICLR, 2022.
+
+[13] Diederik P. Kingma and Max Welling. Auto-encoding variational bayes. arXiv
+      preprint arXiv:1312.6114, 2014.
+
+[14] Prajwal Koirala, Zhanhong Jiang, Soumik Sarkar, and Cody Fleming. Latent
+      safety-constrained policy approach for safe offline reinforcement learning. arXiv
+      preprint arXiv:2412.08794, 2024.
+
+[15] Ilya Kostrikov, Ofir Nachum, and Jonathan Tompson. Imitation learning via
+      off-policy distribution matching. In ICLR, 2020.
+
+[16] Yang Liu, Jialin Ding, and Xueqian Liu. Constrained variational policy optimiza-
+      tion for safe reinforcement learning. In ICML, pages 13644­13658, 2022.
+
+[17] Yang Liu, Jialin Ding, and Xueqian Liu. Dsrl: Benchmarking safe offline reinforce-
+      ment learning with diverse safety requirements. arXiv preprint arXiv:2401.14758,
+      2024.
+
+[18] Zhihan Liu, Miao Lu, Shenao Zhang, Boyi Liu, Hongyi Guo, Yingxiang Yang,
+      Jose Blanchet, and Zhaoran Wang. Provably mitigating overoptimization in rlhf:
+      Your sft loss is implicitly an adversarial regularizer. In A. Globerson, L. Mackey,
+      D. Belgrave, A. Fan, U. Paquet, J. Tomczak, and C. Zhang, editors, Advances in
+      Neural Information Processing Systems, volume 37, pages 138663­138697. Curran
+      Associates, Inc., 2024.
+A APPENDIX                                                                             · Training iterations: 500,000
+                                                                                       · Hardware: NVIDIA Tesla V100 GPU
+A.1 DSRL Task Description                                                              · Fine-tuning duration: 1.5 hours per task
+                                                                                    Other Hyperparameters:
+We evaluate our approach on the DSRL benchmark [17], a widely adopted                  · SFT weight   {0.1, 1.0, 1.6, 2.0}
+suite for studying offline safe reinforcement learning. DSRL offers a compre-          · DPO temperature   {0.05, 0.2, 0.6, 0.95}
+hensive set of 38 datasets spanning multiple safety-critical environments              · Final values used:  = 1.6,  = 0.05 for Safety Gym;  = 1.0,  = 0.2
+and difficulty levels. We choose 12 tasks out of SafetyGymnasium [? ? ] and
+BulletSafetyGym [? ] because of compute limitations. Each environment in                  for Bullet Gym.
+DSRL is specifically designed to assess the trade-off between task perfor-          Baseline Hyperparameters: We choose the hyperparameters for PPL,
+mance and safety in offline learning. We adopt this benchmark because it         SafeDICE and CQL from their respective papers.
+provides diverse safety constraint types including collision hazards, velocity
+limits, and dynamic obstacle avoidance allowing for a systematic and fair        B ADDITIONAL RESULTS
+comparison across methods under heterogeneous safety formulations.
+                                                                                                 Figure 8: Fraction of tasks solved for safety.
+   Safety Gym Built on the Mujoco physics engine, SafetyGymnasium
+provides a variety of safety-aware control tasks. It includes two main agent     B.1 Fraction of Tasks Solved for Safety
+types, Car and Point, each associated with four task categories: Button,
+Circle, Goal, and Push. These tasks are further divided into difficulty levels   We see in Figure 8 that PREFINE solves the maximum percentage of tasks
+(1 and 2) and follow the naming pattern AgentTaskDifficulty. Agents              safely in both Safety Gym and Bullet Gym task suites. In Bullet Gym, it is
+must navigate toward goals while avoiding hazards. The benchmark also            second only to CPQ and that is because CPQ trades off rewards for safety.
+contains five velocity-constrained Mujoco agents: Ant, HalfCheetah, Hopper,
+Walker2d, and Swimmer for studying constraint-driven locomotion. We use          B.2 Ablation Study: PREFINE vs. Vanilla DPO
+all 5 velocity-constrained Mujoco tasks because they run faster along with
+PointGoal1 and CarGoal1 tasks to maintain constraint diversity.                  Vanilla DPO only ensures relative ranking, so it can deviate heavily from
+                                                                                 expert behavior if it finds safer modes. This leads to catastrophic unlearn-
+   Bullet Gym Implemented in the PyBullet simulator, BulletSafetyGym             ing--the policy becomes overly conservative or unstable. It is evident by
+follows similar safety principles but features shorter horizons and a broader    the returns crashing for Vanilla DPO. The SFT term anchors the policy to
+range of agents. It comprises four agent types: Ball, Car, Drone each per-       expert trajectories, acting like a soft KL term and ensuring the task perfor-
+forming two task types: Circle and Run, labeled as AgentTask. We choose          mance doesn't get sacrificed while improving safety. We show the results
+BallRun, BallCircle, CarRun, CarCircle and DroneRun out of these to cover        for Hopper in Figure 10
+all agent types.
+                                                                                 B.3 Effect of  and  on Safety Performance
+A.2 Dataset Characteristics                                                             Trade-off in Walker
+
+We conduct experiments on Safety Gym and Bullet Gym tasks from DSRL              The results in Figure 9 demonstrate a clear trade-off between safety and
+suite with safety constraints. Table 2 shows the Safety Gym tasks, safety        performance governed by the choice of  and . Lower values of  yield
+constraint settings and the information of dataset for each domain that we       significantly lower cost and CVaR, especially for larger , but at the expense
+used in our experiments. Likewise, Table 3 shows the dataset characteristics     of reduced reward. Conversely, higher  improves reward but results in
+for Bullet Gym tasks.                                                            higher safety violations. This highlights the importance of appropriately
+                                                                                 tuning (,  ) to balance safety and performance objectives.
+A.3 Evaluation Metrics
+                                                                                 B.4 Learning Curves
+To evaluate performance, we follow the protocol established in the DSRL
+benchmark [17], which reports both normalized reward and normalized              We provide the learning curves for PREFINE (averaged across three cost
+cost. The normalized reward is computed based on the cumulative returns          threshold values: 30, 40 and 50) in Figure . The results are based on absolute
+achieved by the policy, while the normalized cost is defined as:
+
+normalized              =   +    ,  (10)
+                             + 
+
+where  denotes the cumulative cost under policy  ,  is the predefined
+cost threshold, and  is a small positive constant to ensure numerical stability
+when  = 0. Following the DSRL convention, a task is regarded as safe when
+normalized  1.
+
+A.4 Training Details and Hyperparameters
+
+We adopt a two-step training procedure for PREFINE. First, we pretrain
+the reference policy  using behavior cloning (BC) on high reward
+trajectories. Next, we refine the policy by applying PREFINE on the newly
+created preferred and non-preferred datasets. The hyperparameters used in
+the experiments are summarized below:
+
+   Hyperparameters:
+
+      ·  (discount factor): 0.99
+      · Optimizer: Adam
+      · Learning rate: 3 - 4
+      · Network size: [256,256]
+      · Batch size: 256
+Table 2: Preference dataset specifications for all domains used in our experimental results on DSRL Mujoco and Safety Gym tasks.
+
+Task specification                           Ant HalfCheetah Hopper Walker2d Swimmer PointGoal1 CarGoal1
+
+# of preferred demonstrations (| D |)          100      100                   100      100     100     100     100
+# of non-preferred demonstrations (| D |)       20       20                    20       20      20     20       20
+Mean cost of preferred demonstrations         26.15    23.12                 26.12    10.15   24.62   9.12     9.04
+Mean cost of non-preferred demonstrations    225.10   221.65                225.35   273.35   174.55  88.60   108.25
+Mean return of preferred demonstrations      2485.10  2415.50               1616.55  2661.96  132.4   20.30   27.03
+Mean return of non-preferred demonstrations  2667.70  2418.10               1157.23  2648.11  102.6   16.47   20.42
+
+Table 3: Preference Dataset specification of each domain used in our experimental results on DSRL Bullet Gym tasks.
+
+Task specification                                    BallRun CarRun BallCircle CarCircle DroneRun
+
+Safety Constraint ()                                     80                   40       80      100     140
+# of preferred demonstrations (| D |)                   100                  100      100      100     100
+# of non-preferred demonstrations (| D |)                20                   20       20       20      20
+Mean cost of preferred demonstrations                   6.6                 34.84    12.54    15.77    11.6
+Mean cost of non-preferred demonstrations               74.8                34.84     79.6     92.4   134.22
+Mean return of preferred demonstrations                275.8                530.69   740.43   361.47  387.23
+Mean return of non-preferred demonstrations           1021.72               505.06   458.36   259.75  481.42
+
+rewards and absolute costs. See Figure 11 for Safety Gym tasks and Figure   into comparisons: when the dataset contains non-preferred actions that
+12 for Bullet Gym tasks.                                                    look plausible under current policy features, mixing them into pairwise
+                                                                            comparisons leads to contradictory labels and label noise. This label noise
+B.5 Comparison of Policy-based and                                          corrupts the preference signal and prevents the policy from consistently
+                                                                            moving away from unsafe behaviors, explaining the higher empirical cost
+       Dataset-based Sampling Strategies to                                 and CVaR observed for the mixed strategy. In contrast, PREFINe's policy-
+                                                                            sampled counterfactuals produce more coherent comparisons (albeit still
+       Generate Counterfactual Actions                                      noisy in the beginning), enabling more reliable preference gradients and
+                                                                            improved safety outcomes.
+For HalfCheetahVelocity and Walker2dVelocity, we observe policy-sampled
+counterfactuals produce substantially fewer noisy or contradictory prefer-  B.6 Dataset Overlap
+ence labels than the mixed sampling strategy (dataset nearest neighbour
+sampling + policy fallback when nearest neighbour is not found). Figure ??  InFigure 13, we show the overlap between preferred and dispreferred dataset
+shows per-quartile counts and percentages of cost-based binary label mis-   states. We find that for all the tasks, the Jaccard similarity between the UMAP
+matches for HalfCheetah and Walker. PREFINe has both lower initial mis-     embeddings of preferred and non-preferred states comes out to be around
+match rates and a clearer downward trend during training, whereas the       70%. This gives us sufficient confidence to perform counterfactual action
+mixed strategy produces markedly higher mismatch rates throughout train-    sampling from the current policy for PREFINE.
+ing (roughly 1.3­1.8× higher). We hypothesize this arises because dataset-
+sampled counterfactuals introduce stale or distributional-mismatch actions
+Figure 9: Training dynamics for different values of  (color) and  (line style) in the Walker environment. Each subplot shows the evolution of
+
+a key metric over training iterations: (Top) cost, (Middle) CVaR, and (Bottom) reward. Lower  emphasizes safety, resulting in reduced cost
+and CVaR but lower reward, especially at higher  (e.g.,  = 0.1,  = 0.95). Higher  prioritizes reward, often at the expense of safety. Shaded
+regions denote standard error across three seeds. These plots illustrate the trade-off between safety and performance governed by the (,  )
+configuration.
+Figure 10: Ablation study 1: (Left) Safety alignment of reference policy  using PREFINE(red) vs DPO loss(blue). PREFINE uses DPO + SFT
+loss terms. DPO return rapidly falls down due to unlearning, while PREFINE avoids unsafe behavior while retaining high task performance.
+(Right) DPO(blue) shows lower cost in comparison to PREFINE but at the same time, struggles to keep the expert ( ) performance intact.
+
+                                                        Figure 11: PREFINE training curves for Safety Gym tasks.
+                                                        Figure 12: PREFINE training curves for Bullet Gym tasks.
+
+Figure 13: UMAP embeddings of the training datasets used for various tasks showing significant overlap between Preferred dataset states (blue)
+and non-preferred dataset states (orange).
+

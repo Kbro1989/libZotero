@@ -1,0 +1,660 @@
+                                        Representation Learning on Graphs with Jumping Knowledge Networks
+
+                                        Keyulu Xu 1 Chengtao Li 1 Yonglong Tian 1 Tomohiro Sonobe 2
+                                                     Ken-ichi Kawarabayashi 2 Stefanie Jegelka 1
+
+arXiv:1806.03536v2 [cs.LG] 25 Jun 2018                          Abstract                                2017; Grover & Leskovec, 2016; Tang et al., 2015).
+                                                                                                        Recent works focus on deep learning approaches to node
+                                              Recent deep learning approaches for representa-           representation. Many of these approaches broadly follow a
+                                              tion learning on graphs follow a neighborhood ag-         neighborhood aggregation (or "message passing" scheme),
+                                              gregation procedure. We analyze some important            and those have been very promising (Kipf & Welling, 2017;
+                                              properties of these models, and propose a strat-          Hamilton et al., 2017; Gilmer et al., 2017; Velickovic´ et al.,
+                                              egy to overcome those. In particular, the range of        2018; Kearnes et al., 2016). These models learn to itera-
+                                             "neighboring" nodes that a node's representation           tively aggregate the hidden features of every node in the
+                                              draws from strongly depends on the graph struc-           graph with its adjacent nodes' as its new hidden features,
+                                              ture, analogous to the spread of a random walk. To        where an iteration is parametrized by a layer of the neu-
+                                              adapt to local neighborhood properties and tasks,         ral network. Theoretically, an aggregation process of k
+                                              we explore an architecture ­ jumping knowledge            iterations makes use of the subtree structures of height k
+                                              (JK) networks ­ that flexibly leverages, for each         rooted at every node. Such schemes have been shown to
+                                              node, different neighborhood ranges to enable bet-        generalize the Weisfeiler-Lehman graph isomorphism test
+                                              ter structure-aware representation. In a number of        (Weisfeiler & Lehman, 1968) enabling to simultaneously
+                                              experiments on social, bioinformatics and citation        learn the topology as well as the distribution of node fea-
+                                              networks, we demonstrate that our model achieves          tures in the neighborhood (Shervashidze et al., 2011; Kipf
+                                              state-of-the-art performance. Furthermore, com-           & Welling, 2017; Hamilton et al., 2017).
+                                              bining the JK framework with models like Graph            Yet, such aggregation schemes sometimes lead to surprises.
+                                              Convolutional Networks, GraphSAGE and Graph               For example, it has been observed that the best performance
+                                              Attention Networks consistently improves those            with one of the state-of-the-art models, Graph Convolutional
+                                              models' performance.                                      Networks (GCN), is achieved with a 2-layer model. Deeper
+                                                                                                        versions of the model that, in principle, have access to more
+                                        1. Introduction                                                 information, perform worse (Kipf & Welling, 2017). A sim-
+                                                                                                        ilar degradation of learning for computer vision problems
+                                        Graphs are a ubiquitous structure that widely occurs in data    is resolved by residual connections (He et al., 2016a) that
+                                        analysis problems. Real-world graphs such as social net-        greatly aid the training of deep models. But, even with resid-
+                                        works, financial networks, biological networks and citation     ual connections, GCNs with more layers do not perform
+                                        networks represent important rich information which is not      as well as the 2-layer GCN on many datasets, e.g. citation
+                                        seen from the individual entities alone, for example, the com-  networks.
+                                        munities a person is in, the functional role of a molecule,     Motivated by observations like the above, in this paper, we
+                                        and the sensitivity of the assets of an enterprise to exter-    address two questions. First, we study properties and re-
+                                        nal shocks. Therefore, representation learning of nodes in      sulting limitations of neighborhood aggregation schemes.
+                                        graphs aims to extract high-level features from a node as       Second, based on this analysis, we propose an architec-
+                                        well as its neighborhood, and has proved extremely useful       ture that, as opposed to existing models, enables adaptive,
+                                        for many applications, such as node classification, cluster-    structure-aware representations. Such representations are
+                                        ing, and link prediction (Perozzi et al., 2014; Monti et al.,   particularly interesting for representation learning on large
+                                                                                                        complex graphs with diverse subgraph structures.
+                                            1Massachusetts Institute of Technology (MIT) 2National In-  Model analysis. To better understand the behavior of dif-
+                                        stitute of Informatics, Tokyo. Correspondence to: Keyulu Xu     ferent neighborhood aggregation schemes, we analyze the
+                                        <keyulu@mit.edu>, Stefanie Jegelka <stefje@mit.edu>.            effective range of nodes that any given node's representation
+                                        Proceedings of the 35 th International Conference on Machine    draws from. We summarize this sensitivity analysis by what
+                                        Learning, Stockholm, Sweden, PMLR 80, 2018. Copyright 2018
+                                        by the author(s).
+Representation Learning on Graphs with Jumping Knowledge Networks
+
+we name the influence distribution of a node. This effective      (a) 4 steps at core (b) 4 steps at tree (c) 5 steps at tree
+range implicitly encodes prior assumptions on what are the
+"nearest neighbors" that a node should draw information          Figure 1. Expansion of a random walk (and hence influence dis-
+from. In particular, we will see that this influence is heavily  tribution) starting at (square) nodes in subgraphs with different
+affected by the graph structure, raising the question whether    structures. Different subgraph structures result in very different
+"one size fits all", in particular in graphs whose subgraphs     neighborhood sizes.
+have varying properties (such as more tree-like or more
+expander-like).                                                  whether it is possible to adaptively adjust (i.e., learn) the
+In particular, our more formal analysis connects influence       influence radii for each node and task. To achieve this, we
+distributions with the spread of a random walk at a given        explore an architecture that learns to selectively exploit in-
+node, a well-understood phenomenon as a function of the          formation from neighborhoods of differing locality. This
+graph structure and eigenvalues (Lova´sz, 1993). For in-         architecture selectively combines different aggregations at
+stance, in some cases and applications, a 2-step random          the last layer, i.e., the representations "jump" to the last layer.
+walk influence that focuses on local neighborhoods can be        Hence, we name the resulting networks Jumping Knowledge
+more informative than higher-order features where some of        Networks (JK-Nets). We will see that empirically, when
+the information may be "washed out" via averaging.               adaptation is an option, the networks indeed learn represen-
+Changing locality. To illustrate the effect and importance       tations of different orders for different graph substructures.
+of graph structure, recall that many real-world graphs pos-      Moreover, in Section 6, we show that applying our frame-
+sess locally strongly varying structure. In biological and       work to various state-of-the-art neighborhood-aggregation
+citation networks, the majority of the nodes have few con-       models consistently improves their performance.
+nections, whereas some nodes (hubs) are connected to many
+other nodes. Social and web networks usually consist of          2. Background and Neighborhood
+an expander-like core part and an almost-tree (bounded              aggregation schemes
+treewidth) part, which represent well-connected entities and
+the small communities respectively (Leskovec et al., 2009;       We begin by summarizing some of the most common neigh-
+Maehara et al., 2014; Tsonis et al., 2006).                      borhood aggregation schemes and, along the way, introduce
+Besides node features, this subgraph structure has great im-     our notation. Let G = (V, E) be a simple graph with node
+pact on the result of neighborhood aggregation. The speed        features Xv  Rdi for v  V . Let G be the graph obtained
+of expansion or, equivalently, growth of the influence ra-       by adding a self-loop to every v  V . The hidden feature of
+dius, is characterized by the random walk's mixing time,         node v learned by the l-th layer of the model is denoted by
+which changes dramatically on subgraphs with different           h(vl)  Rdh . Here, di is the dimension of the input features
+structures (Lova´sz, 1993). Thus, the same number of iter-       and dh is the dimension of the hidden features, which, for
+ations (layers) can lead to influence distributions of very      simplicity of exposition, we assume to be the same across
+different locality. As an example, consider the social net-      layers. We also use hv(0) = Xv for the node feature. The
+work in Figure 1 from GooglePlus (Leskovec & Mcauley,            neighborhood N (v) = {u  V | (v, u)  E} of node v is
+2012). The figure illustrates the expansions of a random         the set of adjacent nodes of v. The analogous neighborhood
+walk starting at the square node. The walk (a) from a node       N (v) = {v}  {u  V | (v, u)  E} on G includes v.
+within the core rapidly includes almost the entire graph.
+In contrast, the walk (b) starting at a node in the tree part    A typical neighborhood aggregation scheme can generically
+includes only a very small fraction of all nodes. After 5        be written as follows: for a k-layer model, the l-th layer
+steps, the same walk has reached the core and, suddenly,         (l = 1..k) updates h(vl) for every v  V simultaneously as
+spreads quickly. Translated to graph representation mod-
+els, these spreads become the influence distributions or, in      hv(l) =  Wl · AGGREGATE h(ul-1), u  N (v)
+other words, the averaged features yield the new feature                                                                            (1)
+of the walk's starting node. This shows that in the same
+graph, the same number of steps can lead to very different       where AGGREGATE is an aggregation function defined by
+effects. Depending on the application, wide-range or small-      the specific model, Wl is a trainable weight matrix on the l-
+range feature combinations may be more desirable. A too          th layer shared by all nodes, and  is a non-linear activation
+rapid expansion may average too broadly and thereby lose         function, e.g. a ReLU.
+information, while in other parts of the graph, a sufficient
+neighborhood may be needed for stabilizing predictions.
+JK networks. The above observations raise the question
+                       Representation Learning on Graphs with Jumping Knowledge Networks
+
+Graph Convolutional Networks (GCN). Graph Convolu-                 adjacent nodes equally, weigh "important" neighbors more.
+tional Networks (GCN) (Kipf & Welling, 2017), initially            This paradigm can be viewed as neighborhood-aggregation
+motivated by spectral graph convolutions (Hammond et al.,          with directional biases because a node will be influenced by
+2011; Defferrard et al., 2016), are a specific instantiation of    some directions of expansion more than the others.
+this framework (Gilmer et al., 2017), of the form                  Graph Attention Networks (GAT) (Velickovic´ et al., 2018)
+                                                                   and VAIN (Hoshen, 2017) learn to select the important
+h(vl) = ReLU Wl ·         (deg(v)deg(u))-1/2 hu(l-1)               neighbors via an attention mechanism. The max-pooling op-
+                                                                   eration in GraphSAGE (Hamilton et al., 2017) implicitly se-
+                   uN (v)                                          lects the important nodes. This line of work is orthogonal to
+                                                                   ours, because it modifies the direction of expansion whereas
+                                                            (2)    our model operates on the locality of expansion. Our model
+                                                                   can be combined with these models to add representational
+where deg(v) is the degree of node v in G. Hamilton et al.         power. In Section 6, we demonstrate that our framework
+(2017) derived a variant of GCN that also works in inductive       works with not only simple neighborhood-aggregation mod-
+settings (previously unseen nodes), by using a different           els (GCN), but also with skip connections (GraphSAGE)
+normalization to average:                                          and directional biases (GAT).
+
+hv(l) = ReLU       Wl  ·     1            h(ul-1)     (3)
+                          deg(v)
+                                  uN (v)
+
+where deg(v) is the degree of node v in G.                         3. Influence Distribution and Random Walks
+
+Neighborhood Aggregation with Skip Connections. In-                Next, we explore some important properties of the above
+stead of aggregating a node and its neighbors at the same          aggregation schemes. Related to ideas of sensitivity analysis
+time as in Eqn. (1), a number of recent approaches aggregate       and influence functions in statistics (Koh & Liang, 2017)
+the neighbors first and then combine the resulting neighbor-       that measure the influence of a training point on parameters,
+hood representation with the node's representation from the        we study the range of nodes whose features affect a given
+last iteration. More formally, each node is updated as             node's representation. This range gives insight into how
+                                                                   large a neighborhood a node is drawing information from.
+h(Nl)(v) =  Wl · AGGREGATEN {h(ul-1), u  N (v)}
+  hv(l) = COMBINE h(vl-1), h(Nl)(v)                                We measure the sensitivity of node x to node y, or the
+                                                                   influence of y on x, by measuring how much a change in the
+where AGGREGATEN and COMBINE are defined by the                    input feature of y affects the representation of x in the last
+specific model. The COMBINE step is key to this paradigm           layer. For any node x, the influence distribution captures
+and can be viewed as a form of a "skip connection" between         the relative influences of all other nodes.
+different layers.For COMBINE, GraphSAGE (Hamilton
+et al., 2017) uses concatenation after a feature transform.        Definition 3.1 (Influence score and distribution). For a sim-
+Column Networks (Pham et al., 2017) interpolate the neigh-         ple graph G = (V, E), let hx(0) be the input feature and
+borhood representation and the node's previous represen-           h(xk) be the learned hidden feature of node x  V at the
+tation, and Gated GNN (Li et al., 2016) uses the Gated             k-th (last) layer of the model. The influence score I(x, y) of
+Recurrent Unit (GRU) (Cho et al., 2014). Another well-             node x by any node y  V is the sum of the absolute values
+known variant of skip connections, residual connections,
+use the identity mapping to help signals propagate (He et al.,     of the entries of the Jacobian matrix      h(xk)  . We define
+2016a;b).                                                                                                     hy(0)
+These skip connections are input- but not output-unit spe-
+cific: If we "skip" a layer for hv(l) (do not aggregate) or use a  the influence distribution Ix of x  V by normalizing the
+certain COMBINE, all subsequent units using this represen-         influence scores: Ix(y) = I(x, y)/ z I(x, z), or
+tation will be using this skip implicitly. It is impossible that
+a certain higher-up representation hu(l+j) uses the skip and       Ix(y) = eT   h(xk)  e                 eT   hx(k)  e
+another one does not. As a result, skip connections cannot                      h(y0)                         hz(0)
+adaptively adjust the neighborhood sizes of the final-layer                                         zV
+representations independently.
+                                                                   where e is the all-ones vector.
+
+Neighborhood Aggregation with Directional Biases.                  Later, we will see connections of influence distributions with
+Some recent models, rather than treating the features of           random walks. For completeness, we also define random
+                                                                   walk distributions.
+                                                                   Definition 3.2. Consider a random walk on G starting at
+                                                                   a node v0; if at the t-th step we are at a node vt, we move
+                                                                   to any neighbor of vt (including vt) with equal probability.
+                 Representation Learning on Graphs with Jumping Knowledge Networks
+
+(a) 2 layer GCN  (b) 2 step r.w.           (c) 4 layer GCN    (d) 4 step r.w.            (e) 6 layer GCN        (f) 6 step r.w.
+
+Figure 2. Influence distributions of GCNs and random walk distributions starting at the square node
+
+(a) 2 layer Res  (b) 2 step lazy r.w.      (c) 4 layer Res    (d) 4 step lazy r.w.       (e) 6 layer Res        (f) 6 step lazy r.w.
+
+Figure 3. Influence distributions of GCNs with residual connections and random walk distributions with lazy factor 0.4
+
+The t-step random walk distribution Pt of v0 is               x  V is equivalent, in expectation, to the k-step random
+                                                              walk distribution on G starting at node x.
+                 Pt (i) = Prob (vt = i) .        (4)
+
+Analogous definitions apply for random walks with non-        We prove Theorem 1 in the appendix.
+uniform transition probabilities.
+                                                              It is straightforward to modify the proof of Theorem 1 to
+                                                              show a nearly equivalent result for the version of GCN
+An important property of the random walk distribution is      in Equation (2). The only difference is that each random
+that it becomes more spread out as t increases and converges  walk path vp0, vp1, ..., vpk from node x (vp0) to y (vpk), in-
+to the limit distribution if the graph is non-bipartite. The
+rate of convergence depends on the structure of the subgraph  stead of probability       k        1       )  ,  now  has  probability
+and can be bounded by the spectral gap (or the conductance)                              l=1  deg(vpl
+of the random walk's transition matrix (Lova´sz, 1993).
+                                                               k-1          1            · (deg(x)deg(y))-1/2, where Q is        a nor-
+                                                              Q l=1                      Thus, the difference in probability is  small,
+                                                                        fdaegc(tvoplr).
+                                                              malizing
+                                                              especially when the degree of x and y are close.
+3.1. Model Analysis
+                                                              Similarly, we can show that neighborhood aggregation
+The influence distribution for different aggregation models   schemes with directional biases resemble biased random
+and nodes can give insights into the information captured     walk distributions. This follows by substituting the corre-
+by the respective representations. The following results      sponding probabilities into the proof of Theorem 1.
+show that the influence distributions of common aggregation
+schemes are closely connected to random walk distributions.   Empirically, we observe that, despite somewhat simplifying
+This observation hints at specific implications ­ strengths   assumptions, our theory is close to what happens in practice.
+and weaknesses ­ that we will discuss.                        We visualize the heat maps of the influence distributions
+                                                              for a node (labeled square) for trained GCNs, and compare
+With a randomization assumption of the ReLU activations       with the random walk distributions starting at the same node.
+similar to that in (Kawaguchi, 2016; Choromanska et al.,      Figure 2 shows example results. Darker colors correspond
+2015), we can draw connections between GCNs and random        to higher influence probabilities. To show the effect of skip
+walks:                                                        connections, Figure 3 visualizes the analogous heat maps
+Theorem 1. Given a k-layer GCN with averaging as in           for one example--GCN with residual connections. Indeed,
+Equation (3), assume that all paths in the computation graph  we observe that the influence distributions of networks with
+of the model are activated with the same probability of       residual connections approximately correspond to lazy ran-
+success . Then the influence distribution Ix for any node     dom walks: each step has a higher probability of staying at
+Representation Learning on Graphs with Jumping Knowledge Networks
+
+                                "(/0123 )                       common aggregation schemes really achieves the best rep-
+                                                                resentations for all nodes and tasks. Large radii may lead
+                       Layer aggregation                        to too much averaging, while small radii may lead to in-
+              Concat/Max-pooling/LSTM-attn                      stabilities or insufficient information aggregation. Hence,
+                                                                we propose two simple yet powerful architectural changes ­
+                                      "(.)  %+                  jump connections and a subsequent selective but adaptive
+                                                                aggregation mechanism.
+                                      N. A.
+                                                                Figure 4 illustrates the main idea: as in common neighbor-
+                                      "(-)  %+                  hood aggregation networks, each layer increases the size
+                                                                of the influence distribution by aggregating neighborhoods
+                                      N. A.                     from the previous layer. At the last layer, for each node, we
+                                                                carefully select from all of those itermediate representations
+                                       "(,)  %+                 (which "jump" to the last layer), potentially combining a
+                                                                few. If this is done independently for each node, then the
+                                      N. A.                     model can adapt the effective neighborhood size for each
+                                                                node as needed, resulting in exactly the desired adaptivity.
+                                       "())  %+
+                                                                Our model permits general layer-aggregation mechanisms.
+                                      N. A.                     We explore three approaches; others are possible too. Let
+                                                                hv(1), ..., h(vk) be the jumping representations of node v (from
+            Input feature of node v: "  %&                      k layers) that are to be aggregated.
+
+Figure 4. A 4-layer Jumping Knowledge Network (JK-Net). N.A.    Concatenation. A concatenation h(v1), ..., hv(k) is the
+stands for neighborhood aggregation.                            most straightforward way to combine the layers, after which
+                                                                we may perform a linear transformation. If the transforma-
+the current node. Local information is retained with simi-      tion weights are shared across graph nodes, this approach
+lar probabilities for all nodes in each iteration; this cannot  is not node-adaptive. Instead, it optimizes the weights to
+adapt to diverse needs of specific upper-layer nodes. Further   combine the subgraph features in a way that works best for
+visualizations may be found in the appendix.                    the dataset overall. One may expect concatenation to be
+Fast Collapse on Expanders. To better understand the            suitable for small graphs and graphs with regular structure
+implication of Theorem 1 and the limitations of the corre-      that require less adaptivity; also because weight-sharing
+sponding neighborhood aggregation algorithms, we revisit        helps reduce overfitting.
+the scenario of learning on a social network shown in Fig-
+ure 1. Random walks starting inside an expander converge        Max-pooling. An element-wise max hv(1), ..., h(vk) se-
+rapidly in O(log |V |) steps to an almost-uniform distribu-     lects the most informative layer for each feature coordinate.
+tion (Hoory et al., 2006). After O(log |V |) iterations of      For example, feature coordinates that represent more local
+neighborhood aggregation, by Theorem 1 the representation       properties can use the feature coordinates learned from the
+of every node is influenced almost equally by any other node    close neighbors and those representing global status would
+in the expander. Thus, the node representations will be rep-    favor features from the higher-up layers. Max-pooling is
+resentative of the global graph and carry limited information   adaptive and has the advantage that it does not introduce
+about individual nodes. In contrast, random walks starting at   any additional parameters to learn.
+the bounded tree-width (almost-tree) part converge slowly,
+i.e., the features retain more local information. Models        LSTM-attention. An attention mechanism identifies the
+that impose a fixed random walk distribution inherit these      most useful neighborhood ranges for each node v by com-
+discrepancies in the speed of expansion and influence neigh-    puting an attention score sv(l) for each layer l l s(vl) = 1 ,
+borhoods, which may not lead to the best representations        which represents the importance of the feature learned on
+for all nodes.                                                  the l-th layer for node v. The aggregated representation
+                                                                for node v is a weighted average of the layer features
+4. Jumping Knowledge Networks                                   intlosav(l)b·i-hd(vilr)e.cFtioornLalSLTSMTMatte(nHtioocnh,rewiteeirn&putShch(v1m),i.d.h.,uhbv(ekr),
+                                                                1997) and generate the forward-LSTM and backward-LSTM
+The above observations raise the question whether the fixed     hidden features fv(l) and b(vl) for each layer l. A linear map-
+but structure-dependent influence radius size induced by        ping of the concatenated features [fv(l)||b(vl)] yields the scalar
+                                                                importance score s(vl). A Softmax layer applied to {s(vl)}lk=1
+                                            Representation Learning on Graphs with Jumping Knowledge Networks
+
+(a) tree-like                               (b) tree-like       (c) affiliate to the hub (d) affiliate to the hub        (e) hub
+
+                                            Figure 5. A 6-layer JK-Net learns to adapt to different subgraph structures
+
+yields the attention of node v on its neighborhood in differ-                      a node affiliated to a "hub", which presumably plays the
+                                                                                   role of connecting different types of nodes, JK-Net learns to
+ent ranges. Finally we take the sum of [fv(l)||bv(l)] weighted                     put most influence on the node itself and otherwise spreads
+                                                                                   out the influence. GCNs, however, would not capture the
+btiyonS. oAftnoMtahxer({pso(vsl)s}ibkl=le1  ) to get the final  layer representa-  importance of the node's own features in such a structure
+                                            implementation      combines LSTM      because the probability at an affiliate node is small after
+with max-pooling. LSTM-attention is node adaptive be-                              a few random walk steps. For hubs, JK-Net spreads out
+cause the attention scores are different for each node. We                         the influence across the neighboring nodes in a reasonable
+shall see that the this approach shines on large complex                           range, which makes sense because the nodes connected to
+graphs, although it may overfit on small graphs (fewer train-                      the hubs are presumably as informative as the hubs' own
+ing nodes) due to its relatively higher complexity.                                features. For comparison, Table 6 in the appendix includes
+                                                                                   more visualizations of how models with random walk priors
+4.1. JK-Net Learns to Adapt                                                        behave.
+
+The key idea for the design of layer-aggregation functions is                      4.2. Intermediate Layer Aggregation and Structures
+to determine the importance of a node's subgraph features                          Looking at Figure 4, one may wonder whether the same
+at different ranges after looking at the learned features on                       inter-layer connections could be drawn between all layers.
+all layers, rather than to optimize and fix the same weights                       The resulting architecture is approximately a graph corre-
+for all nodes. Under the same assumption on the ReLU                               spondent of DenseNets, which were introduced for com-
+activation distribution as in Theorem 1, we show below                             puter vision problems (Huang et al., 2017), if the layer-wise
+that layer-wise max-pooling implicitly learns the influence                        concatenation aggregation is applied. This version, how-
+locality adaptively for different nodes. The proof for layer-                      ever, would require many more features to learn. Viewing
+wise attention follows similarly.                                                  the DenseNet setting (images) from a graph-theoretic per-
+                                                                                   spective, images correspond to regular, in fact, near-planar
+Proposition 1. Assume that paths of the same length in the                         graphs. Such graphs are far from being expanders, and do
+computation graph are activated with the same probabil-                            not pose the challenges of graphs with varying subgraph
+ity. The influence score I(x, y) for any x, y  V under a                           structures. Indeed, as we shall see, models with concatena-
+k-layer JK-Net with layer-wise max-pooling is equivalent                           tion aggregation perform well on graphs with more regular
+in expectation to a mixture of 0, .., k-step random walk dis-                      structures such as images and well-structured communities.
+tributions on G at y starting at x, the coefficients of which                      As a more general framework, JK-Net admits general layer-
+depend on the values of the layer features hx(l).                                  wise aggregation models and enables better structure-aware
+                                                                                   representations on graphs with complex structures.
+We prove Proposition 1 in the appendix. Contrasting this
+result with the influence distributions of other aggregation                       5. Other Related Work
+mechanisms, we see that JK-networks indeed differ in their
+node-wise adaptivity of neighborhood ranges.                                       Spectral graph convolutional neural networks apply convolu-
+                                                                                   tion on graphs by using the graph Laplacian eigenvectors as
+Figure 5 illustrates how a 6-layer JK-Net with max-pooling                         the Fourier atoms (Bruna et al., 2014; Shuman et al., 2013;
+aggregation learns to adapt to different subgraph structures                       Defferrard et al., 2016). A major drawback of the spectral
+on a citation network. Within a tree-like structure, the in-                       methods, compared to spatial approaches like neighborhood-
+fluence stays in the "small community" the node belongs                            aggregation, is that the graph Laplacian needs to be known
+to. In contrast, 6-layer models whose influence distributions                      in advance. Hence, they cannot generalize to unseen graphs.
+follow random walks, e.g. GCNs, would reach out too far
+into irrelevant parts of the graph, and models with few lay-
+ers may not be able to cover the entire "community", as
+illustrated in Figure 1, and Figures 7, 8 in the appendix. For
+                   Representation Learning on Graphs with Jumping Knowledge Networks
+
+Dataset    Nodes      Edges     Classes  Features                    Model      Citeseer         Model        Cora
+Citeseer   3,327      4,732        6      3,703                     GCN (2)     77.3 (1.3)      GCN (2)     88.2 (0.7)
+           2,708      5,429        7      1,433                     GAT (2)     76.2 (0.8)      GAT (3)     87.7 (0.3)
+  Cora    232,965  avg deg 492     50      300                  JK-MaxPool (1)  77.7 (0.5)  JK-Maxpool (6)  89.6 (0.5)
+Reddit    56,944     818,716                50                   JK-Concat (1)  78.3 (0.8)   JK-Concat (6)  89.1 (1.1)
+                                  121                            JK-LSTM (2)    74.7 (0.9)   JK-LSTM (1)    85.8 (1.0)
+  PPI
+
+                        Table 1. Dataset statistics             Table 2. Results of GCN-based JK-Nets on Citeseer and Cora. The
+                                                                baselines are GCN and GAT. The number in parentheses next to
+6. Experiments                                                  the model name indicates the best-performing number of layers
+                                                                among 1 to 6. Accuracy and standard deviation are computed from
+We evaluate JK-Nets on four benchmark datasets. (I) The         3 random data splits.
+task on citation networks (Citeseer, Cora) (Sen et al., 2008)
+is to classify academic papers into different subjects. The     to 6 for each model and choose the best performing model
+dataset contains bag-of-words features for each document        with respect to the validation set. Throughout the experi-
+(node) and citation links (edges) between documents. (II)       ments, we use the Adam optimizer (Kingma & Ba, 2014)
+On Reddit (Hamilton et al., 2017), the task is to predict the   with learning rate 0.005. We fix the dropout rate to be 0.5,
+community to which different Reddit posts belong. Reddit        the dimension of hidden features to be within {16, 32}, and
+is an online discussion forum where users comment in differ-    add an L2 regularization of 0.0005 on model parameters.
+ent topical communities. Two posts (nodes) are connected        The results are shown in Table 2.
+if some user commented on both posts. The dataset contains      Results. We observe in Table 2 that JK-Nets outperform
+word vectors as node features. (III) For protein-protein in-    both GCN and GAT baselines in terms of prediction accu-
+teraction networks (PPI) (Hamilton et al., 2017), the task is   racy. Though JK-Nets perform well in general, there is no
+to classify protein functions. PPI consists of 24 graphs, each  consistent winner and performance varies slightly across
+corresponds to a human tissue. Each node has positional         datasets.
+gene sets, motif gene sets and immunological signatures         Taking a closer look at results on Cora, both GCN and
+as features and gene ontology sets as labels. 20 graphs are     GAT achieve their best accuracies with only 2 or 3 layers,
+used for training, 2 graphs are used for validation and the     suggesting that local information is a stronger signal for
+rest for testing. Statistics of the datasets are summarized in  classification than global ones. However, the fact that JK-
+Table 1.                                                        Nets achieve the best performance with 6 layers indicates
+Settings. In the transductive setting, we are only allowed to   that global together with local information will help boost
+access a subset of nodes in one graph as training data, and     performance. This is where models like JK-Nets can be par-
+validate/test on others. Our experiments on Citeseer, Cora      ticularly beneficial. LSTM-attention may not be suitable for
+and Reddit are transductive. In the inductive setting, we       such small graphs because of its relatively high complexity.
+use a number of full graphs as training data and use other
+completely unseen graphs as validation/testing data. Our        6.2. Reddit
+experiments on PPI are inductive.                               The Reddit data is too large to be handled well by cur-
+We compare against three baselines: Graph Convolu-              rent implementations of GCN or GAT. Hence, we use the
+tional Networks (GCN) (Kipf & Welling, 2017), Graph-            more scalable GraphSAGE as the base model for JK-Net.
+SAGE (Hamilton et al., 2017) and Graph Attention Net-           It has skip connections and different modes of node ag-
+works (GAT) (Velickovic´ et al., 2018).                         gregation. We experiment with Mean and MaxPool node
+                                                                aggregators, which take mean and max-pooling of a linear
+6.1. Citeseer & Cora                                            transformation of representations of the sampled neighbors.
+For experiments on Citeseer and Cora, we choose GCN as          Combining each of GraphSAGE modes with MaxPooling,
+the base model since on our data split, it is outperforming     Concatenation or LSTM-attention as the last aggregation
+GAT. We construct JK-Nets by choosing MaxPooling (JK-           layer gives 6 JK-Net variants. We follow exactly the same
+MaxPool), Concatenation (JK-Concat), or LSTM-attention          setting of GraphSAGE as in the original paper (Hamilton
+(JK-LSTM) as final aggregation layer. When taking the fi-       et al., 2017), where the model consists of 2 hidden layers,
+nal aggregation, besides normal graph convolutional layers,     each with 128 hidden units and is trained with Adam with
+we also take the first linear-transformed representation into   learning rate of 0.01 and no weight decay. Results are shown
+account. The final prediction is done via a fully connected     in Table 3.
+layer on top of the final aggregated representation. We split
+nodes in each graph into 60%, 20% and 20% for training,         Results. With MaxPool as node aggregator and Concat as
+validation and testing. We vary the number of layers from 1     layer aggregator, JK-Net achieves the best Micro-F1 score
+                 Representation Learning on Graphs with Jumping Knowledge Networks
+
+             JK  GraphSAGE  Maxpool  Concat  LSTM                                   JK  SAGE   MaxPool  Concat  LSTM
+Node                 0.950    0.953  0.955   0.950                    Node              0.644  0.658    0.667   0.721
+                     0.948    0.924  0.965   0.877                  Mean (10 epochs)    0.690  0.713    0.694   0.818
+     Mean                                                           Mean (30 epochs)    0.668  0.671    0.687   0.621
+   MaxPool                                                        MaxPool (10 epochs)
+
+Table 3. Results of GraphSAGE-based JK-Nets on Reddit. The        Table 4. Results of GraphSAGE-based JK-Net on the PPI data.
+baseline is GraphSAGE. Model performance is measured in Micro-    The baseline is GraphSAGE (SAGE). Each column, excluding
+F1 score. Each column shows the results of a JK-Net variant. For  SAGE, represents a JK-Net with different layer aggregation. All
+all models, the number of layers is fixed to 2.                   models use 3 layers, except for those with "", whose number
+                                                                  of layers is set to 2 due to GPU memory constraints. 0.6 is the
+among GarphSAGE and JK-Net variants. Note that the                corresponding 2-layer GraphSAGE performance.
+original GraphSAGE already performs fairly well with a
+Micro-F1 of 0.95. JK-Net reduces the error by 30%. The                     Model                     PPI
+communities in the Reddit dataset were explicitly chosen                    MLP                    0.422
+from the well-behaved middle-sized communities to avoid                     GAT                0.968 (0.002)
+the noisy cores and tree-like small communities (Hamilton             JK-Concat (2)            0.959 (0.003)
+et al., 2017). As a result, this graph is more regular than the        JK-LSTM (3)             0.969 (0.006)
+original Reddit data, and hence not exhibit the problems of       JK-Dense-Concat (2)          0.956 (0.004)
+varying subgraph structures. In such a case, the added flexi-     JK-Dense-LSTM (2)            0.976 (0.007)
+bility of the node-specific neighborhood choices may not be
+as relevant, and the stabilizing properties of concatenation      Table 5. Micro-F1 scores of GAT-based JK-Nets on the PPI data.
+instead come into play.                                           The baselines are GAT and MLP (Multilayer Perceptron). While
+                                                                  the number of layers for JK-Concat and JK-LSTM are chosen from
+6.3. PPI                                                          {2, 3}, the ones for JK-Dense-Concat and JK-Dense-LSTM are
+We demonstrate the power of adaptive JK-Nets, e.g., JK-           directly set to 2 due to GPU memory constraints.
+LSTM, with experiments on the PPI data, where the sub-
+graphs have more diverse and complex structures than those        F1 score after 30 epochs of training. Structure-aware node
+in the Reddit community detection dataset. We use both            adaptive models are especially beneficial on such complex
+GraphSAGE and GAT as base models for JK-Net. The im-              graphs with diverse structures.
+plementation of GraphSAGE and GAT are quite different:
+GraphSAGE is sample-based, where neighbors of a node              7. Conclusion
+are sampled to be a fixed number, while GAT considers
+all neighbors. Such differences cause large gaps in terms         Motivated by observations that reveal great differences in
+of both scalability and performances. Given that Graph-           neighborhood information ranges for graph node embed-
+SAGE scales to much larger graphs, it appears particularly        dings, we propose a new aggregation scheme for node rep-
+valuable to evaluate how much JK-Net can improve upon             resentation learning that can adapt neigborhood ranges to
+GraphSAGE.                                                        nodes individually. This JK-network can improve repre-
+For GraphSAGE we follow the setup as in the Reddit ex-            sentations in particular for graphs that have subgraphs of
+periments, except that we use 3 layers when possible, and         diverse local structure, and may hence not be well captured
+compare the performance after 10 and 30 epochs of training.       by fixed numbers of neighborhood aggregations. Interest-
+The results are shown in Table 4. For GAT and its JK-Net          ing directions for future work include exploring other layer
+variants we stack two hidden layers with 4 attention heads        aggregators and studying the effect of the combination of
+computing 256 features (for a total of 1024 features), and        various layer-wise and node-wise aggregators on different
+a final prediction layer with 6 attention heads computing         types of graph structures.
+121 features each. They are further averaged and input into
+sigmoid activations. We employ skip connections across            Acknowledgements
+intermediate attentional layers. These models are trained
+with Batch-size 2 and Adam optimizer with learning rate of        This research was supported by NSF CAREER award
+0.005. The results are shown in Table 5.                          1553284, and JST ERATO Kawarabayashi Large Graph
+Results. JK-Nets with the LSTM-attention aggregators              Project, Grant Number JPMJER1201, Japan.
+outperform the non-adaptive models GraphSAGE, GAT and
+JK-Nets with concatenation aggregators. In particular, JK-        References
+LSTM outperforms GraphSAGE by 0.128 in terms of micro-
+                                                                  Bruna, J., Zaremba, W., Szlam, A., and LeCun, Y. Spec-
+                                                                     tral networks and locally connected networks on graphs.
+Representation Learning on Graphs with Jumping Knowledge Networks
+
+  International Conference on Learning Representations         Huang, G., Liu, Z., Weinberger, K. Q., and van der Maaten,
+  (ICLR), 2014.                                                   L. Densely connected convolutional networks. In IEEE
+Cho, K., Van Merrie¨nboer, B., Bahdanau, D., and Bengio, Y.      Conference on Computer Vision and Pattern Recognition
+   On the properties of neural machine translation: Encoder-     (CVPR), pp. 2261­2269, 2017.
+   decoder approaches. In Workshop on Syntax, Semantics
+   and Structure in Statistical Translation, pp. 103­111,      Kawaguchi, K. Deep learning without poor local minima.
+   2014.                                                          In Advances in Neural Information Processing Systems
+Choromanska, A., LeCun, Y., and Arous, G. B. Open                (NIPS), pp. 586­594, 2016.
+   problem: The landscape of the loss surfaces of multilayer
+   networks. In Conference on Learning Theory (COLT),          Kearnes, S., McCloskey, K., Berndl, M., Pande, V., and
+   pp. 1756­1760, 2015.                                           Riley, P. Molecular graph convolutions: moving beyond
+Defferrard, M., Bresson, X., and Vandergheynst, P. Con-           fingerprints. Journal of computer-aided molecular design,
+  volutional neural networks on graphs with fast localized        30(8):595­608, 2016.
+   spectral filtering. In Advances in Neural Information
+  Processing Systems (NIPS), pp. 3844­3852, 2016.              Kingma, D. P. and Ba, J. Adam: A method for stochastic
+Gilmer, J., Schoenholz, S. S., Riley, P. F., Vinyals, O., and     optimization. arXiv preprint arXiv:1412.6980, 2014.
+   Dahl, G. E. Neural message passing for quantum chem-
+   istry. In International Conference on Machine Learning      Kipf, T. N. and Welling, M. Semi-supervised classifica-
+  (ICML), pp. 1273­1272, 2017.                                    tion with graph convolutional networks. International
+Grover, A. and Leskovec, J. node2vec: Scalable feature           Conference on Learning Representations (ICLR), 2017.
+   learning for networks. In ACM SIGKDD Conference
+   on Knowledge Discovery and Data Mining (KDD), pp.           Koh, P. W. and Liang, P. Understanding black-box predic-
+   855­864, 2016.                                                 tions via influence functions. In International Conference
+Hamilton, W. L., Ying, R., and Leskovec, J. Inductive             on Machine Learning (ICML), pp. 1885­1894, 2017.
+   representation learning on large graphs. In Advances
+   in Neural Information Processing Systems (NIPS), pp.        Leskovec, J. and Mcauley, J. J. Learning to discover social
+  1025­1035, 2017.                                                circles in ego networks. In Advances in Neural Informa-
+Hammond, D. K., Vandergheynst, P., and Gribonval, R.              tion Processing Systems (NIPS), pp. 539­547, 2012.
+  Wavelets on graphs via spectral graph theory. Applied
+   and Computational Harmonic Analysis, 30(2):129­150,         Leskovec, J., Lang, K. J., Dasgupta, A., and Mahoney, M. W.
+   2011.                                                          Community structure in large networks: Natural cluster
+He, K., Zhang, X., Ren, S., and Sun, J. Deep residual learn-      sizes and the absence of large well-defined clusters. In-
+   ing for image recognition. In Proceedings of the IEEE          ternet Mathematics, 6(1):29­123, 2009.
+   conference on computer vision and pattern recognition,
+   pp. 770­778, 2016a.                                         Li, Y., Tarlow, D., Brockschmidt, M., and Zemel, R. Gated
+He, K., Zhang, X., Ren, S., and Sun, J. Identity mappings         graph sequence neural networks. International Confer-
+   in deep residual networks. In European Conference on           ence on Learning Representations (ICLR), 2016.
+  Computer Vision, pp. 630­645, 2016b.
+Hochreiter, S. and Schmidhuber, J. Long short-term memory.     Lova´sz, L. Random walks on graphs. Combinatorics, Paul
+  Neural computation, 9(8):1735­1780, 1997.                       erdos is eighty, 2:1­46, 1993.
+Hoory, S., Linial, N., and Wigderson, A. Expander graphs
+   and their applications. Bulletin of the American Mathe-     Maehara, T., Akiba, T., Iwata, Y., and Kawarabayashi, K.-i.
+   matical Society, 43(4):439­561, 2006.                          Computing personalized pagerank quickly by exploiting
+Hoshen, Y. Vain: Attentional multi-agent predictive mod-          graph structures. Proceedings of the VLDB Endowment,
+   eling. In Advances in Neural Information Processing           7(12):1023­1034, 2014.
+  Systems (NIPS), pp. 2698­2708, 2017.
+                                                               Monti, F., Boscaini, D., Masci, J., Rodola`, E., Svoboda,
+                                                                 J., and Bronstein, M. M. Geometric deep learning on
+                                                                  graphs and manifolds using mixture model cnns. In IEEE
+                                                                 Conference on Computer Vision and Pattern Recognition
+                                                                 (CVPR), pp. 5425­5434, 2017.
+
+                                                               Perozzi, B., Al-Rfou, R., and Skiena, S. Deepwalk: Online
+                                                                  learning of social representations. In ACM SIGKDD
+                                                                 Conference on Knowledge Discovery and Data Mining
+                                                                 (KDD), pp. 701­710, 2014.
+                                   Representation Learning on Graphs with Jumping Knowledge Networks
+
+Pham, T., Tran, T., Phung, D. Q., and Venkatesh, S. Column
+   networks for collective classification. In AAAI Conference
+   on Artificial Intelligence, pp. 2485­2491, 2017.
+
+Sen, P., Namata, G., Bilgic, M., Getoor, L., Galligher, B.,
+   and Eliassi-Rad, T. Collective classification in network
+   data. AI magazine, 29(3):93, 2008.
+
+Shervashidze, N., Schweitzer, P., Leeuwen, E. J. v.,
+   Mehlhorn, K., and Borgwardt, K. M. Weisfeiler-lehman
+   graph kernels. Journal of Machine Learning Research,
+  12(Sep):2539­2561, 2011.
+
+Shuman, D. I., Narang, S. K., Frossard, P., Ortega, A., and
+  Vandergheynst, P. The emerging field of signal processing
+   on graphs: Extending high-dimensional data analysis
+   to networks and other irregular domains. IEEE Signal
+  Processing Magazine, 30(3):83­98, 2013.
+
+Tang, J., Qu, M., Wang, M., Zhang, M., Yan, J., and Mei,
+   Q. Line: Large-scale information network embedding. In
+  Proceedings of the International World Wide Web Confer-
+   ence (WWW), pp. 1067­1077, 2015.
+
+Tsonis, A. A., Swanson, K. L., and Roebber, P. J. What
+   do networks have to do with climate? Bulletin of the
+  American Meteorological Society, 87(5):585­595, 2006.
+
+Velickovic´, P., Cucurull, G., Casanova, A., Romero, A., Lio`,
+   P., and Bengio, Y. Graph attention networks. Interna-
+   tional Conference on Learning Representations (ICLR),
+   2018.
+
+Weisfeiler, B. and Lehman, A. A reduction of a graph
+   to a canonical form and an algebra arising during this
+   reduction. Nauchno-Technicheskaya Informatsia, 2(9):
+  12­16, 1968.
+                                       Representation Learning on Graphs with Jumping Knowledge Networks
+
+A. Proof for Theorem 1                                                                      Comment: ReLU is not differentiable at 0. For simplicity,
+                                                                                            we assume the (sub)gradient to be 0 at 0.
+Proof. Denote by fx(l) the pre-activated feature of hx(l), i.e.
+
+   1    ·     zN(x) Wlhz(l-1), for any l = 1..k, we have                                    B. Proof for Proposition 1
+deg(x)
+
+ h(xl)     =     1             · diag  1fx(l) >0             ·  Wl  ·            h(zl-1)    Proof. Let h(xfinal) be the i-th entry of hx(final), the fea-
+ hy(0)        deg(x)                                                              hy(0)     ture after layer aggregiation. For any node y, we have
+                                                                        zN (x)
+
+By chain rule, we get                                                                                                   hx(f inal)
+
+ hx(k)                          h(xk)            p                                          I (x, y) =                                      i
+ hy(0)                          hy(0)
+                 =                                                                                               i          h(y0)
+
+                     p=1                                                                             =                                          1
+
+                       1               1 · diag                 1fv(lpl) >0     · Wl                             i      h(xji)
+
+                 =                                                                                                                    i
+                    p=1 l=k deg(vpl )
+                                                                                                                          h(y0)
+
+                                                                                                                                          1
+
+Here,  is the total number of paths vpkvpk-1, ..., vp1, vp0 of                              where ji = argmax hx(l) . By Theorem 1, we have
+length k + 1 from node x to node y. For any path p, vpk is                                  l                       i
+node x, vp0 is node y and for l = 1..k - 1, vpl-1  N (vpl ).
+                                                                                                        E [I(x, y)] = clx · zl · E Ix(y)(l)
+As for each path p, the derivative                               hx(k)    represents a
+                                                                 h(y0)                                                                  l
+                                                                        p
+directed acyclic computation graph, where the input neurons                                 where Ix(y) is the l-step random walk probability at y, zl is
+are the same as the entries of W1, and at a layer l. We can                                 a normalization factor and clx is the fraction of entries of h(xl)
+express an entry of the derivative as                                                       being chosen by max-pooling. By Theorem 1, E Ix(y)(l)
+                                                                                            is equivalent to the l-step random walk probability at y
+            h(xk)   (i,j)          =   1             1              Zq   1   wq(l)          starting at x.
+            hy(0)   p                 l=k        deg(vpl )   q=1        l=k
+
+Here,  is the number of paths q from the input neurons                                      C. Visualization Results
+to the output neuron (i, j), in the computation graph of
+                                                                                            We describe the details of the heat maps and present more
+ hx(k)      . For each layer l, wql is the entry of Wl that is used                         visualization results. The colors of the nodes in the heat
+ h(y0)                                                                                      maps correspond to their probability masses of either the
+           p                                                                                influence distribution or random walk distribution as shown
+in the q-th path. Finally, Zq  {0, 1} represents whether the                                in Figure 6. As we see, the shallower the color is, the
+q-th path is active (Zq = 1) or not (Zq = 0) as a result of                                 smaller the probability mass. We use the same color for
+                                                                                            probabilities over 0.2 for better visual effects because there
+the ReLU activation of the entries of fv(pll)'s on the q-th path.                           are few nodes with influence probability masses over 0.2.
+                                                                                            Nodes with probability mass less than 0.001 are not shown
+Under the assumption that the Z's are Bernoulli random                                      in the heat maps.
+variables with the same probability of success, for all                                     In Table 6, we present more visualization results to compare
+                                                                                            the 1) influence distributions under GCNs and the random
+q, Pr(Zq = 1) = , we have E                                      h(xk)  (i,j)       = ·     walk distributions, 2) influence distributions under GCNs
+                                                                 hy(0)  p                   with residual connections and lazy random walk distribu-
+                                                                                            tions. The nodes being influenced and the random walk
+1           1    )  ·wq(l)  .  It  follows          that  E      hx(k)  = ·     1     Wl ·  starting node are labeled square. The influence distributions
+l=k     deg(vpl                                                  hy(0)          l=k         for the nodes in Figure 6 are computed according to Defi-
+                                                                                            nition 3.1, under the same trained GCN (Res) models with
+              1     1                 . We know that the k-step random                      2, 4, 6 layers respectively. We use the hyper-parameters as
+p=1                                                                                         described in Kipf & Welling (2017) for training the mod-
+              l=k deg(vpl )                                                                 els. The graph (dataset) is taken from the Cora citation
+walk probability at y can be computed by summing up the                                     network as described in section 6. We compute the random
+probability of all paths of length k from x to y, which is
+pexroabctalbyilityp=st1artinl1=gkadtegx(1vtplo)  . Moreover,        the random walk
+                                                 other nodes        sum up to 1. We
+know that the influence score I(x, z) for any z in expecta-
+tion is thus the random walk probability of being at z from
+x at the k-th step, multiplied by a term that is the same for
+all z. Normalizing the influence scores ends the proof.
+            Representation Learning on Graphs with Jumping Knowledge Networks
+
+2 layers / steps             4 layers / steps                                     6 layers / steps
+
+GCN / r.w.  Res / lazy r.w.  GCN / r.w.                          Res / lazy r.w.  GCN / r.w.  Res / lazy r.w.
+
+Table 6. Influence distributions for (more) nodes under GCN, GCN-Res, and random walk distributions
+
+Figure 6. Color and probability correpondency for the heat maps  draw information from nodes that are 3 or 4 hops away so as
+                                                                 to learn a better representation of the local community. On
+walk distributions according to Definition 3.2 on the graph      the other hand, as we see in Figure 8, a model with pre-xied
+G. The lazy ranndom walks all share the same lazy factor         effective range priors, which looks at 3 or 4-hop neighbors,
+0.4, i.e. there's an extra 0.4 probability of staying at the     may happen to draw much information from less relevant
+current node at each step. This probability is chosen for        neighbors and thus cannot learn the right representations,
+visual comparison with the GCN-ResNet. Note that the             which are necessary for the correct prediction. In the sub-
+GCN and random walk colors may differ for nodes that             graph structures where the random walk expansion explodes
+have particularly large degrees because the models we are        rapidly, models with 3 or 4 prefixed layers are essentially
+running follow Equation 2, which assigns less weight to          taking into account every node. Such global representations
+nodes that have larger degrees, rather than Equation 3. The      might not be ideal for the prediction for the node. In another
+visualization in Figure 5 has the same setting as mentioned      scenario, despite possessing the locally bounded treewidth
+above. It is trained for the Cora dataset with a 6-layer JK      structure, because of the "bridge-like" structures, looking at
+Net with maxpooling layer aggregation.                           distant nodes might imply drawing information from a com-
+Next, we demonstrate subgraph structures where GCN mod-          pletely different community, which would act like noises
+els with 2 layers tend to make misclassification, whereas        and influence the prediction results.
+models with 3 or 4 layers are able to make the correct pre-
+diction and vice versa, with real dataset. These visualization
+results further complement and support the theory illustrated
+in Figure 1 and Theorem 1. As we see in Figure 7, a model
+with pre-fixed effective range priors, which looks at 2-hop
+neighbors, tends to make incorrect prediction if the local
+subgraph structure is tree-like (bounded treewidth). Thus, it
+would be desirable to look beyond the direct neighbors and
+Representation Learning on Graphs with Jumping Knowledge Networks
+
+(a) 2-layer  (b) 3-layer  (c) 4-layer
+(d) 2-layer  (e) 3-layer  (f) 4-layer
+(g) 2-layer  (h) 3-layer  (i) 4-layer
+
+(j) 2-layer  (k) 3-layer  (l) 4-layer
+
+Figure 7. Subgraph structures where 2-layer GCNs make misclassification, whereas 3 and 4-layer GCNs make the correct prediction.
+Representation Learning on Graphs with Jumping Knowledge Networks
+
+(a) 2-layer  (b) 3-layer  (c) 4-layer
+
+(d) 2-layer  (e) 3-layer  (f) 4-layer
+
+(g) 2-layer  (h) 3-layer  (i) 4-layer
+
+(j) 2-layer  (k) 3-layer  (l) 4-layer
+
+Figure 8. Subgraph structures where 3, 4-layer GCNs make misclassification, whereas 2-layer GCNs make the correct prediction.
+

@@ -1,0 +1,1648 @@
+                                                   Verifiable Rewards Beyond Math and Code: Lightweight
+                                          Corpus-Grounded Process Supervision for Factual Question Answering
+
+                                        Shicheng Fan Haochang Hao Dehai Min Weihao Liu Philip S. Yu Lu Cheng
+                                                                                University of Illinois Chicago
+
+                                                 {sfan25, hhao, dmin10, wliu681, psyu, lucheng}@uic.edu
+
+                                                                             Equal contribution. Correspondence to: sfan25@uic.edu
+
+                                                        Abstract                                 Task                 Reward signal                     Properties
+
+arXiv:2605.29648v1 [cs.CL] 28 May 2026                                                           Math reasoning       Calculator / symbolic check       Programmatic
+                                                                                                 GSM8K, AIME-25, ...                                    Deterministic, low-cost
+                                        Applying reinforcement learning to improve                                    Deterministic answer match
+                                        factual accuracy in knowledge-intensive ques-
+                                        tion answering faces a reward design dilemma.            Code generation       Compiler / unit tests                    Executable
+                                        Response-level rewards provide only coarse               HumanEval, SWE...    Execution-based feedback          Deterministic, low-cost
+                                        supervision and cannot distinguish correct
+                                        from incorrect statements within a reasoning                            Factual QA lacks scalable sentence-level rewards
+                                        trace. Sentence-level alternatives offer finer-
+                                        grained feedback, but typically rely on NLI ver-            Factual QA        NLI / LLM judge / RAG verifier     Neural model verifier
+                                        ifiers, LLM judges, or knowledge-verification            existing methods         Neural verifier per sentence  High cost per sentence
+                                        pipelines that are expensive to deploy at RL
+                                        scale and often unreliable for rare-entity facts,         Factual QA          Corpus co-occurrence signal           Corpus-indexed
+                                        where accurate reward signals are especially im-         CorVer (ours)          0.5B extractor + Infini-gram       No neural verifier
+                                        portant. We propose CorVer1 (Corpus Verify),                                                                    Low cost per sentence
+                                        a lightweight, plug-in-ready process reward
+                                        that replaces neural verifiers with a corpus-            Figure 1: Verifiable rewards beyond math and code.
+                                        grounded signal derived from Wikipedia co-               Math and code tasks enjoy programmatic, determin-
+                                        occurrence statistics. CorVer assigns sentence-          istic reward signals (calculators, compilers). Prior
+                                        level credit and maps it to token-level advan-           sentence-level factuality methods rely on neural verifica-
+                                        tages via a simple alignment, requiring only             tion pipelines which become costly at RL scale. CorVer
+                                        a 0.5B extractor and a single corpus lookup              fills this gap with a corpus-indexed co-occurrence statis-
+                                        per sentence. Across 30 (model, benchmark)               tic that requires no neural verifier in the reward loop.
+                                        cells spanning six instruction-tuned models (3B
+                                        to 14B) and five QA benchmarks, CorVer im-               provide cheap, deterministic reward signals for re-
+                                        proves over the raw baseline for every cell, with        inforcement learning (Figure 1), factual QA lacks
+                                        an average TriviaQA gain of +4.1 pp. It also             a scalable sentence-level reward. Recent methods
+                                        outperforms four neural-verifier baselines in 18         address this gap with neural verifiers: FSPO (Li
+                                        of 20 cells under their feasible configurations,         and Ng, 2025) uses NLI entailment, KnowRL (Ren
+                                        while training 4.8 to 8.4× faster.                       et al., 2025) verifies atomic facts against a knowl-
+                                                                                                 edge base, and FaithRL (Nie et al., 2026) employs
+                                        1 Introduction                                           a process reward model. These methods improve
+                                                                                                 credit assignment but introduce a reward cost bot-
+                                        Large language models frequently produce fac-            tleneck: each sentence in each of G rollouts re-
+                                        tually incorrect answers on knowledge-intensive          quires a neural verifier call. They also face a cir-
+                                        question answering (QA) tasks (Petroni et al., 2019;     cularity concern: neural verifiers rely on the same
+                                        Kandpal et al., 2023). Kang and Choi (2023)              parametric knowledge as the policy, so they share
+                                        showed that this failure is systematic: LLM fac-         the co-occurrence blind spots identified by Kang
+                                        tual recall is tightly coupled with subject-object       and Choi (2023) and are least informative where
+                                        co-occurrence frequency in pretraining corpora,          the policy most needs guidance.
+                                        so facts involving rare entities are disproportion-
+                                        ately misrecalled. Unlike mathematical reasoning            The co-occurrence regularity behind the prob-
+                                        or code generation, where programmatic verifiers         lem, however, also suggests a solution. Min et al.
+                                                                                                 (2025) showed that querying subject-object co-
+                                        1Code:  https://github.com/shichengf/                    occurrence against a Wikipedia index can reliably
+                                                                                                 flag unsupported claims at inference time, and our
+                                        CorVer (coming soon).                                    own annotation study confirms that sentence-level
+                                                                                                 factual correctness increases monotonically with
+                                                                                                 co-occurrence count (Figure 5).
+
+                                                                                              1
+   We propose CorVer(Figure 1), which turns the            also been applied to faithfulness in small reason-
+co-occurrence signal into a training-time process          ing models (Nie et al., 2026). The same credit-
+reward, directly addressing both bottlenecks above.        assignment issue appears in factual QA, where a re-
+The reward is computed by querying a Wikipedia             sponse may state the correct answer in one sentence
+co-occurrence index built with Infini-gram (Liu            and add unsupported context in another. CorVer
+et al., 2024) with subject-object pairs extracted          follows the process-supervision intuition without
+from each generated sentence; the per-call cost is         training a PRM or using stepwise labels, construct-
+one 0.5B extractor forward pass plus one indexed           ing its local signal from Wikipedia co-occurrence
+lookup, far below a neural verifier. Because the           statistics.
+signal is a corpus statistic rather than a model out-
+put, it does not share the parametric blind spots          Factuality Rewards in RL. Recent factuality-
+that make neural verifiers least informative on rare-      aware RL enriches the reward with external knowl-
+entity facts. The per-sentence score is mapped             edge or verification. FoRAG uses retrieval-
+to token-level returns through a token-to-sentence         augmented evidence and fine-grained factuality re-
+alignment following Li and Ng (2025), so differ-           wards for long-form QA (Cai et al., 2024). RLFH
+ent sentences in the same completion can receive           traces statement-level factual signals back to model
+opposing gradients, providing dense per-sentence           tokens for hallucination mitigation (Wen et al.,
+supervision without per-call neural cost.                  2025). KnowRL integrates knowledge verifica-
+                                                           tion into the RL loop (Ren et al., 2025). FSPO
+   Our contributions are as follows. (i) We propose        uses step-wise NLI verification to penalize un-
+a corpus-grounded sentence-level reward that re-           supported reasoning sentences (Li and Ng, 2025).
+quires only a 0.5B extractor and a single corpus           Chen et al. (2025) train factual reasoning policies
+lookup per sentence, enabling per-sentence credit          with reinforcement learning. These methods share
+assignment without any neural verifier. (ii) We            a practical bottleneck: retrieval, neural verifica-
+demonstrate consistent improvements across all             tion, and LLM-as-judge scoring become expensive
+30 (model, benchmark) cells spanning six models            when every prompt yields many completions with
+(3B to 14B) and five factual QA benchmarks, out-           multiple factual sentences each. CorVer instead
+performing four neural-verifier baselines in 18 of         repurposes the inference-time co-occurrence sig-
+20 cells under their feasible configurations. (iii)        nal of QuCo (Min et al., 2025) as a training-time
+Our reward computation is 4.8 to 8.4× faster than          GRPO reward, querying an Infini-gram index (Liu
+all baselines, enabling full-scale rollout training in     et al., 2024) for subject-object co-occurrence in
+settings where neural-verifier rewards are computa-        Wikipedia. The resulting count is a lightweight
+tionally prohibitive.                                      factual support signal rather than a truth label,
+                                                           with no retrieval or entailment in the reward loop.
+2 Related Work                                             Inference-time grounding via RAG (Lewis et al.,
+                                                           2020) or FActScore (Min et al., 2023) is orthogonal
+Outcome-Level RL and Process Supervision.                  to this training-time signal.
+RL from human or model feedback is a standard
+way to align language models with task and prefer-         3 Method
+ence signals (Ouyang et al., 2022; Schulman et al.,
+2017). GRPO (Shao et al., 2024) removes the ex-            3.1 Preliminaries
+plicit value model by normalizing rewards within a
+group of sampled completions, and has driven re-           Let x denote a factual question and
+cent gains in reasoning-capable models (DeepSeek-          y = (y1, . . . , yT ) a completion sampled
+AI et al., 2025). In factual QA, however, standard         from the policy . Each y follows a
+GRPO is typically outcome-level: a single correct-         think . . . /thinkanswer . . . /answer
+ness score is assigned uniformly to all generated          template. Both blocks are stripped of their
+tokens. Process supervision addresses outcome-             tags and parsed jointly into a sequence
+only feedback by scoring intermediate reasoning            of m sentences s1, . . . , sm. We write
+steps. Process reward models have been influential          : {1, . . . , T }  {0, 1, . . . , m} for the
+in mathematical reasoning, where step-level labels         token-to-sentence alignment, with (t) = i when
+identify local errors invisible to a final-answer re-      token yt belongs to sentence si and (t) = 0
+ward (Lightman et al., 2023). Step-level RL has            on tag positions and inter-sentence whitespace.
+                                                           Construction details of  are in Appendix B.1.
+
+                                                        2
+1. Group Sampling                                                2. Sentence-Level Co-occurrence Reward (CorVer)
+        Question:
+                                       Rollout                   <think> The question asks ... </think>
+  when did table tennis                                          <answer> Table tennis originated ... </answer>
+  become an olympic sport?                           ...
+                               LLM                                                                               Triplet Extractor
+                                              Sampled Responses                                                   ( Lightweight )
+
+3. Response-Level Reward                                                       Sentence-Level Reward ...
+
+        <think> The question asks ... </think>                                  : (table tennis, originated in, England)  Positive reward
+        <answer> Table tennis originaxted ... </answer>
+                                                                                   Co-occurrence Count: 2629
+Format  String-match                   Response-level               Corpus
+Check   Answer judge                        reward               Index Engine  +1: (George Brydges Moresby, evolved in, England)
+
+                                                                               Co-occurrence Count: 0                     Negative reward
+
+4. Per-token rewards calculation                                               +2: (table tennis, became an Olympic sport at, 1988 Seoul Olympics)
+
+        ...                 x                                                  Co-occurrence Count: 155                   Positive reward
+
+                                                                                                            ...
+
+Figure 2: CorVer pipeline. Each sentence is scored fCooruWnt:i3kipedia co-occurrence via an Infini-gram index. The
+per-sentence reward is mapped to token-level returns through  and combined with response-level signals in a
+policy-gradient update (instantiated with GRPO in our eCxpoeurnimt:e0nts).
+
+We write f , j, c for the weights of the three                      document co-occurrence. A piecewise-constant
+                                                                    map turns the count into a small auxiliary reward:
+reward  channels  below. String-match  Figure 2 illustrates the
+
+                  Answer judge
+
+end-to-end pipeline: §3.2 details the sentence-level
+
+                                                                                       
+
+co-occurrence reward (step 2 in the figure), §3.3                                      0, ci = 0,
+
+describes the response-level rewards (step 3), and                                     
+
+§3.4 defines the per-token return that combines                                ric  =  1,                        0 < ci < 1,               (2)
+                                                                                       2,                        1  ci < 2,
+both components (step 4). Details of the RL                                            
+
+                                                                                       
+
+algorithm and hyperparameter settings are in §4.                                       3, ci  2,
+
+3.2 Sentence-Level Co-occurrence Reward                             where 0 < 1  2 < 3 are bounded re-
+                                                                    ward levels and 1 < 2 are integer count thresh-
+The reward pipeline consists of three steps: ex-                    olds. The empirical probability that a sentence is
+tracting a subject-object pair from each sentence,                  factually correct increases monotonically with ci
+reducing each entity to its content words, and sub-                 (Figure 5 in §4), confirming that co-occurrence
+mitting the union of these words as a word-level                    count serves as a directionally reliable proxy for
+AND query to a Wikipedia co-occurrence index.                       sentence-level correctness. The piecewise mapping
+The extractor is QuCo-extractor-0.5B (Min et al.,                   keeps the co-occurrence term bounded so that it
+2025), a Qwen2.5-0.5B-Instruct model fine-tuned                     shapes sentence-level credit without overriding the
+for triplet extraction. From the (head, relation, tail)             response-level correctness reward. Concrete values
+triplets it produces, we retain the first valid one                 for (0, . . . , 3, 1, 2) and sensitivity analysis are
+(i.e., both head and tail are non-empty and non-                    in §4. Computing ric requires only a 0.5B extrac-
+pronominal) and discard the relation, since only                    tor forward pass and a single indexed CNF lookup
+the entity pair feeds the query. Each entity is re-                 per sentence, with no neural reward model; the
+duced to its content words to absorb surface-form                   Wikipedia snapshot is queried only at training time,
+variation across Wikipedia, and the resulting co-                   so CorVer adds no inference cost (§5.3).
+occurrence count is
+                                                                    3.3 Response-Level Rewards
+         ci = countW (w1  · · ·  wk) , (1)
+                                                                    CorVer combines the sentence-level signal
+where W is a fixed Wikipedia snapshot (Ap-                          with two response-level rewards. The judge
+pendix B.1) and w1, . . . , wk are the distinct con-                reward Rj(x, y) scores each completion against
+tent words derived from (eis, eoi ). The query is                   the ground-truth answer set via lenient string-
+served by an Infini-gram engine (Liu et al., 2024)                  match grading, mapping the three-valued
+as a CNF count over Wikipedia token positions                       label {GOOD, BAD, NA} (correct, wrong,
+within a bounded 1,000-token window, following                      not-attempted / refusal) to scalar rewards
+the passage-level setting of Min et al. (2025); ci                  {rgood, rbad, rna} with rgood > 0 > rbad, rna.
+measures position-level co-occurrence rather than                   The format reward Rf (y)  {rf+mt, rf-mt} checks
+
+                                                                 3
+the presence of the think / answer tags. Con-                    FoRAG (Cai et al., 2024) (PPO with subclaim-
+crete values, grading rules, and answer extraction               verified sentence reward), RLFH (Wen et al.,
+are in §4 and Appendix A.2.                                      2025) (PPO with LLM-judge statement reward),
+                                                                 FSPO (Li and Ng, 2025) (GRPO with NLI sen-
+3.4 Token-to-Sentence Alignment and                              tence scoring), and KnowRL (Ren et al., 2025)
+      Stepwise Advantage                                         (GRPO with atomic-fact verification). All four
+                                                                 invoke neural verifiers or external services per sen-
+The sentence-level co-occurrence reward ric and the              tence, making their cost prohibitive at the CorVer
+response-level rewards enter a unified per-token re-             configuration; we therefore train them under re-
+turn through the alignment . Define the response-                duced configurations (Appendix A.1; structural rea-
+level return                                                     son in §5.3).
+
+       Rr(x, y) = j Rj(x, y) + f Rf (y), (3)                        Metrics. Factual QA accuracy under substring
+                                                                 plus alias matching with lenient regex parsing.
+and the per-token raw return                                     NA rate, format-success rate, and average answer
+                                                                 length serve as diagnostics.
+Rt(x, y) = Rr(x, y) + 1[(t) > 0] · c · rc (t).
+                                                         (4)        Implementation details. For the co-occurrence
+                                                                 reward (Eq. 2) we set (0, 1, 2, 3) =
+A token at (t) = 0 (tag positions, inter-sentence                (-0.3, -0.1, 0.0, +0.1) and (1, 2) = (5, 20); the
+whitespace) receives only Rr. A token inside any                 thresholds sit at the two largest precision transitions
+sentence si, whether in the think or answer                      in the empirical calibration curve (+17 pp and +8
+block, additionally receives the local shaping term              pp; see §6.1). The response-level judge reward
+c · ric. From the per-token raw returns {Rt(g)}Gg=1,             maps {GOOD, BAD, NA} to (+2.0, -1.0, -1.0);
+the policy is updated by a standard clipped-                     the format reward uses (±1.0); channel weights
+surrogate step over group-normalized token-level                 are f = j = c = 1.0. At these scales the max-
+advantages (Shao et al., 2024; Li and Ng, 2025),                 imum per-completion co-occurrence contribution
+where the masked per-completion mean serves                      (m¯ sent · 3  0.3) stays an order of magnitude be-
+as the within-group baseline. Consequently, two                  low the judge reward swing (rgood - rbad = 3.0),
+sentences within the same response can receive                   so co-occurrence shapes credit without overriding
+opposite local advantages whenever one is well-                  correctness. Sensitivity sweeps over 0 and win-
+supported and the other is not. Setting c = 0                    dow size are in Appendices B.2 and B.1; the triplet-
+recovers a response-level baseline (algorithm de-                extraction rule is compared in §6.4 (mechanism
+tails in Appendix B.4).                                          details in Appendix B.3).
+
+4 Experimental Setup                                                CorVer trains directly on the raw instruction-
+                                                                 tuned model without SFT cold-start (Appendix D,
+Benchmarks and models. We evaluate on                            L1). The learning-zone filter retains prompts
+five knowledge-intensive QA benchmarks: Triv-                    with ncorrect  [1, G-1] over G = 16 genera-
+iaQA (Joshi et al., 2017) (17,944 questions),                    tions; small models (3B/4B) additionally use fully-
+NQ-Open (Kwiatkowski et al., 2019) (3,610),                      mastered anchor questions (Appendix D, L3). All
+PopQA (Mallen et al., 2023) (14,267), Sim-                       runs use LoRA (Hu et al., 2021) (r/ = 128/256),
+pleQA (Wei et al., 2024) (4,326), and Truth-                     G = 16, max length 1024, prompt-batch 24, and
+fulQA (Lin et al., 2022) (817). Training prompts                 100 GRPO steps (Appendix C.1). Per-model learn-
+are drawn only from the NQ-Open train split and                  ing rates and KL are in Appendix A.1.
+WebQuestions (Berant et al., 2013); all other bench-
+marks are strictly out-of-distribution. Our headline             5 Experiments
+group (Llama-3.1-8B-Instruct (Grattafiori et al.,
+2024), Qwen3-8B (Yang et al., 2025)) drives the                  5.1 Main Results
+main comparison, ablation, and cost analysis. The
+scaling group (§5.2) extends to six models from 3B               Table 1 compares CorVer with four factuality-RL
+to 14B across Llama-3, Qwen3, and OLMo (OLMo                     pipelines across four base models (3B to 8B). The
+et al., 2025) families. Data processing details are              baselines are run under reduced configurations
+in Appendices A.2 and A.4.                                       (smaller LoRA rank and G; exact settings in Ap-
+                                                                 pendix A.1, structural reason in §5.3). Conse-
+   Baselines. We compare against Raw (unmodi-                    quently, the comparison evaluates which reward
+fied generation) and four factuality-RL baselines:
+
+                                                              4
+Table 1: Factual QA accuracy (%) across five benchmarks and four base models (3B to 8B). Baselines use reduced
+configurations detailed in §4. Bold marks the best per column within each model block. CorVer rows show the gain
+over the best baseline per cell (red: CorVer leads; green: baseline leads).
+
+Model         Method          TriviaQA       NQ-Open                PopQA        SimpleQA      TruthfulQA         Avg.
+Llama-3.2-3B
+Llama-3.1-8B  Raw               55.39          34.13                 15.92          1.55           5.63          22.52
+Qwen3-4B      FoRAG             60.66          37.15                 22.53          2.22           5.20          25.55
+Qwen3-8B      RLFH              60.66          35.90                 22.42          2.06           5.28          25.26
+              FSPO              22.28          10.61                  4.44          0.37           3.92           8.32
+              KnowRL            49.60          30.53                 15.28          1.32           5.63          20.47
+              CorVer (ours)  62.24 (+1.58)  43.41 (+6.26)         23.75 (+1.22)  2.57 (+0.35)  7.47 (+1.84)   27.89 (+2.34)
+
+              Raw               71.86          40.66                 28.85          5.20           6.61          30.64
+              FoRAG             69.40          42.71                 32.17          5.32           6.31          31.18
+              RLFH              69.55          42.44                 32.16          5.76           6.12          31.21
+              FSPO              63.43          39.25                 23.54          5.12           8.63          27.99
+              KnowRL            68.41          38.53                 25.45          2.33           6.00          28.14
+              CorVer (ours)  76.52 (+4.66)  48.34 (+5.63)         35.30 (+3.13)  5.92 (+0.16)  10.28 (+1.65)  35.27 (+4.06)
+
+              Raw               51.14          24.65                 17.51          2.52           8.45          20.85
+              FoRAG             52.65          25.43                 18.49          3.07          10.13          21.95
+              RLFH              52.50          25.12                 18.40          3.08           9.64          21.75
+              FSPO              52.88          25.65                 18.76          3.05          10.26          22.12
+              KnowRL            40.90          17.30                 10.20          0.30           5.10          14.76
+              CorVer (ours)  53.77 (+0.89)  26.59 (+0.94)         19.33 (+0.57)  3.12 (+0.04)  10.65 (+0.39)  22.69 (+0.57)
+
+              Raw               62.84          29.61                 20.34          2.57           6.49          24.37
+              FoRAG             61.34          29.81                 21.80          3.07           5.42          24.29
+              RLFH              61.39          29.42                 22.03          3.31           6.16          24.46
+              FSPO              61.81          29.67                 22.09          3.03           6.65          24.65
+              KnowRL            60.92          28.45                 16.97          2.03           5.88          22.85
+              CorVer (ours)  63.99 (+1.15)  32.80 (+2.99)         21.83 (-0.26)  2.73 (-0.58)  9.18 (+2.53)   26.11 (+1.46)
+
+designs support deployable configurations rather                                   TriviaQA NQ-Open PopQA SimpleQA TruthfulQA  10Accuracy: CorVer Raw (pp)
+than enforcing matched computational budgets.
+                                                                  Llama-3.2-3B +6.85 +9.28 +7.83 +1.02 +1.84
+   Against Raw alone, CorVer improves every cell.                 Qwen3-4B +2.63 +1.94 +1.82 +0.60 +2.20 8
+The gains are largest on Llama-3.1-8B (+4.06
+pp average) and Llama-3.2-3B (+2.34 pp), with                     Llama-3.1-8B +4.66 +7.68 +6.45 +0.72 +3.67 6
+NQ-Open consistently showing the strongest per-
+benchmark improvement across all four models.                     Qwen3-8B +1.15 +3.19 +1.49 +0.16 +2.69 4
+Among the four prior methods, FoRAG and RLFH
+gain modestly at 3B and 4B but degrade both 8B                    OLMo-2-13B +5.71 +5.07 +5.48 +1.27 +3.30 2
+models on TriviaQA. FSPO collapses on Llama-                       Qwen3-14B +3.77 +6.37 +5.93 +2.06 +2.08 0
+3.2-3B and otherwise tracks Raw. KnowRL never
+beats Raw, consistent with the circularity argued                 Figure 3: Cross-model scaling of CorVer gains over
+in §1. The two cells where a baseline outranks                    Raw across six models (3B to 14B) and five bench-
+CorVer are on Qwen3-8B and within noise (FSPO                     marks. Every cell is positive; full accuracy tables in
+on PopQA by 0.26 pp, RLFH on SimpleQA by                          Appendix C.2.
+0.58 pp).
+                                                                  ure 3 reports the per-cell CorVer-minus-Raw gain
+   Corpus co-occurrence suffices as reward signal.                for six instruction-tuned base models from 3B to
+                                                                  14B across the same five benchmarks. The under-
+    Finding 1                                                     lying accuracies and NA-rate diagnostics are in
+                                                                  Appendix C.2.
+   CorVer outperforms the baselines in 18 of 20 (model,
+   benchmark) cells under feasible training configurations,          All 30 cells of Figure 3 show improvements over
+   replacing neural verifiers with a single corpus lookup per     Raw. Across datasets, the largest gains concentrate
+   sentence.                                                      on TriviaQA, NQ-Open, and PopQA; SimpleQA
+                                                                  and TruthfulQA gains are smaller but consistently
+5.2 Cross-Model Scaling                                           positive, both benchmarks being intrinsically hard
+                                                                  for models in this 3B­14B range (raw accuracy
+We next examine whether the gain over Raw trans-                  below 10% on every cell) so the room for improve-
+fers across scales, families, and benchmarks. Fig-                ment is narrow. Across model families, the accu-
+
+                                                               5
+racy gain follows two distinct NA-rate patterns: on              Avg training time (h)  30  8.4× slower
+Qwen3, refusal drops sharply, so the gain reflects
+correctly answering questions Raw previously re-                                            6.6× slower           7.8× slower
+fused rather than indiscriminate guessing (Qwen3-                                                    4.8× slower
+8B decomposition in Appendix C.3); on Llama,                                            20
+refusal rises modestly, so the gain combines higher
+recall on attempts with selective abstention else-                                      10
+where.                                                                                         3.2h
+
+   Generalizable reward across families and scales.                                      0 CorVer FoRAG RLFH FSPO KnowRL
+
+    Finding 2                                                    Figure 4: Average training time per method (hours)
+                                                                 across four base models. Bars annotate each baseline's
+   All 30 (model, benchmark) cells show improvement be-          slowdown relative to CorVer. Detailed breakdowns in
+   cause the reward depends on corpus statistics rather than     Appendix C.4.
+   model-specific behavior, thereby requiring no per-model
+   calibration.
+
+5.3 Reward Computation Cost                                      P(correct) (\%)        80
+
+RL training at the CorVer configuration issues on                                       60
+the order of
+                                                                                        40  P(correct ci) (Wilson 95\% CI)
+Nsteps·B ·G·m¯ sent  100·24·16·3  1.2×105                                                   Reward-mapping boundary
+                                                         (5)                            20  Bucket split at ci=10 (unused)
+
+sentence-level reward calls per training run (100                                           ci=0Co-oc1c--u4rrenc5e--9coun1t0-b-1u9cketci 20
+steps, B = 24 prompts per step, G = 16 rollouts
+per prompt, m¯ sent  3 sentences per completion;                 Figure 5: Empirical P (correct | ci) across five co-
+illustrative magnitude, not an exact count). At this             occurrence buckets (N = 700 manually annotated sen-
+density, per-call cost becomes the dominant factor.              tences). Green dashed: reward-mapping boundaries in
+Any reward mechanism that invokes a neural model                 Eq. (2); grey dotted: unused split at ci = 10. Error
+or external service per call becomes a structural                bars are Wilson 95% CIs; per-bucket counts in Table 13
+bottleneck, whereas CorVer's 0.5B forward pass                   (Appendix B.5).
+combined with a single Infini-gram lookup remains
+millisecond-scale. Figure 4 reports the resulting                with sentence-level factual correctness. Figure 5
+end-to-end training time for each method across                  tests this on 700 manually annotated sentences.
+four base models.
+                                                                    The empirical P (correct | ci) increases mono-
+   CorVer averages 3.2 training hours across the                 tonically from 23% at ci = 0 to 81% at ci  20,
+four models, against 14.5 to 29.5 hours for the four             confirming that co-occurrence count is a direction-
+baselines (4.8 to 8.4× slower). FSPO (8.4×) and                  ally reliable proxy for sentence correctness. The
+KnowRL (7.8×) carry the heaviest per-call cost                   two largest precision jumps (+17 pp at ci = 5
+(NLI verifier, atomic-fact pipeline); RLFH is the                and +8 pp at ci = 20) determine the thresholds 1
+lowest-cost baseline but still 4.8× slower. The gap              and 2 in Eq. (2); a candidate intermediate split at
+widens on the largest models: FSPO on Qwen3-                     ci = 10 produces only +3 pp and is not adopted.
+8B reaches 65.8 hours, KnowRL 36.4 hours (Ap-
+pendix C.4).                                                     6.2 Ablation Study
+
+Dense rewards remain cheap.  Finding 3                           We hold the base model fixed at Llama-3.1-8B-
+                                                                 Instruct and remove one component at a time. Ta-
+The per-sentence reward requires only a 0.5B forward             ble 2 reports four variants; the full configuration
+pass and one index lookup, keeping cost constant as              outperforms every ablation on every benchmark.
+rollout scale grows.
+                                                                    A1 (no QuCo, vanilla GRPO) drops Trivi-
+6 Analysis and Discussion                                        aQA from 76.52 to 71.3, confirming that the
+                                                                 co-occurrence signal contributes beyond what
+6.1 Reward Signal Calibration                                    response-level correctness alone provides. A2 (no
+A prerequisite for using co-occurrence count as a                judge) nearly matches the full method on TriviaQA
+reward signal is that it correlates monotonically
+
+                                                              6
+Table 2: Ablation of CorVer components on Llama-3.1-8B-Instruct. A1 drops the co-occurrence signal entirely
+(vanilla GRPO); A2 drops the answer-correctness signal; A3 collapses per-sentence rewards into a response-level
+scalar (losing alignment); A4 removes the learning-zone filter. Bold marks the best value per column.
+
+Variant                                               TriviaQA NQ-Open PopQA SimpleQA TruthfulQA
+
+Raw                                                      71.86 40.66 28.85 5.20               6.61
+CorVer (full)                                            76.52 48.34 35.30 5.92               10.28
+
+A1: - QuCo (vanilla GRPO; judge + format only) 71.3            45.9     34.6   5.4            6.8
+
+A2: - Judge (per-token QuCo + format only)               76.1  42.6     31.7   4.8            7.1
+
+A3: - per-token alignment (averaged QuCo scalar) 72.9          46.3     34.9   5.8            6.6
+
+A4: - self-filter (full 9,680-question pool)             75.0  46.0     33.5   5.1            8.0
+
+Table 3: PopQA accuracy (%) by subject-entity popularity quartile (monthly Wikipedia pageviews from Mallen
+et al. (2023)). n: questions per bucket. Items without a pageview field (1,201 of 14,267) are excluded.
+
+         Model                  Quartile       Pageviews             n  Raw    CorVer    
+         Llama-3.1-8B-Instruct
+                                Q1 (rare)         2­224         3,257   18.94  24.41   +5.47
+         OLMo-2-13B-Instruct    Q2              224­914         3,277   16.51  21.64   +5.13
+                                Q3             914­5,293        3,265   24.50  32.89   +8.39
+                                Q4 (popular)  5,293­15.1M       3,267   57.06  64.55   +7.50
+                                All                            13,066   29.25  35.87   +6.62
+                                                    --
+                                Q1 (rare)                       3,257   15.63  19.31   +3.68
+                                Q2                2­224         3,277   13.27  17.61   +4.33
+                                Q3              224­914         3,265   23.74  29.25   +5.51
+                                Q4 (popular)   914­5,293        3,267   50.60  59.63   +9.03
+                                All           5,293­15.1M      13,066   25.81  31.45   +5.64
+
+                                                    --
+
+(76.1), where the dense QuCo signal alone car-           for rare entities where hallucination is most se-
+ries enough correctness pressure, but drops sharply      vere, and a signal-density hypothesis, in which the
+on NQ-Open (42.6 vs 48.34) and PopQA (31.7               largest gains occur for popular entities where co-
+vs 35.30), so the judge remains essential outside        occurrence statistics are denser. We evaluate these
+TriviaQA. A3 keeps the same total QuCo reward            hypotheses on PopQA, which provides a monthly
+but delivers it as a response-level scalar, removing     Wikipedia pageview field for each question (Mallen
+per-token alignment. Despite receiving identical         et al., 2023). Table 3 reports the accuracies of Raw
+reward magnitude, A3 recovers only a fraction of         and CorVer across four popularity quartiles (Q1
+the full method's gain (72.9 vs 76.52 on TriviaQA,       rarest, Q4 most popular) on Llama-3.1-8B-Instruct
+46.3 vs 48.34 on NQ-Open). A4 (no learning-zone          and OLMo-2-13B-Instruct.
+filter) produces the smallest average drop, a sec-
+ondary contribution.                                        Every (model, quartile) cell shows improve-
+                                                         ment, and the per-quartile shape favors the signal-
+   Comparing A1 and A3 is particularly revealing:        density prediction. For OLMo, the gain in-
+A3 adds the QuCo signal on top of A1 but without         creases monotonically with popularity (+3.68 
+per-token alignment, and improves only marginally        +4.33  +5.51  +9.03): the rarer the en-
+(72.9 vs 71.3 on TriviaQA). The full method im-          tity, the smaller the improvement. Llama is near-
+proves substantially (76.52). This suggests that the     monotonic (+5.47  +5.13  +8.39  +7.50)
+value of the co-occurrence signal comes primar-          with a single Q3-to-Q4 dip. This is a ceiling effect
+ily from its per-token distribution rather than its      (Llama's Q4 Raw 57.06% vs OLMo's 50.60%),
+aggregate magnitude.                                     not a coverage effect. The rescue prediction expects
+                                                         the opposite shape (largest gains on Q1), which nei-
+6.3 Gain Attribution Analysis                            ther model shows. Overall, performance gains cor-
+                                                         relate with corpus coverage rather than rare-entity
+CorVer's reward is derived from Wikipedia co-            rescue: the largest improvements land on Q3 and
+occurrence counts, so its signal density naturally       Q4 (+8 to +9 pp), where co-occurrence counts are
+depends on how well an entity is represented in the      dense enough to differentiate correct from incor-
+corpus. This leads to two opposing hypotheses: a         rect sentences. This pattern also points to a natural
+rescue hypothesis, in which the largest gains occur
+
+                                                      7
+limitation, indicating that the reward signal is least     raw-model recipe. We interpret this outcome as
+informative on rare entities where corpus coverage         a capacity mismatch: the student is forced to imi-
+is sparse (§7).                                            tate reasoning chains that it cannot reliably execute,
+                                                           and questions that it would otherwise answer cor-
+6.4 Triplet-Aggregation Variants                           rectly may instead fail due to forced-but-incorrect
+                                                           deliberation.
+Table 4: Triplet-aggregation rule comparison on Llama-
+3.2-3B-Instruct (TriviaQA validation). Time is wall-          (ii) Small models needed anchor questions in
+clock training cost relative to FIRST.                     our runs; larger models did not. Training Llama-
+                                                           3.2-3B-Instruct and Qwen3-4B exclusively on the
+Variant   Cor. (%) NA (%) Mean len. Time                   learning-zone pool caused accuracy to deteriorate
+                                                           over the course of training. Reintroducing fully-
+FIRST (canonical) 62.24 5.04  150 1.0×                     correct (ncorrect = G) anchor questions into the
+                              40 1.2×                      pool stabilized the runs. Models  8B did not
+MIN       57.27 0.33          150 1.7×                     exhibit this issue.
+
+RELCHECK  61.37 6.58                                          Per-finding details, including an additional ob-
+                                                           servation on anti-loop prompt interactions, are in
+   The canonical CorVer rule keeps only the first          Appendix D.
+valid triplet per sentence and runs an entity-only
+Infini-gram query (§3.2). The inference-time               6.6 Broader Applicability
+pipeline of Min et al. (2025) motivates two nat-
+ural alternatives: MIN aggregates counts across ev-        We validate CorVer only under GRPO, but the re-
+ery extracted triplet and takes the minimum, while         ward's low per-sentence cost (no GPU verifier, one
+RELCHECK re-queries with the relation token                0.5B forward pass plus one Infini-gram lookup)
+added and demotes the reward when this lookup              suggests several directions for future work. The
+returns zero. We retrain Llama-3.2-3B-Instruct on          signal could in principle serve as a plug-in factual-
+the same self-filtered TriviaQA pool, swapping in          ity auxiliary in other policy-gradient pipelines such
+each rule. Table 4 reports correctness, refusal rate,      as PPO (Schulman et al., 2017) or REINFORCE
+mean completion length, and training wall clock.           without altering their cost structure, or score can-
+                                                           didate completions when constructing preference
+   Both alternatives underperform the canonical            pairs for DPO-style training. It might also com-
+rule. MIN collapses completion length: the pol-            pose with retrieval-, NLI-, or LLM-judge-based
+icy learns to dodge the per-sentence minimum by            rewards as a complementary regularizer, and the
+shortening its output rather than producing more           corpus index could be scaled from Wikipedia to
+correct facts. RELCHECK is brittle: relation tokens        web- or pretraining-corpus magnitude. We do not
+vary widely in surface form across Wikipedia (e.g.,        evaluate any of these directions in this paper.
+"directed" vs. "was the director of"), so the literal-
+token lookup often returns zero on correct claims          7 Conclusion
+while also inflating training cost. The canonical
+FIRST variant is therefore both the fastest and the        We presented CorVer, a corpus-grounded process
+most accurate of the three. Mechanism analysis             reward that replaces neural verifiers with a 0.5B
+and a worked example are in Appendix B.3.                  extractor and one Infini-gram lookup per sentence.
+                                                           Across six instruction-tuned base models (3B to
+6.5 Practical Findings                                     14B) and five factual QA benchmarks, CorVer im-
+                                                           proves over Raw on every cell and outperforms four
+Two engineering observations shaped the final              prior factuality-RL pipelines on 18 of 20 cells while
+CorVer recipe. We present them as practitioner             training 4.8 to 8.4× faster. Two analyses explain
+notes from our runs rather than as formally vali-          the gain: per-sentence factual correctness corre-
+dated claims. Accordingly, the mechanisms dis-             lates monotonically with Wikipedia co-occurrence
+cussed below should be interpreted as hypotheses           (§6.1), and per-quartile improvements on PopQA
+and intuitions rather than conclusions established         track corpus coverage rather than rare-entity res-
+through controlled experiments.                            cue (§6.3). We validate the reward under GRPO
+                                                           and leave integration with other policy-gradient or
+   (i) SFT cold-start hurt factual recall in our           preference-based methods to future work.
+setup. We collected chain-of-thought traces from
+a 397B-parameter Qwen3-family MoE teacher and
+used them to SFT-train the target prior to GRPO.
+However, the resulting model underperformed the
+
+                                                        8
+Limitations                                                     2025. DeepSeek-R1: Incentivizing Reasoning Capa-
+                                                                bility in LLMs via Reinforcement Learning. Nature,
+The co-occurrence reward is a corpus-grounded                   645(8081):633­638.
+proxy rather than a claim-level fact-checker: the
+extractor captures only the subject-object pair, not         Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri,
+the predicate semantics. As shown in §6.1, the                  Abhinav Pandey, Abhishek Kadian, Ahmad Al-
+signal is monotonically calibrated against human                Dahle, Aiesha Letman, Akhil Mathur, Alan Schel-
+annotations, but it cannot detect errors in which the           ten, Alex Vaughan, Amy Yang, Angela Fan, Anirudh
+correct entities co-occur within a factually wrong              Goyal, Anthony Hartshorn, Aobo Yang, Archi Mi-
+relation.                                                       tra, Archie Sravankumar, Artem Korenev, Arthur
+                                                                Hinsvark, and 542 others. 2024. The Llama 3 Herd
+   The reward is inherently tied to the corpus on               of Models. arXiv preprint.
+which it is indexed. We use a 6.4M-article, 5.5B-
+token English Wikipedia snapshot (Appendix B.1).             Haochang Hao, Yifan Xu, Xinzhuo Li, Yingqiang Ge,
+The PopQA quartile analysis (§6.3) confirms that                and Lu Cheng. 2026. Safecrs: Personalized safety
+performance gains correlate with corpus coverage,               alignment for llm-based conversational recommender
+indicating that the reward signal is least informative          systems. Preprint, arXiv:2603.03536.
+on rare entities where coverage is sparse.
+                                                             Edward J. Hu, Yelong Shen, Phillip Wallis, Zeyuan
+   Evaluation uses lenient substring-plus-alias                 Allen-Zhu, Yuanzhi Li, Shean Wang, Lu Wang, and
+matching, so absolute accuracies may overestimate               Weizhu Chen. 2021. LoRA: Low-Rank Adaptation
+partially correct strings. However, paired compar-              of Large Language Models. arXiv preprint.
+isons within each table use the same grader, ensur-
+ing that relative rankings remain unaffected. An             Mandar Joshi, Eunsol Choi, Daniel S Weld, and Luke
+LLM-as-judge alternative is evaluated only as an                Zettlemoyer. 2017. Triviaqa: A large scale distantly
+offline validation tool (Appendix B.7) and is not               supervised challenge dataset for reading comprehen-
+used within the reward loop.                                    sion. In Proceedings of the 55th Annual Meeting of
+                                                                the Association for Computational Linguistics (Vol-
+References                                                      ume 1: Long Papers), pages 1601­1611.
+
+Jonathan Berant, Andrew Chou, Roy Frostig, and Percy         Nikhil Kandpal, Haikang Deng, Adam Roberts, Eric
+   Liang. 2013. Semantic parsing on freebase from               Wallace, and Colin Raffel. 2023. Large language
+   question-answer pairs. In Proceedings of the 2013            models struggle to learn long-tail knowledge. In
+   conference on empirical methods in natural language          International conference on machine learning, pages
+   processing, pages 1533­1544.                                 15696­15707. PMLR.
+
+Mirza Farhan Bin Tarek and Rahmatollah Beheshti.             Cheongwoong Kang and Jaesik Choi. 2023. Impact
+   2025. Reward hacking mitigation using verifiable             of co-occurrence on factual knowledge of large lan-
+   composite rewards. In Proceedings of the 16th ACM            guage models. In Findings of the Association for
+   International Conference on Bioinformatics, Com-             Computational Linguistics: EMNLP 2023, pages
+   putational Biology, and Health Informatics, pages            7721­7735.
+   1­6.
+                                                             Tom Kwiatkowski, Jennimaria Palomaki, Olivia Red-
+Tianchi Cai, Zhiwen Tan, Xierui Song, Tao Sun, Jiyan            field, Michael Collins, Ankur Parikh, Chris Alberti,
+   Jiang, Yunqi Xu, Yinger Zhang, and Jinjie Gu. 2024.          Danielle Epstein, Illia Polosukhin, Jacob Devlin, Ken-
+   Forag: Factuality-optimized retrieval augmented gen-         ton Lee, and 1 others. 2019. Natural questions: A
+   eration for web-enhanced long-form question answer-          benchmark for question answering research. Trans-
+   ing. In Proceedings of the 30th ACM SIGKDD Con-              actions of the Association for Computational Linguis-
+   ference on Knowledge Discovery and Data Mining,              tics, 7:452­466.
+   pages 199­210.
+                                                             Patrick Lewis, Ethan Perez, Aleksandra Piktus, Fabio
+Xilun Chen, Ilia Kulikov, Vincent-Pierre Berges, Barlas         Petroni, Vladimir Karpukhin, Naman Goyal, Hein-
+   Oguz, Rulin Shao, Gargi Ghosh, Jason Weston, and             rich Küttler, Mike Lewis, Wen-tau Yih, Tim Rock-
+   Wen-tau Yih. 2025. Learning to reason for factuality.        täschel, Sebastian Riedel, and Douwe Kiela. 2020.
+   arXiv preprint arXiv:2508.05618.                             Retrieval-augmented generation for knowledge-
+                                                                intensive nlp tasks. In Advances in Neural Infor-
+DeepSeek-AI, Daya Guo, Dejian Yang, Haowei Zhang,               mation Processing Systems, volume 33, pages 9459­
+   Junxiao Song, Peiyi Wang, Qihao Zhu, Runxin                  9474. Curran Associates, Inc.
+   Xu, Ruoyu Zhang, Shirong Ma, Xiao Bi, Xiaokang
+   Zhang, Xingkai Yu, Yu Wu, Z. F. Wu, Zhibin Gou,           Junyi Li and Hwee Tou Ng. 2025. Reasoning mod-
+   Zhihong Shao, Zhuoshu Li, Ziyi Gao, and 181 others.          els hallucinate more: Factuality-aware reinforcement
+                                                                learning for large reasoning models. In Advances in
+                                                                Neural Information Processing Systems, volume 38,
+                                                                pages 151064­151085. Curran Associates, Inc.
+
+                                                          9
+Hunter Lightman, Vineet Kosaraju, Yura Burda, Harri              and the 9th international joint conference on natu-
+   Edwards, Bowen Baker, Teddy Lee, Jan Leike, John              ral language processing (EMNLP-IJCNLP), pages
+   Schulman, Ilya Sutskever, and Karl Cobbe. 2023.               2463­2473.
+   Let's Verify Step by Step. arXiv preprint.
+                                                              Baochang Ren, Shuofei Qiao, Ningyu Zhang, Da Zheng,
+Stephanie Lin, Jacob Hilton, and Owain Evans. 2022.              and Huajun Chen. 2025. Knowrl: Exploring knowl-
+   Truthfulqa: Measuring how models mimic human                  edgeable reinforcement learning for factuality. arXiv
+   falsehoods. In Proceedings of the 60th annual meet-           preprint arXiv:2506.19807.
+   ing of the association for computational linguistics
+   (volume 1: long papers), pages 3214­3252.                  John Schulman, Filip Wolski, Prafulla Dhariwal, Alec
+                                                                 Radford, and Oleg Klimov. 2017. Proximal Policy
+Jiacheng Liu, Sewon Min, Luke Zettlemoyer, Yejin                 Optimization Algorithms. arXiv preprint.
+   Choi, and Hannaneh Hajishirzi. 2024. Infini-gram:
+   Scaling unbounded n-gram language models to a tril-        Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu,
+   lion tokens. arXiv preprint arXiv:2401.17377.                 Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan
+                                                                 Zhang, Y. K. Li, Y. Wu, and Daya Guo. 2024.
+Alex Mallen, Akari Asai, Victor Zhong, Rajarshi Das,             DeepSeekMath: Pushing the Limits of Mathemat-
+   Daniel Khashabi, and Hannaneh Hajishirzi. 2023.               ical Reasoning in Open Language Models. arXiv
+   When not to trust language models: Investigating              preprint.
+   effectiveness of parametric and non-parametric mem-
+   ories. In Proceedings of the 61st annual meeting of        Jason Wei, Nguyen Karina, Hyung Won Chung,
+   the association for computational linguistics (volume         Yunxin Joy Jiao, Spencer Papay, Amelia Glaese, John
+   1: Long papers), pages 9802­9822.                             Schulman, and William Fedus. 2024. Measuring
+                                                                 short-form factuality in large language models. arXiv
+Dehai Min, Kailin Zhang, Tongtong Wu, and Lu Cheng.              preprint arXiv:2411.04368.
+   2025. Quco-rag: Quantifying uncertainty from the
+   pre-training corpus for dynamic retrieval-augmented        Xueru Wen, Jie Lou, Xinyu Lu, Yuqiu Ji, Xinyan Guan,
+   generation. arXiv preprint arXiv:2512.19134.                  Yaojie Lu, Hongyu Lin, Ben He, Xianpei Han, De-
+                                                                 bing Zhang, and 1 others. 2025. On-policy self-
+Sewon Min, Kalpesh Krishna, Xinxi Lyu, Mike Lewis,               alignment with fine-grained knowledge feedback for
+   Wen-tau Yih, Pang Koh, Mohit Iyyer, Luke Zettle-              hallucination mitigation. In Findings of the Associa-
+   moyer, and Hannaneh Hajishirzi. 2023. Factscore:              tion for Computational Linguistics: ACL 2025, pages
+   Fine-grained atomic evaluation of factual precision           5215­5231.
+   in long form text generation. In Proceedings of the
+   2023 Conference on Empirical Methods in Natural            An Yang, Anfeng Li, Baosong Yang, Beichen Zhang,
+   Language Processing, pages 12076­12100.                       Binyuan Hui, Bo Zheng, Bowen Yu, Chang Gao,
+                                                                 Chengen Huang, Chenxu Lv, Chujie Zheng, Dayi-
+Shuo Nie, Hexuan Deng, Chao Wang, Ruiyu Fang,                    heng Liu, Fan Zhou, Fei Huang, Feng Hu, Hao Ge,
+   Xuebo Liu, Shuangyong Song, Yu Li, Min Zhang,                 Haoran Wei, Huan Lin, Jialong Tang, and 41 others.
+   and Xuelong Li. 2026. Stop rewarding hallucinated             2025. Qwen3 Technical Report. arXiv preprint.
+   steps: Faithfulness-aware step-level reinforcement
+   learning for small reasoning models. arXiv preprint        A Training Setup and Recipe
+   arXiv:2602.05897.
+                                                              A.1 Full Hyperparameters
+Team OLMo, Pete Walsh, Luca Soldaini, Dirk Groen-
+   eveld, Kyle Lo, Shane Arora, Akshita Bhagia, Yuling        All Raw + RL runs use a LoRA policy with rank
+   Gu, Shengyi Huang, Matt Jordan, Nathan Lambert,            r = 128,  = 256, dropout 0.0, no bias, and target
+   Dustin Schwenk, Oyvind Tafjord, Taira Anderson,            modules q_proj, k_proj, v_proj, o_proj,
+   David Atkinson, Faeze Brahman, Christopher Clark,          gate_proj, up_proj, down_proj (task type
+   Pradeep Dasigi, Nouha Dziri, and 24 others. 2025. 2        CAUSAL_LM). For CorVer, the same LoRA shape
+   OLMo 2 Furious. arXiv preprint.                            is used for every model from 3B to 14B. Random
+                                                              seed is 42 throughout.
+Long Ouyang, Jeff Wu, Xu Jiang, Diogo Almeida, Car-
+   roll L. Wainwright, Pamela Mishkin, Chong Zhang,           Constant across models. Table 5 lists the hyper-
+   Sandhini Agarwal, Katarina Slama, Alex Ray, John           parameters identical for every Raw + RL run in
+   Schulman, Jacob Hilton, Fraser Kelton, Luke Miller,        the paper.
+   Maddie Simens, Amanda Askell, Peter Welinder,
+   Paul Christiano, Jan Leike, and Ryan Lowe. 2022.           Per-model differences. Table 6 lists the hyper-
+   Training language models to follow instructions with       parameters that vary across models. Note that the
+   human feedback. arXiv preprint.                            per-device batch size and gradient-accumulation
+                                                              steps are traded against each other so that the effec-
+Fabio Petroni, Tim Rocktäschel, Sebastian Riedel,             tive prompt-batch per optimizer step is 24 (and the
+   Patrick Lewis, Anton Bakhtin, Yuxiang Wu, and              number of completions per step is 24 × G = 384)
+   Alexander Miller. 2019. Language models as knowl-          for every model.
+   edge bases? In Proceedings of the 2019 conference
+   on empirical methods in natural language processing
+
+                                                          10
+Table 5: Hyperparameters identical across every Raw +      Baselines: common configuration. All three of
+RL run.                                                    FoRAG (Cai et al., 2024), RLFH (Wen et al., 2025),
+                                                           and FSPO (Li and Ng, 2025) train a LoRA policy
+Hyperparameter              Value                          with rank r = 8,  = 16, dropout 0.0, and the same
+                                                           target modules as the CorVer runs above, in BF16
+LR scheduler                cosine                         with eager attention and gradient checkpointing
+warmup_ratio                0.03                           disabled. All three are evaluated closed-book: only
+loss_type                   grpo                           the question is fed at inference, with no retrieval
+Attention                   flash_attention_2              and no neural verifier or LLM judge call.
+bf16, tf32                  true
+mask_truncated_completions  false                          Baselines: reward design. FSPO uses TRL GR-
+G (num_generations)         16                             POTrainer with G = 4 rollouts per prompt, max
+max_prompt_length           256                            prompt / completion length 512, KL coefficient
+max_completion_length       1024                            = 0.04, a binary thinkanswer format re-
+gradient_checkpointing      true                           ward, and HHEM-2.1 sentence-level NLI scoring
+use_reentrant               false                          at threshold 0.5 for the per-token advantage sign-
+max_grad_norm               1.0                            flip. RLFH uses TRL PPOTrainer (batch 16, mini-
+                                                           batch 8, max new tokens 256) with the truthful-
+GRPO sampling and rollout. Sampling parame-                ness / informativeness reward maps from the orig-
+ters take TRL GRPOConfig defaults except where             inal paper. Verification calls a  27B-parameter
+noted; full settings in Table 7.                           Qwen3-family chat endpoint with 8 parallel work-
+                                                           ers. FoRAG also uses PPOTrainer (batch 16, max
+Optimizer. Per-model optimizer choice is 8-                new tokens 256). Each generated sentence is de-
+bit AdamW for every run except OLMo-2-13B-                 composed into atomic subclaims and each sub-
+Instruct, which uses torch-fused AdamW. Adam               claim is verified against the evidence field, yield-
+momenta and epsilon take HuggingFace Train-                ing a sentence-level factuality score. We adapt
+ingArguments defaults (1 = 0.9, 2 = 0.999,                 FoRAG to the closed-book setting by stripping re-
+ = 10-8, weight decay = 0).                                trieval at inference. KnowRL (a re-implementation
+                                                           of Ren et al. (2025)) uses TRL GRPOTrainer with
+Reward weights and mode. The headline                      G = 16 rollouts per prompt, max prompt / comple-
+CorVer settings used in every Raw + RL run are             tion length 256/1024, sampling temperature = 1.0,
+listed in Table 8. The three reward channels are           and KL = 0.001. Its reward, per the paper's
+summed with unit weight; no separate QuCo or               Eq. 2, is the unit-weighted sum of three compo-
+format multiplier is applied.                              nents: (a) a regex format reward ±1; (b) a three-tier
+                                                           LLM-judge correctness reward in {+2, +1, -1}
+Logging, checkpointing, evaluation. Logging,               (correct / not-attempted / incorrect); (c) a fact-
+checkpointing, and in-training evaluation parame-          support reward rfact  [0, 1] equal to the frac-
+ters are listed in Table 9. Checkpoints are evaluated      tion of supported atomic facts from the FActScore
+post hoc rather than during training.                      atomic-fact pipeline with NLI entailment verifica-
+                                                           tion (DeBERTa-v3-base-mnli-fever-anli at thresh-
+Baselines: framing. The cross-method compari-              old 0.3,  = 10) against the FActScore-bundled
+son in Table 1 reports FoRAG, RLFH, FSPO, and              Wikipedia knowledge base. Both the judge and
+KnowRL under reduced configurations relative to            the atomic-fact verifier call gpt-4o-mini-2024-07-
+the CorVer runs. We attempted to run each base-            18 at temperature 0. KnowRL deviates from the
+line at the CorVer configuration (G = 16, max              common baseline LoRA configuration: it uses a
+completion length 1024, full-rank policy where ap-         higher-rank LoRA (r = 128,  = 256) with
+plicable). The wall-clock cost was prohibitive in          FlashAttention-2 and gradient checkpointing en-
+our compute budget. The structural reason is the           abled, matching CorVer's adapter capacity. We
+reward-call budget of Eq. 5 multiplied by the per-         adopt this setting for KnowRL because it is the
+call cost of each baseline's reward source. The            closest prior-method analogue to CorVer (sentence-
+reduced configurations therefore reflect each base-        level factuality GRPO with a verifier-side reward),
+line at the strongest setting we could afford within       and its memory footprint at r = 128/G = 16 with
+the compute budget used for CorVer; the resulting
+comparison is not a head-to-head at matched com-
+pute, as discussed in the configuration-asymmetry
+paragraph below.
+
+                                                       11
+Table 6: Per-model GRPO training hyperparameters that vary across models. Columns: bs (per-device batch size),
+ga (gradient-accumulation steps), steps (max steps), save (save period in steps), vLLM (vLLM GPU-memory
+fraction). All other hyperparameters listed in Section A.1 are identical across runs. Effective prompt-batch per step
+is bs × ga = 24 for every model.
+
+Model                                LR KL                  Optim  bs ga steps save vLLM
+
+Llama-3.2-3B-Instruct             1.0e-5 0.001 adamw_8bit 8 3 100 50 0.40
+
+Qwen3-4B                          1.0e-5 0.001 adamw_8bit 8 3 100 50 0.40
+
+Llama-3.1-8B-Instruct (headline) 1.0e-5 0.001 adamw_8bit 8 3 100 50 0.40
+
+Qwen3-8B                          1.0e-5 0.001 adamw_8bit 8 3 100 50 0.40
+
+OLMo-2-13B-Instruct               3.0e-6 0.01 adamw_torch_fused 4 6 100 50 0.50
+
+Qwen3-14B                         2.5e-5 0.0                adamw_8bit 2 12 100 50 0.55
+
+Table 7: GRPO sampling and rollout parameters (iden-        easy / medium / hard partition. The goal is to
+tical across models). vLLM rollout in colocate mode         keep no baseline from being weakened by train-
+with Unsloth fast-inference; the vLLM GPU-memory            ing on questions outside its own verifier's reliable
+utilization fraction is per-model (Table 6).                judgment range. CorVer does not use this cascade.
+                                                            Its per-target self-filter (§A.4) restricts every train-
+Parameter                  Value                            ing prompt to ncorrect  [1, G - 1] on the target
+                                                            base model, which is a target-specific and target-
+temperature                1.0                              adaptive difficulty signal that supersedes a static
+top_p                      1.0                              cascade. The filter difference between CorVer and
+top_k                      disabled                         the baselines is structural, not a per-method tun-
+PPO clip                   0.2                              ing gift. CorVer's per-target self-filter is target-
+epsilon_high               unset                            adaptive: it requires G = 16 rollouts on the target
+importance_sampling_level  token                            raw model per candidate prompt. The baseline cas-
+scale_rewards              group                            cade is target-agnostic: difficulty is computed once
+delta                      unset                            with three external models and reused across all
+use_vllm                   true                             four targets. Both filters are nonetheless upgrades
+fast_inference             true                             over the baselines' original recipes, which apply
+tensor_parallel_size       1                                no filter at all (FoRAG, RLFH, FSPO) or a single-
+                                                            threshold variant (KnowRL). The two filters differ
+gradient checkpointing fits on a single A100 within         in granularity rather than in direction. Each method
+our compute budget.                                         receives the strongest filter compatible with the rest
+                                                            of its training-cost profile. Under our cascade, the
+Baselines: difficulty bins via capability cascade.          baselines are at least as well-prepared as in their
+KnowRL's public recipe (Ren et al., 2025) filters           original papers.
+its training pool by a one-shot capability criterion:
+only questions DeepSeek-R1 answers correctly on             Baselines: training data and compute. All
+its first attempt are retained. The stated motiva-          four baselines (FoRAG, RLFH, FSPO, KnowRL)
+tion is that neural-verifier RL gives noisy gradients       train on the same 10,700-prompt 3-phase for-
+when the verifier itself cannot reliably judge a ques-      ward curriculum sampled from the cascade bins.
+tion. We extend this idea uniformly to all four base-       Phase 1 (3,500 prompts) mixes 3,000 easy with
+lines with a 3-level capability cascade in place of         500 medium. Phase 2 (4,200 prompts) mixes
+a single threshold. A question is easy if Qwen2.5-          1,500 easy, 2,500 medium, and 200 hard. Phase 3
+7B-Instruct already solves it under closed-book             (3,000 prompts) mixes 500 easy, 2,000 medium,
+string-match grading. It is medium if Qwen2.5-              and 500 hard. Cumulatively each baseline trains on
+7B-Instruct fails but GPT-oss-120B succeeds. It             5,000 easy, 5,000 medium, and 700 hard prompts.
+is hard if both fail and a 397B-parameter Qwen3-            The underlying cascade pools contain 9,677 easy,
+family MoE teacher succeeds. The 7B threshold on            20,490 medium, and 766 hard prompts; only the
+the easy bin is deliberate. 7B sits at the lower end        10,700-prompt curriculum subset enters baseline
+of the target capability range we evaluate against          training. Each baseline divides its own optimizer-
+in Table 1, so the easy bin matches questions a             step budget into three equal segments and advances
+small target can plausibly learn from RL. The cas-
+cade is computed once and is target-agnostic, so
+all sixteen baseline runs (FoRAG, RLFH, FSPO,
+KnowRL on four base models each) share the same
+
+                                                        12
+Table 8: Reward configuration for the headline (Raw + RL) runs, identical across all models.
+
+Parameter                                                     Value
+
+STEPWISE_REWARD_MODE                                          full (format + judge + QuCo)
+f , j, c                                                      1.0 each
+JUDGE_REWARD_WEIGHT                                           1.0 (default)
+JUDGE_TYPE                                                    string_match
+INFIGRAM_USE_REMOTE                                           0 (local mmap engine)
+ALIGNMENT_FALLBACK_THRESHOLD                                  0.5
+QuCo penalty values                                           {-0.3, -0.1, 0.0, +0.1} (§B.1)
+
+Table 9: Logging, checkpointing, and evaluation; identi-      Table 10: Per-baseline learning rate and KL coefficient
+cal across runs. The save period is per-model (Table 6);      on the four base models reported in Table 1. Other
+in-training eval disabled.                                    hyperparameters follow the common baseline configura-
+                                                              tion above. The FSPO Llama-3.1-8B-Instruct row uses
+Parameter               Value                                 lr = 5e-6 under the legacy reward implementation
+                                                              (the value stable in that setting); all other FSPO rows
+logging_strategy        steps                                 use lr = 2e-6, the value chosen after the reward-fix to
+logging_steps           1                                     avoid mode collapse on the remaining base models.
+save_strategy           steps
+save_total_limit        4                                     Method Base model               GPU LR KL
+eval_strategy           unset
+report_to               wandb                                 FSPO Llama-3.2-3B-Instruct A100 2e-6 0.04
+resume_from_checkpoint  false
+
+                                                              FSPO Llama-3.1-8B-Instruct H200 5e-6 0.04
+
+                                                              FSPO Qwen3-4B                   A100 2e-6 0.04
+
+                                                              FSPO Qwen3-8B                   A100 2e-6 0.04
+
+from phase 1 to 2 at the one-third mark and from              RLFH Llama-3.2-3B-Instruct A100 3e-7 0.30
+phase 2 to 3 at the two-thirds mark, so all base-
+lines see the same easy / medium / hard exposure              RLFH Llama-3.1-8B-Instruct A100 3e-7 0.30
+ratio regardless of total step count. The 12 FoRAG
+/ RLFH / FSPO baseline runs use a single GPU                  RLFH Qwen3-4B                   A100 3e-7 0.10
+per job; KnowRL runs a fixed 200 optimizer steps
+with checkpoints every 100 steps on a single A100.            RLFH Qwen3-8B                   H200 3e-7 0.10
+Three of the FoRAG / RLFH / FSPO runs (FoRAG
+and RLFH on Qwen3-8B, FSPO on Llama-3.1-8B-                   FoRAG Llama-3.2-3B-Instruct A100 1e-6 0.05
+Instruct) OOM'd on a single A100 and were moved
+to H200. Per-cell GPU assignments are in Table 19.            FoRAG Llama-3.1-8B-Instruct A100 1e-6 0.05
+For the eval reported in Table 1 we use the latest
+available checkpoint per run; KnowRL is evalu-                FoRAG Qwen3-4B                  A100 1e-6 0.05
+ated at its step-200 final checkpoint. The FoRAG,
+RLFH, and FSPO accuracy numbers are upper-                    FoRAG Qwen3-8B                  H200 1e-6 0.05
+bounded by their reduced LoRA rank (r = 8);
+KnowRL is run at r = 128 (parity with its original            KnowRL Llama-3.2-3B-Instruct A100 1e-5 0.001
+recipe) so its accuracy is not constrained by this fac-
+tor. Per-baseline learning rates and KL coefficients          KnowRL Llama-3.1-8B-Instruct A100 1e-5 0.001
+(with GPU type) are listed in Table 10.
+                                                              KnowRL Qwen3-4B                 A100 1e-5 0.001
+Baselines: configuration asymmetry and the fea-
+sibility gap. CorVer and the baselines do not run             KnowRL Qwen3-8B                 A100 1e-5 0.001
+at the same configuration. CorVer uses LoRA
+r = 128/ = 256, G = 16 rollouts, and a                        RLFH and FoRAG use r = 8/ = 16 with PPO
+self-filtered learning-zone pool of 4,329 to 5,608            batch 16; KnowRL uses r = 128/ = 256 with
+prompts per target (Table 11). The four baselines             G = 16. Only KnowRL matches CorVer's LoRA
+share the same 10,700-prompt 3-phase curricu-                 rank. This asymmetry is not arbitrary. CorVer's
+lum but differ in LoRA rank and rollout struc-                reward is millisecond-scale: one 0.5B extractor
+ture: FSPO uses r = 8/ = 16 with G = 4;                       forward plus one mmap Infini-gram lookup per
+                                                              sentence. Each baseline's neural-verifier or LLM-
+                                                              judge reward is multiple orders of magnitude more
+                                                              expensive per call. Bringing the baselines up to
+                                                              CorVer's configuration would multiply that per-
+                                                              call cost by the reward-call budget of Eq. (5). Fig-
+                                                              ure 4 and Appendix C.4 show this configuration is
+                                                              structurally prohibitive for the baselines under any
+                                                              compute budget we considered. We therefore do
+                                                              not claim that CorVer is a stronger sentence-level
+                                                              credit-assignment method at fixed compute. We
+                                                              claim instead that CorVer's reward design admits a
+                                                              deployable configuration the four baselines cannot
+                                                              reach. The accuracy gains in Table 1 are the con-
+
+                                                          13
+sequence of this feasibility gap. Matching CorVer         String-match grading. The training judge and
+down to any baseline configuration would hide this        the evaluation grader share the same normaliza-
+deployable-advantage gap. Matching baselines up           tion routine: NFKD normalize, lowercase strip,
+to CorVer's configuration is the infeasibility shown      replace stand-alone articles (a, an, the) with spaces,
+by Figure 4.                                              replace non-word punctuation with spaces, and col-
+                                                          lapse whitespace. A predicted answer matches a
+A.2 Datasets and Evaluation Protocol                      gold answer (or alias) if their normalized forms are
+                                                          equal or one is a substring of the other. Aliases
+Evaluation datasets. Every canonical CorVer               are taken from the alias list at evaluation and from
+run evaluates the final checkpoint on five closed-        a semicolon-separated answer string at training.
+book QA datasets in series: TriviaQA validation           The string-match grader emits one of three labels
+(17,944 questions), NQ-Open validation (3,610),           per completion. The training judge maps them to
+PopQA test (14,267), SimpleQA (4,326), and                scalar rewards as GOOD = +2.0, BAD = -1.0,
+TruthfulQA (817). Each TriviaQA record carries a          and NOT-ATTEMPTED = -1.0 (referred to as NA
+question, a primary answer, and an alias list.            in the main text). Refusals are rewarded the same
+                                                          as wrong answers, so the trainer does not reward
+Training pools. The candidate question pools are          abstention.
+constructed from NQ-Open (train split) and We-
+bQuestions (train and test splits) through a multi-       Format-correct rule and answer extraction. A
+step cleaning pipeline. The pipeline applies dedu-        completion is considered format-correct if it con-
+plication, question refinement via an LLM, and            tains think . . . /think . . . answer; the closing
+Wikipedia entity grounding that removes questions         /answer tag is intentionally not required, so
+whose entities cannot be matched to any Wikipedia         truncated outputs are not unfairly penalized. An-
+article. Two pool sizes result from different con-        swer extraction takes the substring after the first
+struction iterations: a 9,680-question pool and a         answer tag, up to the matching /answer if
+13,560-question pool that incorporates additional         present and to the end of the completion otherwise,
+data from the same sources. The 13,560-pool is            then strips surrounding whitespace.
+a same-source same-pipeline sample-size exten-
+sion of the 9,680-pool: it adds more questions            Format anti-hack constraints. In addition to
+drawn from NQ-Open and WebQuestions under                 the tag-presence check, the format reward enforces
+the identical dedup, LLM-refine, and Wikipedia            three constraints on the think content: (i) at least
+entity-grounding pipeline, with no new datasets           30 characters, (ii) at least one alphabetic character,
+or new cleaning rules. Llama-3.2-3B-Instruct and          and (iii) the first non-whitespace character must not
+Llama-3.1-8B-Instruct use the 9,680-question pool;        be "<". These rules were added after observing re-
+Qwen3-4B, Qwen3-8B, Qwen3-14B, and OLMo-                  ward hacking on Llama-3.2-3B-Instruct, where the
+2-13B-Instruct use the 13,560-question pool. All          policy learned to emit an effectively empty think
+pools are then filtered per-model by the learning-        block (e.g. an immediate /think followed by rea-
+zone self-filter of §4.                                   soning outside the tags) to collect the format reward
+                                                          without performing genuine reasoning. Bin Tarek
+Self-filter procedure. For each candidate ques-           and Beheshti (2025) document the same failure
+tion we sample G = 16 completions from the                mode in medical QA and propose composite penal-
+target raw model (no LoRA) at temperature 0.7,            ties as a mitigation; our constraints address the
+top-p = 0.95, max new tokens = 512. Each com-             same exploit with simpler regex rules. The con-
+pletion is graded by the same string-match grader         straints are applied uniformly across all models
+used at evaluation, giving an integer ncorrect            reported in this paper.
+[0, 16] per question. The default keep range is
+1  ncorrect  G - 1 = 15. Questions the raw                NA (refusal) detection. A prediction is treated
+model always answers correctly (ncorrect = 16)            as a refusal if its lower-stripped form is empty, "i
+and questions the raw model never answers cor-            don't know", or "i do not know". The QuCo scorer
+rectly (ncorrect = 0) are therefore dropped. Two of       uses a slightly broader substring pattern internally;
+the smaller-model configurations additionally mix         the eval and training judges use the strict-equality
+in a fixed number of ncorrect = 16 "anchor" ques-         rule above.
+tions: 1,000 for Llama-3.2-3B-Instruct and 800 for
+Qwen3-4B.
+
+                                                      14
+A.3 Generation Prompt                                    eval distribution with its training distribution. It
+                                                         also mitigates the post-RL repetition mode-collapse
+Training-time rollout prompt (CorVer). The               that trained policies exhibit on long-form comple-
+shared system prompt used by every canoni-               tions. The raw instruction-tuned models do not
+cal CorVer training run (Llama-3.2-3B-Instruct,          exhibit this repetition behavior. We observed that
+Qwen3-4B, Llama-3.1-8B-Instruct, Qwen3-8B,               appending the same anti-loop line to the Raw eval
+OLMo-2-13B-Instruct, Qwen3-14B) is the follow-           prompt produced a small accuracy decrease, pre-
+ing "light prompt + anti-loop" string. The user          sumably because the extra rule adds prompt com-
+message is the raw question, and the chat is con-        plexity that the un-trained policy is not robust to.
+structed by each model's native chat template (no        The raw baseline is therefore evaluated under the
+custom override).                                        lighter prompt, which gives it its strongest config-
+                                                         uration. The Raw vs CorVer gaps in Table 1 and
+Answer using this exact format:                          Figure 3 are therefore, if anything, conservative
+<think>brief reasoning</think>                           lower bounds. Within each group the prompt is
+<answer>direct answer</answer>                           applied uniformly. Every raw baseline uses the
+                                                         lighter prompt, and every LoRA-loaded checkpoint
+Rules:                                                   (KnowRL, FoRAG, RLFH, FSPO, and CorVer)
+- Keep the entire response under 1000                    uses the anti-loop prompt. Cross-method compar-
+tokens.                                                  isons among trained checkpoints are therefore not
+- In <think> AND <answer>, always use                    affected by this asymmetry.
+full entity names; never pronouns (he,
+she, it, they, this, that, them, his,                    Evaluation sampling. vLLM sampling param-
+her, its, their). Repeat the entity name                 eters for evaluation: temperature = 0.0 (greedy
+                                                         decoding), top-p unused, max new tokens =
+ each sentence.                                          1000, max model length = 1,512 (max new
+- Do not loop or repeat the same point                   tokens +512), frequency penalty unset (de-
+or phrase.                                               fault 0.0), and stop tokens chosen dynami-
+- If you genuinely do not know, reply                    cally from <|im_end|>, <|endoftext|>,
+exactly: <think>unknown</think><answer>I                 <|eot_id|> according to which ones exist in
+                                                         the policy tokenizer's vocabulary.
+ don't know</answer>
+                                                         A.4 Per-Model Training Set Sizes after
+Baseline training prompts. The four baselines                   Self-Filter
+(FoRAG, RLFH, FSPO, KnowRL) train under each
+method's own published system prompt; we do not          The per-model training pool is filtered with the
+substitute the CorVer training prompt above. Every       same rule described in §4. We sample G = 16
+baseline prompt requires a think / answer for-           completions from the raw instruction-tuned model
+mat (or an equivalent reasoning / answer separator)      under the CorVer generation prompt and string-
+so the same string-match grader can extract a final      match grader, count ncorrect(x)  {0, 1, . . . , 16}
+answer, but the body text differs across methods.        correct completions per question, and retain only
+At evaluation time all checkpoints use the unified       questions with ncorrect  [1, N - 1] (the learn-
+evaluation prompt described next, which is short         ing zone, with N = 16). Table 11 reports the
+and method-agnostic, so the eval-side comparison         resulting per-model training set sizes. The same
+is not affected by training-prompt differences.          self-filtered set is used by every ablation variant
+                                                         in Table 2 except A4, which by construction trains
+Evaluation prompt. At evaluation the system              on the unfiltered candidate pool. Accuracy differ-
+prompt is lighter, containing only the format rule       ences among the remaining variants are therefore
+and the IDK clause:                                      not confounded with differences in the training set.
+
+Answer using this exact format:                          Reading the table. Each row's three bucket
+<think>brief reasoning</think>                           counts sum exactly to its source pool size (9,680
+<answer>direct answer</answer>                           or 13,560, as listed in the Pool column). Two runs
+                                                         further mix in fixed anchor questions on top of
+If you genuinely do not know, reply                      the retained learning-zone count (not shown in the
+exactly: <think>unknown</think><answer>I
+
+ don't know</answer>
+
+   For trained checkpoints (when a LoRA adapter
+is loaded), the eval prompt additionally appends
+the line "Do not loop or repeat the same point or
+phrase." This anti-loop line is already part of the
+training-time rollout prompt shown above. Append-
+ing it at evaluation aligns the trained-checkpoint
+
+                                                     15
+Table 11: Per-model training set sizes after the learning-zone self-filter. Filtered questions split into ncorrect = 0
+(no positive signal), ncorrect  [1, 15] (learning zone, used for training), and ncorrect = 16 (already mastered).
+All counts are computed under the raw instruction-tuned model with G = 16 samples per question. Two source
+pools are used: the 9,680-question pool and the 13,560-question pool, both built from NQ-Open and WebQuestions
+(§A.2); each row's three bucket counts sum exactly to its source pool size.
+
+Pool         Model                  nc = 0                   nc  [1, 15]   nc = 16   Retained  Keep %
+9,680-pool
+             Llama-3.1-8B-Instruct   3,057                          4,861     1,762     4,861   50.2%
+13,560-pool  Llama-3.2-3B-Instruct   2,463                          5,172     2,045     5,172   53.4%
+
+             Qwen3-4B                6,515                          4,329     2,716     4,329   31.9%
+             Qwen3-8B                5,084                          4,956     3,520     4,956   36.5%
+             Qwen3-14B               4,839                          4,623     4,098     4,623   34.1%
+             OLMo-2-13B-Instruct     4,422                          5,608     3,530     5,608   41.4%
+
+table): 1,000 for Llama-3.2-3B-Instruct and 800              is no max / mean / top aggregation across multi-
+for Qwen3-4B. Across the six models, the share               ple triplets in a sentence. Triplet extraction fail-
+of nc = 0 questions ranges from 25.4% (Llama-                ure, a non-ternary triplet, or both endpoints being
+3.2-3B-Instruct) to 48.0% (Qwen3-4B), and the                pronouns yields no query and a neutral reward
+share of nc = 16 ranges from 18.2% (Llama-3.1-               ric = 0.0 for that sentence. Sentence splitting
+8B-Instruct) to 30.2% (Qwen3-14B). The retained              uses a punctuation-based regex on .!? boundaries.
+learning-zone size ranges from 4,329 (Qwen3-4B)              Both think and answer blocks are scored with
+to 5,608 (OLMo-2-13B-Instruct) and determines                equal weight after tag stripping.
+the per-step number of distinct prompts available
+to GRPO at G = 16.                                           Word-level co-occurrence query. Rather than
+                                                             literal entity strings, we build a word-level con-
+B Co-occurrence Reward Design and                            junctive (CNF / AND) query from the head and
+    Validation                                               tail content words. Stop words from a closed-class
+                                                             list of 35 tokens (articles, common prepositions,
+B.1 Co-occurrence Reward Implementation                      auxiliary verbs, basic connectives, and the pronoun
+       Details                                               "it"; the full list is reproduced in our code release)
+                                                             are stripped. Capitalized non-stop words (proper
+Triplet extractor. The subject-object-relation               nouns) are preferred, falling back to all non-stop
+triplet extractor is the QuCo-extractor-0.5B model           words longer than 2 characters, deduplicated while
+of Min et al. (2025), a Qwen2.5-0.5B-Instruct fine-          preserving order. At least 2 words are required,
+tuned on QuCo-RAG synthetic data. We run it with             otherwise the reward is neutral 0.0. The remaining
+max new tokens 256 in BF16, with left-padded                 words are joined by AND and sent to the Infini-
+batches of size 32. One extractor is loaded per              gram CNF count routine.
+training process (lazy-init, singleton scope). The
+extractor is prompted to emit one of four outputs:           Penalty mapping. Given the corpus co-
+an [entity, relation] pair for question sentences (sin-      occurrence count c, the per-sentence reward
+gle relation only for multi-hop questions); a [head,         is
+relation, tail] triple for declarative sentences car-
+rying one knowledge triple; the empty list when                            if no valid triplet (count is None)
+no factual semantic content is present; or a list of                  0.0  if c = 0
+multiple triples otherwise. The output is parsed                           if 0 < c < 5
+by a tolerant routine that handles nested brackets,                        if 5  c < 20
+smart quotes, escaped characters, and commas in-                           if c  20.
+side multi-token entity strings.                                   
+                                                                   -0.3
+Per-sentence triplet to reward. For each sen-                      
+tence, the implementation deliberately keeps at                    
+most one ternary triplet: the first valid [head, rela-       ric = -0.1
+tion, tail] from the extractor whose head and tail
+are non-empty strings and not pronouns. There                      0.0
+                                                                   
+                                                                   +0.1
+
+                                                             This is the four-tier mapping referenced as Eq. (2)
+                                                             in the main text.
+
+                                                             Token alignment. The alignment  is built by
+                                                             stripping the think and answer tags, splitting
+                                                             the concatenated text by a punctuation-based regex,
+
+                                                         16
+and assigning each token to the sentence whose            Cache and latency. The headline pipeline uses
+character span contains its tokenizer midpoint.           the local mmap Infini-gram engine with no in-
+Only tag positions and inter-sentence whitespace          memory cache; every per-sentence query goes
+receive (t) = 0. Reasoning sentences in the               through the CNF count routine directly. Per-query
+think block are therefore scored by the same              latency is millisecond-scale on the single A100
+QuCo reward as answer sentences. If the per-              setup. Aggregate end-to-end reward cost is re-
+completion alignment rate falls below 0.5, the            ported in the wall-clock comparison of the main
+sentence-level QuCo signal is dropped. The com-           text.
+pletion then falls back to the response-level return
+Rr(x, y) = jRj(x, y) + Rf (y) for all of its to-          B.2 Zero-Count Penalty Sensitivity
+kens. The training-time alignment rate and fallback
+rate are logged at every step. In completed runs          To validate the choice of the zero-count co-
+the alignment rate is consistently  0.99 and the          occurrence penalty ric(ci = 0) = -0.3
+fallback rate is below 1%. The per-token return           in Eq. (2), we sweep its value over
+formula, restating Eq. (4), is                            {-0.1, -0.2, -0.3, -0.5, -1.0} while hold-
+                                                          ing all other reward bins, training hyperparameters,
+      Rt(x, y) = Rr(x, y)                                 and the base model fixed. Each variant retrains
+                      + 1[(t) > 0] · c · rc (t).          Llama-3.2-3B-Instruct under the canonical CorVer
+                                                          recipe and is evaluated on the full TriviaQA
+Infini-gram index. The corpus is the En-                  validation set (N = 17,944); Figure 6 reports the
+glish Wikipedia dump 20231101.en, containing              resulting change in accuracy relative to the -0.3
+6,407,814 articles tokenized to approximately             baseline.
+5.5 × 109 tokens by the LLaMA-2 BPE tokenizer
+(vocab size 32,000); a leading-space token (id                                  2
+29871) is stripped from queries. The on-disk index
+is version 4, with a u16 token dtype, maximum per-        Acc on TriviaQA (pp)  0
+clause frequency 500,000, and a maximum inter-
+clause distance of 1,000 tokens, served by mmap at                              2
+training time. Counts are produced as a CNF over
+content tokens, bounded by the maximum inter-                                   4
+clause distance so that matched positions span at
+most 1,000 tokens between clauses. The resulting                                6       Acc vs. canonical
+ci therefore measures position-level co-occurrence                              8 0.1  CorVer canonical ( 0.3)
+within a bounded window rather than unbounded
+document-level co-occurrence.                                                          Zer0o.2-count pen0a.3lty ricooc(ci =0.50)  1.0
+
+Window-size choice. The 1,000-token inter-                Figure 6: Sensitivity of CorVer accuracy on Llama-
+clause window is inherited from Min et al.
+(2025), who adopt it as the default in their              3.2-3B-Instruct to the zero-count co-occurrence penalty
+inference-time pipeline because it roughly matches        ric(ci = 0). Each point is a separate retraining of the full
+passage-level context and provides a natural              CorVer recipe with only the zero-count penalty changed,
+semantic boundary for co-occurrence verifica-             evaluated on the TriviaQA validation set (N = 17,944).
+tion. Their sensitivity analysis on 2WikiMulti-
+hopQA and HotpotQA varies the window                      The vertical axis is the change in correct rate relative to
+{50, 100, 250, 500, 1,000, 2,000} and reports at          the canonical -0.3 setting (green star).
+most a 1.4-point EM swing across the range, indi-
+cating the choice is not load-bearing; larger win-           Both weaker penalties (-0.1, -0.2) and stronger
+dows yield slightly higher co-occurrence counts           penalties (-0.5, -1.0) underperform the canonical
+and smaller windows trigger more retrievals in their      -0.3 setting, with -0.2 as the worst point at -6.55
+pipeline. We do not rerun this sensitivity sweep          pp. The sweep is therefore consistent with -0.3
+for the training-time reward, and treat 1,000 as a        being a sweet spot rather than an arbitrary choice.
+well-supported default.
+                                                          B.3 Sentence-Level Aggregation and
+                                                                 Relation-Aware Demotion: Mechanism
+                                                                 Details
+
+                                                          This subsection supplements the empirical compar-
+                                                          ison in §6.4 (Table 4) with rigorous variant def-
+                                                          initions, a worked example, and the mechanism
+                                                          analyses behind the topline numbers reported there.
+
+                                                      17
+Variants. All three variants share the four-tier             RELCHECK demotes the reward from +0.1 to
+mapping of Eq. (2), the closed-class stop-word list          -0.05.
+and content-word CNF query of §B.1, the 1,000-
+token Infini-gram inter-clause window, the per-              Why MIN underperforms. On any sentence
+token alignment , and the CorVer training hy-                with two or more extracted triplets, the probability
+perparameters of §A.1. They differ only in how the           that at least one query returns a zero count is high,
+per-sentence co-occurrence count ci is computed              both because secondary triplets are often extracted
+before Eq. (2) is applied. FIRST (canonical CorVer)          with weaker entity spans and because MIN com-
+scans the extractor output in order, stops at the            mits the entire sentence to its worst-case count. The
+first ternary triplet (h, r, t) whose head and tail are      resulting reward gradient pushes the policy toward
+non-empty and non-pronominal, submits a single               shorter completions: training logs show the mean
+CNF query over the content words of h and t, and             completion length collapsing from approximately
+passes the resulting count ci through Eq. (2); the           150 tokens under FIRST to between 35 and 46 to-
+per-sentence cost is one Infini-gram lookup. MIN             kens under MIN, and the refusal rate falling from
+scans every valid ternary triplet (h(j), r(j), t(j)) in      5.04% to 0.33%. Shorter completions reduce the
+the sentence, submits one CNF query per triplet,             per-sentence chance of triggering a -0.3 penalty,
+and sets ci = minj ci(j) before applying Eq. (2);            but also reduce the chance of stating the correct
+the per-sentence cost is J lookups, where J is the           gold answer, which accounts for the -4.97 pp ac-
+number of valid triplets emitted by the extractor.           curacy drop. MIN therefore fails not because it
+RELCHECK (following the inference-time pipeline              identifies fewer factual errors than FIRST, but be-
+of Min et al. (2025), Appendix A.10) computes the            cause the aggregation rule couples factuality and
+head-plus-tail count ci as in FIRST; if ci < 20 the          length in a way that the policy can exploit.
+sentence reward is ric from Eq. (2) directly; oth-
+erwise a second CNF query is submitted with the              Why RELCHECK underperforms. Min et al.
+content words of the relation r added to the AND             (2025) present relation-aware verification as an op-
+conjunction, and if this relation-augmented count            tional extension, not the canonical setting, and Ap-
+is zero the sentence reward is demoted from +0.1             pendix A.10 of their paper gives the reason. The
+to -0.05 (otherwise +0.1 is retained). The per-              entity-only check is intentionally asymmetric. A
+sentence cost of RELCHECK is one lookup when                 zero entity count c(h, t) = 0 strongly signals hal-
+ci < 20 and two lookups otherwise.                           lucination risk, but c(h, t) > 0 does not certify the
+                                                             relation: the entities may co-occur under different
+Worked example. Consider the comple-                         relations or in unrelated contexts. Adding the rela-
+                                                             tion to the CNF query also introduces surface-form
+tion "Mario Camerini directed Il Seduttore.                  noise. Relational predicates exhibit high lexical
+                                                             variability, while named entities are lexically stable.
+The film starred Sophia Loren.", where the                   The same relation "directed" appears in Wikipedia
+                                                             as "directing", "was the director of", and many
+first sentence triggers two extracted triplets:              other variants. A literal-token relation lookup may
+                                                             therefore return zero on a correct claim that simply
+(1)  (Mario Camerini, directed, Il Seduttore)                uses a different surface form. Empirically, the de-
+                                                             motion from +0.1 to -0.05 reduces accuracy by
+with c(1)  =  50, and (2)                                    0.87 pp and raises the refusal rate from 5.04% to
+                                                             6.58%. The relation-augmented lookup also dou-
+(Il Seduttore, starred, Sophia Loren) with c(2) = 0          bles the per-sentence Infini-gram cost on the high-
+                                                             frequency bucket, raising end-to-end training wall
+(a fabricated cast member). FIRST returns ci = 50            clock by approximately 70%. Min et al. (2025)
+and assigns ric = +0.1, missing the second triplet.          report a parallel cost trade-off in their inference-
+MIN returns ci = min(50, 0) = 0 and assigns                  time pipeline: +39 to +51% retrieval frequency
+ric = -0.3, correctly flagging the fabricated                for +2.1 to +2.4 EM. In our training-time GRPO
+                                                             setting, the combined accuracy and cost trade-off
+cast member but at the cost of treating the entire           favors retaining the entity-only FIRST variant.
+
+sentence as unsupported. RELCHECK returns
+
+ci = 50 as in FIRST; the relation-augmented query
+
+over (Mario Camerini, directed, Il Seduttore)
+is non-zero, so ric = +0.1 is retained. If the
+model instead generated "Sophia Loren directed Il
+
+Seduttore", the head-plus-tail count over (Sophia
+
+Loren, Il Seduttore) may still be positive from
+
+incidental co-occurrence elsewhere in Wikipedia,
+
+while the relation-augmented count is zero, and
+
+                                                         18
+B.4 CorVer Algorithm                                       buckets. We sampled 200 sentences from the high-
+                                                           frequency bucket (ci  20, mapped to ric = +0.1)
+Algorithm 1 summarizes the per-step CorVer proce-          and 200 from the zero-frequency bucket (ci = 0,
+dure described in §3.4 and §4. Each step samples G         mapped to ric = -0.3). The second pass extended
+completions from a learning-zone prompt, extracts          coverage to the intermediate range. We sampled
+a subject-object pair and computes ric for every sen-      100 sentences in each of 1  ci  4, 5  ci 
+tence in the completion (sentences from both the           9, and 10  ci  19. The split at ci = 10 is
+think and answer blocks are parsed jointly, as             deliberately placed inside the middle reward bucket
+in §3.1), builds the token-to-sentence alignment           5  ci < 20, so the audit can probe a candidate
+with the per-completion fallback, and assembles the        boundary that Eq. (2) does not use. The total is
+per-token raw returns of Eq. (4) before the GRPO           200+100+100+100+200 = 700 sentences. For
+group-normalization and clipped-surrogate update.          each sentence we record the full text, the extracted
+                                                           subject-object pair, and the resulting Infini-gram
+Algorithm 1 CorVer: Stepwise GRPO                          AND query.
+
+Require: , Dlz, G, j, c, KL, min                           Annotation protocol. Five paper co-authors in-
+                                                           dependently annotated every sentence in the two
+1: for step = 1, . . . , N do                              extreme buckets. Each annotator verified the claim
+                                                           with web search before labelling its factual correct-
+2: Sample x  Dlz; {y(g)}gG=1  (· | x)                      ness as correct or incorrect. The final label for each
+3: for g = 1, . . . , G do                                 of those 400 sentences is the majority vote across
+                                                           the five annotators. The 300 intermediate-bucket
+4:   s1:m  split(y(g))                                     sentences were labelled by the paper authors under
+                                                           the same web-search rubric. The verdict for every
+5:   for i = 1, . . . , m do                               sentence is independent of whether the surrounding
+                                                           QA completion produces the gold answer. We are
+6:           (eis, eio)  extract(si)                       auditing the reward signal, not the eval grader.
+
+7:           ci  InfiniGram(eis, eio)                      Two-bucket precision at the extremes. Ta-
+                                                           ble 12 reports the per-bucket precision on the 400-
+8:           ric  Eq. (2)                                  sentence pilot. High-frequency sentences are fac-
+                                                           tually correct 81.0% of the time. Zero-frequency
+9:   end for                                               sentences are factually incorrect 76.0% of the time.
+                                                           Both buckets exceed 76% precision in the direc-
+10:  build                                                 tion matched to the sign of ric. The bidirectional
+                                                           correlation supports the use of subject-object co-
+11:  if (g) < min then rc (·)  0                           occurrence frequency as a directional proxy for
+                                                           sentence-level factuality at the two extremes of
+12:  end if                                                Eq. (2). It does not establish equivalence with a
+                                                           predicate-aware verifier.
+13:  Rt(g)  Eq. (4)
+
+14: end for
+
+15: A(tg)  GRPO group-normalized advan-
+     tage from {Rt(g)}Gg=1
+
+16:    + GRPO-step {At(g)}, KL
+
+17: end for
+
+B.5 Human Audit of the Four-Tier                           Table 12: Per-bucket precision on the two extreme buck-
+       Co-occurrence Reward                                ets of Eq. (2) (N = 400). Precision counts how often
+                                                           the human verdict matches the direction of the reward
+We manually audited 700 sentences sampled from             in each bucket.
+training-time generations of Llama-3.1-8B-Instruct
+on TriviaQA prompts (drawn from both the think             Bucket  ric Correct Incorr. Prec.
+and answer blocks in proportion to how they ap-
+pear in the reward stream). The audit covers all           Pos. (ci  20) +0.1 162 38 81.0%
+five precision regimes of the four-tier mapping. It        Neg. (ci = 0) -0.3 48 152 76.0%
+is the empirical basis for two distinct claims about
+Eq. (2): that the co-occurrence count ci is a di-          Five-bucket calibration curve. Figure 5 in §6.1
+rectional proxy for sentence-level factuality (§6.1),      and Table 13 report P (correct | ci) in each of the
+and that the bucket boundaries at ci = 0, 5, and 20        five buckets with Wilson 95% confidence intervals.
+are placed where the empirical precision actually
+transitions.
+
+Sample construction. The audit was built in two
+passes. The first pass targeted the two extreme
+
+                                                       19
+Precision rises monotonically with ci, from 24.0%             Infini-gram lookup can detect fabrications that even
+at ci = 0 to 81.0% at ci  20. The two bound-                  a GPT-4o-mini-class judge confidently affirms. (b)
+aries used by Eq. (2) sit at clearly visible precision        Cases 1­2 below then trace the per-sentence reward
+transitions. The ci = 5 boundary corresponds to               through two complete training-time completions,
+a +17.0 pp jump (from 53.0% to 70.0%). The                    showing correctly-flagged fabrications and one ex-
+ci = 20 boundary corresponds to a +8.0 pp jump                ample (Case 1, sentence 2) of the first-triplet vs.
+(from 73.0% to 81.0%). The largest single jump                multi-triplet trade-off quantified in §6.4.
+is the +29.0 pp transition across ci = 0, consis-
+tent with the strongest penalty -0.3 being assigned           (a) Single-sentence comparison vs. LLM judge.
+to the zero-count bucket. The un-used boundary                Figure 7 illustrates three sentences from the zero-
+ci = 10 corresponds to only a +3.0 pp transition              frequency bucket where the co-occurrence reward
+(from 70.0% to 73.0%). This supports the choice               correctly identifies a factual error that an LLM
+not to subdivide the 5  ci < 20 reward bucket.                judge misses. In each case the model generates a
+                                                              sentence containing a plausible but incorrect en-
+Table 13: Per-bucket precision on the full five-bucket        tity: a wrong zip code, a wrong cast member, a
+calibration audit (N = 700). n: sample size; correct:         misspelled surname. GPT-4o-mini, given only the
+number of sentences labelled correct; P : precision; 95%      sentence text with no gold answer or surround-
+CI: Wilson interval.                                          ing context, confidently affirms each sentence as
+                                                              factually correct. The Infini-gram co-occurrence
+Bucket  n correct P (%) 95% CI (%)                            lookup, by contrast, returns zero co-occurrence
+                                                              for the fabricated subject-object pair, assigning
+ci = 0  200 48     24.0 [18.6, 30.4]                          ric = -0.3. These cases represent 25 out of 152
+                   53.0 [43.3, 62.5]                          human-confirmed incorrect sentences in the zero-
+1  ci  4 100 53    70.0 [60.4, 78.1]                          frequency bucket where the LLM judge fails to
+                   73.0 [63.6, 80.7]                          detect the error (Table 12). The three sentences are
+5  ci  9 100 70    81.0 [75.0, 85.8]                          isolated single-sentence examples, not complete
+                                                              model completions; the full per-sentence trace on
+10  ci  19 100 73                                             complete completions is given in part (b) below.
+
+ci  20  200 162                                               (b) Full per-sentence trace on two completions.
+                                                              The two cases below trace the per-sentence reward
+Interpretation and residuals. The residual 24%                through complete TriviaQA completions of Llama-
+of zero-frequency sentences that are in fact cor-             3.1-8B-Instruct CorVer. Case 1 covers a fabricated
+rect represent rare-but-correct facts whose reward            proper name (sentence 3, ci = 0) correctly flagged
+is under-credited under the current bucketing. The            with -0.3, plus a sentence (Case 1, sentence 2)
+residual 19% of high-frequency sentences that                 whose extracted triplet is correct but whose sur-
+are incorrect represent well-supported entity co-             rounding details are wrong, illustrating the first-
+occurrences attached to a wrong predicate. The                triplet vs. multi-triplet trade-off resolved in favor
+audit cannot tell those apart from genuinely sup-             of FIRST in §6.4. Case 2 is a clean positive trace
+ported claims; this is the structural limit of an             ending in a correctly-flagged category-mismatch
+entity-only proxy. Both residuals are consistent              fabrication (sentence 4, ci = 0).
+with the finding of Kang and Choi (2023) that
+LLM factual recall is tightly coupled with subject-
+object co-occurrence in pretraining text. A sen-
+tence whose entities frequently co-occur lies inside
+the model's reliable recall regime. One whose en-
+tities never co-occur lies outside it. Eq. (2) reads
+off this regime difference at training time, and the
+monotone five-bucket calibration shows the read-
+off is well-aligned with the reward sign.
+
+B.6 Qualitative Case Study
+
+This subsection presents two complementary qual-
+itative views of the co-occurrence reward. (a)
+Figure 7 shows three illustrative single-sentence
+cases from the zero-frequency bucket where the co-
+occurrence reward catches a factual error that an
+LLM-as-judge misses, evidence that the entity-only
+
+                                                          20
+  Case 1 ­ Q: when was the last time philly won the stanley        we present only the sentence text and ask the model
+  cup Gold: 1975                                                   to label it CORRECT or INCORRECT. The gold
+                                                                   answer and the surrounding QA context are inten-
+ <think> The Philadelphia Flyers, a professional ice               tionally withheld. The judgment therefore reflects
+  hockey team based in Philadelphia, Pennsylvania, won the         the model's own factual reliance, comparable to
+  Stanley Cup in 1975. The team defeated the Buffalo Sabres        the regime that motivates the co-occurrence reward
+  in the Stanley Cup Finals, winning the series 4­2 with a         (§B.5). Outputs are parsed by a strict CORRECT
+  game 5 victory on May 19, 1975. Philipp Mehldau was the          / INCORRECT case-insensitive match. The same
+  Governor of Pennsylvania during this time. </think>              GPT-4o-mini judge is used to produce the LLM-
+ <answer> The Philadelphia Flyers last won the Stan-               affirms-incorrect column reported in the single-
+  ley Cup in 1975. The Stanley Cup was last won by the             sentence case study (Figure 7). The training judge
+  Philadelphia Flyers in 1975. </answer>                           remains a string-match grader for every Raw + RL
+                                                                   run reported in the paper; LLM-as-judge is never
+  Per-sentence trace:                                              inside the GRPO reward loop.
+  1. (<think>, ci = 12,323, ric = +0.1) Triplet: (Philadel-
+  phia Flyers, won, Stanley Cup). Correct: Flyers' 1975            C Results, Diagnostics, and Cost
+  Cup.
+  2. (<think>, ci = 16,484, ric = +0.1) Triplet: (the team,        C.1 Checkpoint Selection
+  defeated, Buffalo Sabres). Correct on the extracted triplet
+  (Flyers did defeat Sabres 4­2); the sentence also includes       We use a fixed end-of-run selection criterion across
+  wrong subordinate details (Game 5/May 19, actual                 all models, not a held-out validation sweep. For
+  Game 6/May 27) beyond the triplet. MIN aggregation in            every CorVer run (Llama-3.2-3B-Instruct, Qwen3-
+  §6.4 would surface such within-sentence inconsistencies          4B, Llama-3.1-8B-Instruct, Qwen3-8B, OLMo-2-
+  through secondary triplets but reduces overall accuracy by       13B-Instruct, Qwen3-14B) we evaluate only the
+  4.97 pp; we therefore keep the first-triplet rule.               step-100 checkpoint. Intermediate step-50 check-
+  3. (<think>, ci = 0, ric = -0.3) Triplet: (Philipp               points are saved every 50 steps but are not graded
+  Mehldau, Governor of, Pennsylvania). Fabricated: 1975            post hoc. The same final-checkpoint policy is ap-
+  Pennsylvania governor was Milton Shapp.                          plied uniformly: no per-model best-of-checkpoints
+  4. (<answer>, ci = 12,323, ric =                                 sweep is performed and no held-out development
+ +0.1) Triplet: (Philadelphia Flyers, last won, Stan-              split is used to pick checkpoints. To justify this
+  ley Cup). Correct: still Flyers' most recent Cup.                choice empirically, we extend a single run (Llama-
+  5. (<answer>, ci = 12,323, ric = +0.1) Triplet: (Stanley         3.2-3B-Instruct CorVer) to 300 GRPO steps and
+  Cup, last won by, Philadelphia Flyers). Correct.                 evaluate every 50 steps on TriviaQA. Figure 8 and
+                                                                   Table 14 report the resulting trajectory: the first
+  Case 2 ­ Q: who won the ncaa basketball championship             100 steps account for the bulk of the gain over the
+  in 1989 Gold: Michigan                                           raw model (+6.85 pp), step 200 is the empirical
+                                                                   peak (+8.46 pp, a further +1.61 pp over the step-
+ <think> Michigan was led by Glen Rice, who was named              100 checkpoint), and steps 250­300 exhibit a mild
+  the Most Outstanding Player. Michigan won the champi-            downward drift. Step 100 therefore captures most
+  onship by defeating Seton Hall 80­79. The game took              of the improvement at one third of the compute,
+  place at the King Dome in Seattle, Washington. The 1989          while step 200 is a reasonable choice when com-
+  NCAA Men's Division I Basketball Championship was the            pute is not the binding constraint. We adopt step
+  61st edition of the NCAA Field Hockey Championships              100 for all six canonical runs reported in the paper.
+  and was held on April 3, 1989. </think>
+ <answer> The Michigan Wolverines won the NCAA bas-                C.2 Full Per-Model Results
+  ketball championship in 1989. The 1989 NCAA Men's
+  Division I Basketball Championship was held at the King          Table 15 reports the raw and CorVer-trained accu-
+  Dome in Seattle, Washington. </answer>                           racies on the five closed-book QA datasets for each
+  Per-sentence trace:                                              canonical model, along with the NA (refusal) rate
+  1. (<think>, ci = 163, ric = +0.1) Triplet: (Michigan,           at evaluation. The Raw column is the instruction-
+  led by, Glen Rice). Correct: 1989 Tournament MOP.                tuned base model under the eval prompt of §A.3 at
+  2. (<think>, ci = 389, ric = +0.1) Triplet: (Michigan,           temperature 0.0; the CorVer column is the step-100
+  defeated, Seton Hall). Correct: 80­79 in overtime.               checkpoint of the canonical CorVer run for that
+  3. (<think>, ci = 542, ric = +0.1) Triplet: (the game,           model.
+  took place at, King Dome). Correct: Seattle Kingdome.
+  4. (<think>, ci = 0, ric = -0.3) Triplet: (1989 NCAA
+  Basketball Championship, edition of, NCAA Field Hockey
+  Championships). Fabricated: category mismatch (basket-
+  ball, not field hockey).
+  5. (<answer>, ci = 3,500, ric = +0.1) Triplet: (Michi-
+  gan Wolverines, won, NCAA basketball championship).
+  Correct: matches the gold answer.
+  6. (<answer>, ci = 10, ric = 0) Triplet: (1989 Champi-
+  onship, held at, King Dome). Correct.
+
+B.7 Optional LLM Judge
+
+We use a separate LLM judge only as an offline val-
+
+idation tool, not in the training loop. The judge is
+
+GPT-4o-mini at temperature 0. For each sentence
+
+                                                               21
+Sentence and Model Output                           Extracted Triplet             Reward GPT-4o-mini Judgment
+
+A Prompt question: What is the zip code for subject: Ronkonkoma NY                cooc count   verdict: CORRECT
+
+Ronkonkoma, NY?                                     relation: zip code               0        "11777 is indeed assigned
+                                                                                               to Ronkonkoma."
+Gold answer: 11779                                  object: 11777                   reward
+                                                                                    -0.30
+
+ Sentence in generation:
+"The zip code for Ronkonkoma, New York is
+11777."
+
+Off by two digits.
+
+B Prompt question: Who plays Kevin James'           subject:            Jennifer  cooc count   verdict: CORRECT
+
+       wife in Grown Ups?                           Coolidge                         0        "Coolidge has a role in
+       Gold answer: Maria Bello                                                                Grown Ups."
+                                                    relation: appears in            reward
+       Sentence in generation:                                                      -0.30
+      "Jennifer Coolidge also appears in the movie
+       Grown Ups."                                  object: Grown Ups
+
+Coolidge is not in the cast.
+
+C Prompt question: What is Ella Fitzgerald's subject: Ella Fitzgerald             cooc count   verdict: CORRECT
+
+parents' name?                                      relation: mother                 0        "was indeed named Height
+                                                                                              Fitzgerald."
+Gold answer: William Fitzgerald                     object: Height                  reward
+                                                                                    -0.30
+
+ Sentence in generation:
+"Ella Fitzgerald's mother was Temperance
+ Mary Tempie Height Fitzgerald."
+
+Surname is Henry, not Height.
+
+Figure 7: Three illustrative single sentences (not full completions) sampled from the zero-frequency bucket, where
+the co-occurrence reward (ric = -0.3) correctly flags a factual error that GPT-4o-mini, used as an LLM judge with
+no gold answer, fails to detect. Each sentence was independently verified as factually incorrect by a human annotator.
+
+Case A involves a zip code differing by two digits, Case B an actress incorrectly associated with a film, and Case C
+
+a surname off by one letter (Henry vs. Height). In all three cases, the Infini-gram lookup returns zero co-occurrence
+
+for the fabricated subject-object pair, while the LLM judge confidently affirms each sentence as factually correct.
+
+                                                              22
+TriviaQA accuracy (%)  66                          peak                attempted. On this subset, CorVer achieves 24.9%
+                       64                                              accuracy on TriviaQA, 17.5% on NQ-Open, and
+                       62          default ckpt                        7.0% on PopQA. These rates are well above chance
+                       60            Llama-3.2-3B-Instruct CorVer      for open-domain QA, confirming that CorVer un-
+                       58            Step 100 (paper default)          locks recall on questions the raw model declined
+                       56 Raw        Step 200 (empirical peak)         to attempt. The Llama family exhibits the oppo-
+                                                                       site NA-rate shift (a modest increase of 3 to 5
+                       54 0 50  10G0RP1O50ste2p00 250 300              pp), so its accuracy gain derives primarily from
+                                                                       improved recall on attempted questions rather than
+Figure 8: TriviaQA accuracy of Llama-3.2-3B-Instruct                   from changes in abstention behavior.
+CorVer as a function of GRPO step, evaluated every
+50 steps up to step 300. The first 100 steps account                   C.4 Reward Cost Measurement Protocol
+for the largest single jump (+6.85 pp over Raw); step
+200 is the empirical peak (+8.46 pp); steps 250­300                    Figure 4 of the main text compares CorVer's aver-
+plateau and drift slightly down. The paper uses the                    age training time against four factuality-RL base-
+step-100 checkpoint (green dashed line) as the uniform                 lines across four base models. This appendix pro-
+end-of-run selection; step 200 (orange dashed line) is                 vides four supplementary breakdowns: a qualita-
+the empirical peak when compute is not constrained.                    tive cost profile per method class, the full per-cell
+                                                                       cross-method wall-clock table (Table 18), per-cell
+Table 14: TriviaQA accuracy decomposition for Llama-                   GPU configurations (Table 19), and CorVer's inter-
+3.2-3B-Instruct CorVer across GRPO steps 0 (Raw)                       nal cost decomposition across its ablation variants
+through 300. Cor / Inc / NA are the correct-, incorrect-,              (Table 20).
+and refusal-rate percentages; rows sum to 100. Cor is
+the absolute accuracy gain over the Raw baseline at step                  Qualitative cost profile. CorVer performs one
+0. The step-100 row matches the canonical CorVer entry                 0.5B extractor forward pass and one mmap CNF
+for Llama-3.2-3B-Instruct in Table 15; the step-200 row                count per sentence. Both are millisecond-scale on
+is the empirical peak.                                                 a single A100 and require no GPU reward model
+                                                                       in the GRPO loop. NLI- and LLM-judge-based
+                       Step Cor (%) Inc (%) NA (%) Cor                 rewards require a neural forward pass (or an exter-
+                                                                       nal API call) per generated sentence. At G = 16
+     0 (Raw)                    55.39  42.43  2.18 --                  completions × multiple sentences per completion,
+            50                  59.20  38.23  2.57 +3.81               this dominates the reward-call budget. KnowRL-
+                                62.24  32.72  5.04 +6.85               style knowledge-verification RL additionally cou-
+100 (default)                   61.65  35.36  2.99 +6.26               ples retrieval, candidate scoring, and verification
+           150                  63.85  33.04  3.11 +8.46               into the reward path. The CorVer design is there-
+                                63.72  33.40  2.88 +8.33               fore deliberately positioned to keep sentence-level
+  200 (peak)                    63.40  33.81  2.79 +8.01               reward cost at the same order of magnitude as a
+           250                                                         standard outcome-only GRPO reward, not at the or-
+           300                                                         der of magnitude of neural-verifier or LLM-judge
+                                                                       rewards.
+   For a compact side-by-side view of the same ac-
+curacies (Raw vs CorVer, with the better of the two                       Full cross-method table. Table 18 reports the
+within each pair in bold), see Table 16. NA rates                      end-to-end training hours required to produce each
+are omitted in that view; refer to Table 15 above                      method's checkpoint in Table 1 across the four base
+for the per-cell refusal-rate diagnostics, including                   models of Figure 4. Parenthetical values in base-
+the Qwen3-8B Raw NA-rate pattern referenced in                         line cells are CorVer's speedup over that cell. The
+§5.2.                                                                  final column averages each baseline's per-model
+                                                                       speedup ratio.
+C.3 Refusal-Rate Decomposition on
+       Qwen3-8B                                                           GPU configuration. CorVer and KnowRL ran
+                                                                       on a single A100 for every base model. FoRAG,
+Table 17 shows that Qwen3-8B Raw refuses a sub-                        RLFH, and FSPO ran on a single A100 in most
+stantial fraction of questions (up to 28% on Sim-                      configurations; three runs (FoRAG and RLFH
+pleQA), while CorVer reduces the refusal rate to be-                   on Qwen3-8B, FSPO on Llama-3.1-8B-Instruct)
+low 5% on every benchmark. To verify that this re-                     OOM'd and were moved to a single H200. Per-cell
+duced abstention reflects genuine recall rather than                   assignments are given in Table 19.
+indiscriminate guessing, we examine the subset of
+questions that Qwen3-8B Raw refused but CorVer
+
+                                                                   23
+Table 15: Full per-model evaluation accuracy (%) and NA rate (%) on the five closed-book QA datasets (TriviaQA
+validation, NQ-Open validation, PopQA test, SimpleQA, TruthfulQA). Each cell is reported as accuracy | NA.
+CorVer rows use the step-100 checkpoint of the canonical CorVer run for that model. Pending runs are marked.
+
+Model                  Variant TriviaQA NQ-Open            PopQA SimpleQA TruthfulQA
+
+Llama-3.2-3B-Instruct  Raw     55.39 | 2.18  34.13 | 4.93  15.92 | 0.95  1.55 | 0.74  5.63 | 1.59
+                       CorVer  62.24 | 5.04  43.41 | 3.38  23.75 | 1.37  2.57 | 1.60  7.47 | 2.45
+
+Qwen3-4B               Raw 51.14 | 8.59 24.65 | 5.37 17.51 | 4.98 2.52 | 4.58 8.45 | 5.88
+                       CorVer 53.77 | 8.78 26.59 | 7.20 19.33 | 1.56 3.12 | 4.46 10.65 | 4.04
+
+Llama-3.1-8B-Instruct  Raw     71.86 | 1.90  40.66 | 2.27  28.85 | 2.95  5.20 | 0.65 6.61 | 1.10
+                       CorVer  76.52 | 7.39  48.34 | 7.65  35.30 | 5.97  5.92 | 6.38 10.28 | 7.47
+
+Qwen3-8B               Raw 62.84 | 8.32 29.61 | 13.27 20.34 | 18.30 2.57 | 27.99 6.49 | 16.65
+                       CorVer 63.99 | 4.37 32.80 | 4.13 21.83 | 2.58 2.73 | 2.96 9.18 | 3.30
+
+OLMo-2-13B-Instruct    Raw 67.48 | 1.25      32.80 | 0.94  25.56 | 0.02  2.17 | 0.00  6.00 | 0.98
+                       CorVer 73.19 | 2.46   37.87 | 2.88  31.04 | 0.00  3.44 | 0.02  9.30 | 1.10
+
+Qwen3-14B              Raw 67.51 | 0.83 31.39 | 0.91 19.44 | 0.11 1.85 | 0.46 7.71 | 1.96
+                       CorVer 71.28 | 1.78 37.76 | 1.99 25.37 | 1.03 3.91 | 0.83 9.79 | 2.82
+
+Table 16: Cross-model scaling across factual QA benchmarks. For each instruction-tuned base model we report
+accuracy (%) without (Raw) and with (CorVer) our method on five factual QA datasets. Bold marks the better of the
+two within each (Raw, CorVer) pair. Per-model training step counts and other hyperparameters are listed in Table 6.
+
+                               TriviaQA      NQ-Open       PopQA         SimpleQA TruthfulQA
+
+Scale Model            Raw CorVer Raw CorVer Raw CorVer Raw CorVer Raw CorVer
+
+3B Llama-3.2-3B-Instruct 55.39 62.24 34.13 43.41 15.92 23.75 1.55 2.57 5.63 7.47
+
+4B Qwen3-4B            51.14 53.77 24.65 26.59 17.51 19.33 2.52 3.12 8.45 10.65
+
+8B Llama-3.1-8B-Instruct 71.86 76.52 40.66 48.34 28.85 35.30 5.20 5.92 6.61 10.28
+
+8B Qwen3-8B            62.84 63.99 29.61 32.80 20.34 21.83 2.57 2.73 6.49 9.18
+
+13B OLMo-2-13B-Instruct 67.48 73.19 32.80 37.87 25.56 31.04 2.17 3.44 6.00 9.30
+
+14B Qwen3-14B          67.51 71.28 31.39 37.76 19.44 25.37 1.85 3.91 7.71 9.79
+
+                                             24
+Table 17: Refusal-rate decomposition on Qwen3-8B.          the teacher's reasoning capacity but is forced to
+Raw NA%: fraction of questions the raw model refused.      mimic complex reasoning chains it cannot execute
+CorVer NA%: fraction after CorVer training. Subset         reliably, so questions it would have answered with-
+Cor.%: CorVer accuracy on the questions Raw refused        out reasoning may be lost to forced-but-incorrect
+but CorVer attempted.                                      deliberation. We do not claim this generalizes. The
+                                                           same degradation could also reflect our specific
+Dataset     Raw NA%  CorVer NA%  Subset Cor.%              SFT data composition (long deliberative traces vs.
+                                                           the short factual answers the target needs at infer-
+TriviaQA       8.32       4.37        24.9                 ence), the SFT hyperparameters we used (epoch
+NQ-Open       13.27       4.13        17.5                 counts, LoRA rank, learning rate, none of which we
+PopQA         18.30       2.58         7.0                 swept), the specific teacher choice, or the inconsis-
+SimpleQA      27.99       2.96         1.3                 tent SFT starting point in our Qwen3 runs (the SFT-
+TruthfulQA    16.65       3.30         8.1                 only Qwen3 rows use the -Base variants while the
+                                                           SFT+GRPO Qwen3 rows use the -Instruct vari-
+   Internal cost decomposition. Table 20 mea-              ants; see Table 21 caption). We report Table 21 as
+sures the wall-clock cost of CorVer's ablation vari-       an interesting empirical pattern that motivated the
+ants on Llama-3.1-8B-Instruct at 100 GRPO steps.           raw-model recipe used in the main results, not as a
+Removing the QuCo signal entirely (A1) cuts wall-          controlled finding that SFT cold-start is generally
+clock roughly in half, so the per-sentence reward          harmful for knowledge-intensive RL.
+path dominates reward-side cost despite the cheap
+per-call rate. A3 averages the same per-sentence           (L2) Anti-loop instructions had opposite effects
+values into a response-level scalar but saves only         on raw and CorVer-trained policies. Adding
+about 30% relative to the full method. The QuCo            an anti-loop instruction ("Do not loop or repeat
+lookup is therefore incurred regardless of how its         the same point or phrase") to the eval prompt had
+output reaches advantages, and per-token align-            opposite effects on the two policy regimes in our
+ment adds only a small overhead on top. Com-               runs. The raw (un-trained) instruction-tuned mod-
+bined with Table 2, this attributes the accuracy gain      els did not exhibit looping behavior, and appending
+to alignment itself, not to the compute difference         the line produced a small accuracy decrease on ev-
+between alignment and averaging.                           ery target. We presume the extra rule simply adds
+                                                           prompt complexity that the un-trained policy is
+D Auxiliary Findings and Practical                         not robust to. CorVer-trained checkpoints, by con-
+     Lessons                                               trast, occasionally fell into low-diversity repetition
+                                                           on long-form completions, and the same anti-loop
+Several engineering observations shaped the final          line empirically blocked this without changing the
+CorVer recipe. We document them here for com-              policy weights. Our hypothesized mechanism is re-
+pleteness; the mechanisms below are our interpre-          ward exploitation: the per-sentence co-occurrence
+tations from preliminary runs, not controlled exper-       reward (Eq. (2)) incentivizes well-supported sen-
+iments validating each claim.                              tences, and the trained policy may learn to repeat
+                                                           one such sentence to harvest the reward signal on
+(L1) Intermediate SFT cold-start hurt factual              every repeated token. We therefore use the lighter
+recall on knowledge QA in our setup. We                    prompt for every raw baseline (its strongest config-
+observed some unusual pattern for the wide-                uration) and the anti-loop prompt for every trained
+applicable SFT+GRPO pipeline (Hao et al., 2026).           checkpoint. This asymmetry makes the Raw vs
+We collected chain-of-thought traces from a 397B-          CorVer gaps in Table 1 a conservative lower bound;
+parameter Qwen3-family MoE teacher and SFT-                see Appendix A.3 for the prompt diff.
+trained three smaller targets on these traces with
+LoRA, in two cases continuing with GRPO from               (L3) Small models (3B/4B) needed fully-
+the SFT checkpoint. Table 21 reports the result-           mastered anchor questions in our runs to
+ing TriviaQA accuracies. The SFT-only check-               avoid training collapse. Training Llama-3.2-3B-
+point loses between 7 and 18 pp relative to the raw        Instruct and Qwen3-4B on the learning-zone-only
+instruction-tuned baseline on every target. The sub-       pool (the ncorrect  [1, G - 1] subset alone) led
+sequent GRPO stage recovers part of the gap on             to training collapse in preliminary runs: accu-
+Qwen3-8B and Qwen3-4B but does not reach the               racy degraded over training rather than improving.
+raw baseline in either case. Our tentative interpre-
+tation is a capacity mismatch: the student lacks
+
+                                                       25
+Table 18: Training time (hours) required to produce each method's checkpoint reported in Table 1 across four base
+models. CorVer trains for 100 GRPO steps; baselines train under their method-specific budgets (Appendix A.1).
+Parenthetical values in baseline cells are CorVer's speedup over that cell; the final column is the mean of per-model
+speedup ratios. Each run used a single GPU; per-cell GPU configurations are in Table 19.
+
+CorVer         Llama-3.2-3B-Instruct  Qwen3-4B     Llama-3.1-8B-Instruct   Qwen3-8B     Avg. slowdown
+
+FoRAG                     2.0              4.3                2.5               4.1            1×
+RLFH
+FSPO                21.0 (10.5×)      26.9 (6.3×)        11.8 (4.7×)      20.1 (4.9×)         6.6×
+KnowRL               15.5 (7.8×)      23.1 (5.4×)         9.4 (3.8×)      10.1 (2.5×)         4.8×
+                     11.7 (5.9×)      27.6 (6.4×)        12.8 (5.1×)      65.8 (16.0×)        8.4×
+                    21.1 (10.6×)      21.9 (5.1×)        17.1 (6.8×)      36.4 (8.9×)         7.8×
+
+Table 19: GPU used per (method, base model) for the wall-clock measurements in Table 18. Every run uses a single
+GPU.
+
+             CorVer       Llama-3.2-3B-Instruct    Qwen3-4B   Llama-3.1-8B-Instruct  Qwen3-8B
+
+             FoRAG                  A100              A100              A100            A100
+             RLFH
+             FSPO                   A100              A100              A100            H200
+             KnowRL                 A100              A100              A100            H200
+                                    A100              A100              H200            A100
+                                    A100              A100              A100            A100
+
+Table 20: Internal wall-clock cost decomposition of
+CorVer's ablation variants on Llama-3.1-8B-Instruct at
+100 GRPO steps. Rows match the ablations of §6.2. Rel-
+ative cost is reported against A1 (the cheapest variant,
+which drops the QuCo signal entirely).
+
+Variant            h / 100 step samples/s rel. A1
+
+CorVer (full)        2.5  0.54 2.2×
+
+A1: - QuCo           1.1  1.18 1.0×                           Table 21: Preliminary SFT cold-start experiments on
+                          0.62 1.9×                           TriviaQA. CoT traces collected from a 397B-parameter
+A2: - Judge          2.1  0.78 1.5×                           Qwen3-family MoE teacher. SFT setups: Llama-3.1-
+                          0.59 2.0×                           8B uses 4 epochs with LoRA r = 256; Qwen3-8B-
+A3: - per-token 1.7                                           Base uses 6 epochs; Qwen3-4B-Base uses 8 epochs.
+                                                              The SFT+GRPO Qwen3 rows train from the -Instruct
+A4: - self-filter    2.3                                      variant, so the SFT-only and SFT+GRPO Qwen3 num-
+                                                              bers do not share an SFT starting point and the table
+Mixing 1,000 (800 for Qwen3-4B) fully-mastered                is not a controlled ablation. Model row labels denote
+(ncorrect = G) anchor questions back into the train-          the corresponding instruction-tuned target. Raw column
+ing pool stabilized the run and produced the gains            reproduces the baseline from Table 1.
+reported in Table 1. Anchor questions carry no
+within-group advantage signal under GRPO and                                            SFT+GRPO
+are formally redundant. The empirical interpre-
+tation is that they act as a distributional anchor:           Model       Raw SFT-only step-100 step-200
+they keep the small-model policy close to the raw-
+model response distribution while the learning-               Llama-3.1-8B 71.86 54.30  --     --
+zone prompts drive correctness gains. Larger mod-
+els ( 8B) trained successfully on the learning-               Qwen3-8B 62.84 55.4       60.2   59.6
+zone-only pool and did not require anchors. The
+exact per-model anchor counts are listed in Ap-               Qwen3-4B 51.14 43.0       47.6   48.8
+pendix A.4.
+
+                                                          26
+

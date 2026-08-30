@@ -1,0 +1,1639 @@
+arXiv:2605.17267v2 [cs.IR] 15 Jun 2026  RAGR: Review-Augmented Generative Recommendation
+
+                                        YINGYI ZHANG, Dalian University of Technology, China and City University of Hong Kong, Hong Kong
+                                        JUNYI LI, City University of Hong Kong, Hong Kong
+                                        YEJING WANG, City University of Hong Kong, Hong Kong
+                                        WENLIN ZHANG, City University of Hong Kong, Hong Kong
+                                        XIAOWEI QIAN, City University of Hong Kong, Hong Kong
+                                        SHENG ZHANG, City University of Hong Kong, Hong Kong
+                                        YUE FENG, Dalian University of Technology, China
+                                        YICHAO WANG, Huawei Noah's Ark Lab, Singapore
+                                        YONG LIU, Huawei Noah's Ark Lab, Singapore
+                                        XIANGYU ZHAO, City University of Hong Kong, Hong Kong
+                                        XIANNENG LI, Dalian University of Technology, China
+
+                                        Sequential recommendation (SR) is traditionally formulated as next-item prediction over chronological item
+                                        interactions. Although recent generative recommendation (GR) methods introduce new machinery, such as
+                                        semantic IDs, autoregressive decoding, and unified token spaces, they largely inherit the same item-only
+                                        modeling assumption. We argue that this design constitutes a structural bottleneck, because user decision-
+                                        making is not purely behavioral: while item interactions reveal what users choose, review feedback often
+                                        explains why they choose it by exposing latent evaluative factors.
+
+                                           Motivated by this observation, we propose Review-Augmented Generative Recommendation (RAGR), a novel
+                                        GR framework that incorporates review feedback into the generative user sequence rather than treating reviews
+                                        as auxiliary side information. Specifically, RAGR introduces a Review-Augmented User Sequence Modeling
+                                        mechanism that interleaves item semantic IDs and review semantic IDs in chronological order to construct
+                                        a mixed behavioral-semantic sequence, enabling review signals to participate directly in autoregressive
+                                        next-token generation. To preserve the recommendation objective, we further introduce an Item-Centric
+                                        Task Generation Alignment strategy based on direct preference optimization (DPO), encouraging the model
+                                        to favor item tokens over review tokens at prediction positions. Experiments on three real-world datasets
+                                        show that RAGR yields consistent and significant gains over strong GR backbones. Our code is available at
+                                        https://github.com/Zhang-Yingyi/RAGR.
+
+                                        CCS Concepts: · Information systems  Recommender systems; Personalization.
+
+                                        Authors' Contact Information: Yingyi Zhang, Dalian University of Technology, China and City University of Hong Kong,
+                                        Hong Kong, yingyizhang@mail.dlut.edu.cn; Junyi Li, junyili@cityu.edu.hk, City University of Hong Kong, Hong Kong; Yejing
+                                        Wang, yejing.wang@my.cityu.edu.hk, City University of Hong Kong, Hong Kong; Wenlin Zhang, wl.z@my.cityu.edu.hk,
+                                        City University of Hong Kong, Hong Kong; Xiaowei Qian, xiaowqian2-c@my.cityu.edu.hk, City University of Hong
+                                        Kong, Hong Kong; Sheng Zhang, szhang844-c@my.cityu.edu.hk, City University of Hong Kong, Hong Kong; Yue Feng,
+                                        fy_0403@mail.dlut.edu.cn, Dalian University of Technology, China; Yichao Wang, Huawei Noah's Ark Lab, Singapore,
+                                        wangyichao5@huawei.com; Yong Liu, Huawei Noah's Ark Lab, Singapore, liu.yong6@huawei.com; Xiangyu Zhao, City
+                                        University of Hong Kong, Hong Kong, xianzhao@cityu.edu.hk; Xianneng Li, Dalian University of Technology, China,
+                                        xianneng@dlut.edu.cn.
+
+                                        Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee
+                                        provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and the
+                                        full citation on the first page. Copyrights for components of this work owned by others than the author(s) must be honored.
+                                        Abstracting with credit is permitted. To copy otherwise, or republish, to post on servers or to redistribute to lists, requires
+                                        prior specific permission and/or a fee. Request permissions from permissions@acm.org.
+                                        © 2026 Copyright held by the owner/author(s). Publication rights licensed to ACM.
+                                        ACM 1558-2868/2026/6-ART
+                                        https://doi.org/XXXXXXX.XXXXXXX
+
+                                                                                                    ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+2                                                                                                                                                      Zhang et al.
+
+ACM Reference Format:
+Yingyi Zhang, Junyi Li, Yejing Wang, Wenlin Zhang, Xiaowei Qian, Sheng Zhang, Yue Feng, Yichao Wang,
+Yong Liu, Xiangyu Zhao, and Xianneng Li. 2026. RAGR: Review-Augmented Generative Recommendation.
+ACM Trans. Inf. Syst. 1, 1 (June 2026), 25 pages. https://doi.org/XXXXXXX.XXXXXXX
+
+1 Introduction
+
+Recommender systems are indispensable to modern e-commerce platforms [46], such as Ama-
+zon [10] and Alibaba [35], where they surface relevant items from catalogs of millions. Among
+various paradigms, sequential recommendation (SR) [16, 42] stands out because user preferences
+are inherently dynamic, shaped not only by static profiles but by the evolving temporal patterns
+of historical interactions [48, 49]. SR is predominantly cast as a next-item prediction task--given
+a chronological sequence of past interactions as shown in Fig. 1 a), the model forecasts the item
+a user will engage with next [6, 25]. This formulation is tightly coupled with the representation
+mechanism of conventional models: architectures such as SASRec [16] and BERT4Rec [32] rely on
+an item ID embedding table, under which a user's history is encoded as an ID sequence and the
+learning objective reduces to predicting the next item ID, as illustrated in Fig. 1 c).
+
+   a) Existing Generative Recommendation                                                b) Ours Review-Augmented Generative Recommendation
+
+                                                                                        Personal Care          I'm obsessed      ...                   Jewelry Display
+                                                                                        A set of skincare...   with this set...                        A beaded necklace...
+
+   Personal Care  Spices                    Fashion Handbag       Jewelry Display
+                                            A tan-colored bag...  A beaded necklace...
+   A set of skincare... A collection of...
+                                                                   Training data
+                                                                                        Personal Care         ... I'm obsessed   Jewelry Display       The red and
+                                                                                        A set of skincare...                                           yellow beads...
+   Generative Recommendation ItemSID Sequence                                                                 with this set...   A beaded necklace...
+                                                                                                                                                            User
+                                                                                        User Review-Augmented  Item SID               Training          Review SID
+                                                                                                                                        data
+                                                                                        Generative Recommendation Sequence
+
+   c) Traditional Sequential Recommendation                                             d) Generative Sequential Recommendation
+
+    Item Hash ID                                                  1234 ... N              Item Text                                                  Item 998
+     Embedding                                                                                                                  Next Item SID <a_26><b_32>..
+                                                                                          RQ-VAE
+        Table                                                                           Semantic ID                                  Decoder
+                                                                                                                                Token Encoder
+   User Sequence                                                                            Item 27
+                          27 35 998 ...                           Next Item ID                                 <a_42><b_21> .. <a_26><b_31>..
+                                                                                         <a_42><b_21>..
+                                                                                                               Item 27           Item 35 ...
+                                                                                        User Sequence
+
+   Limitation of ID-based SR: Item ID embedding tables capture                          Gap in SID-based GR: Existing GR enhances item representation with
+
+   behavioral outcomes, but cannot naturally encode free-form user                      SIDs, but still models users as item-only sequences, leaving review
+   review feedback.                                                                     feedback--and the preference rationale it reveals--underutilized.
+
+Fig. 1. Comparison between existing and our proposed generative recommendation paradigms. (a) Existing
+generative recommendation based on item-only sequences. (b) The overall framework of the proposed
+Review-Augmented Generative Recommendation (RAGR). (c) The proposed review-augmented user sequence
+modeling mechanism. (d) The item-centric task generation alignment via DPO.
+
+   With the emergence of generative recommendation (GR) [18, 29], this paradigm has been
+reparameterized through semantic ID (SID) [26, 29, 36], autoregressive decoding, and unified token
+spaces. As shown in Fig. 1 d), GR replaces the conventional item-ID lookup table with semantic
+tokenization and generation. However, despite this representational shift, the underlying modeling
+paradigm remains essentially the same as that in Fig. 1 a): existing GR methods still model the
+user history as an item-only trajectory and optimize for generating the next item. We argue that
+this inherited assumption is not merely a missed opportunity but a structural bottleneck. In reality,
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+RAGR: Review-Augmented Generative Recommendation  3
+
+user decision-making is inherently multi-faceted: purchases are often preceded by browsing and
+comparison, and followed by explicit feedback such as textual reviews [8, 47]. As McAuley and
+Leskovec [23] show, reviews expose hidden evaluative dimensions--such as quality, usability, and
+aesthetics--that shape a user's rating but remain invisible in interaction logs alone. An item-
+only sequence captures only the outcome of a decision--what the user chose--while omitting the
+explanatory signals that reveal why it was chosen. Without such signals, the model must infer
+preference dynamics solely from item co-occurrence patterns, resulting in a shallow and brittle
+understanding of user intent.
+
+   Notably, the generative framework already possesses the machinery needed to transcend this
+bottleneck. A distinguishing property of GR is its unified tokenizer, which projects item text content
+into a shared token space [4, 18, 34]. This unified tokenization mechanism makes GR fundamentally
+different from conventional ID-based recommendation, because it allows recommendation objects
+to be represented and generated within a common semantic space. In current practice, however,
+this tokenizer is applied almost exclusively to items--mapping each item to SID [26, 29, 36] for
+autoregressive modeling--while the same mechanism could equally operate on other textual signals
+that users routinely produce, most notably post-interaction reviews. This is particularly appealing
+because reviews provide fine-grained preference signals beyond item transitions. Put differently,
+existing research has substantially advanced the expressiveness of item representation yet left the
+expressiveness of the user sequence largely untouched. This asymmetry gives rise to our central
+research question: Can the unified tokenizer of GR be repurposed to encode user review
+feedback as semantic tokens and weave them into the interaction sequence, thereby enabling
+the model to capture not only behavioral outcomes but also the underlying preference
+rationale? Addressing this question entails two intertwined challenges: (1) Heterogeneous sequence
+construction--items and reviews differ in granularity and functional role; projecting both through
+a shared tokenizer into a coherent sequence requires careful design to avoid introducing noise.
+(2) Recommendation-objective preservation--once review tokens enter the generative sequence, a
+principled alignment mechanism is needed to ensure that they serve as supporting evidence for
+next-item prediction rather than a competing generation target.
+
+   To address these challenges, we propose Review-Augmented Generative Recommendation
+(RAGR), as illustrated in Fig. 1b. The central idea of RAGR is to move beyond the conventional
+treatment of reviews as auxiliary features in discriminative recommenders. Instead, we bring review
+feedback directly into the GR paradigm by encoding reviews as tokens within the user sequence
+itself--extending the item-only behavioral trajectory into a review-augmented one. Specifically,
+RAGR consists of two complementary components. (i) Review-Augmented User Sequence
+Modeling. Item SIDs and review SIDs are interleaved chronologically to form a mixed-signal user
+sequence, over which the GR backbone is trained to predict the next SID--allowing review context to
+directly participate in the autoregressive generation process. (ii) Item-Centric Task Generation
+Alignment. Because the mixed sequence may cause the model to devote generation capacity
+to reviews rather than items, we apply a direct preference optimization (DPO) [27] alignment
+mechanism that teaches the model to prefer generating item SIDs over review SIDs at prediction
+positions, ensuring that the learning objective remains anchored to next-item recommendation.
+
+   Our main contributions are summarized as follows:
+
+· We identify a structural limitation of existing GR methods--their confinement to item-only
+  sequences--and propose RAGR, to our knowledge the first framework to elevate reviews from
+  auxiliary features in discriminative recommenders to tokens within the GR paradigm, extending
+  user sequences from purely behavioral to mixed behavioral-semantic.
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+4                                                                                Zhang et al.
+
+· We design a Review-Augmented User Sequence Modeling mechanism that interleaves item and
+  review SIDs chronologically, enabling review context to participate directly in the autoregressive
+  generation process and enrich the preference signal available at each prediction step.
+
+· We propose an Item-Centric Task Generation Alignment strategy based on DPO, which steers
+  the model to prefer item SIDs over review SIDs at prediction positions, ensuring that reviews
+  inform--but never displace--the next-item recommendation objective.
+
+· We conduct extensive experiments on three real-world datasets, demonstrating that RAGR yields
+  consistent and significant gains when applied to multiple GR backbones. Ablation studies further
+  confirm that review augmentation and task alignment are both indispensable.
+
+   The remainder of this paper is structured as follows. Section 2 defines the review-augmented gen-
+erative recommendation problem. Section 3 introduces the proposed approach, which is evaluated
+in Section 4. Then, Section 5 summarizes the recent development of sequential recommendation
+and generative recommendation. Finally, conclusions are drawn in Section 6.
+
+2 Problem Formulation
+
+Let U and I denote the user set and item set, respectively. For each user   U, we observe a
+chronological interaction history
+
+                       S = (1, 1), (2, 2), . . . , ( ,  ) ,                      (1)
+
+where   I denotes the interacted item at step , and  denotes the associated textual feedback,
+
+such as a review. Different from conventional sequential recommendation, which models only
+the item sequence (1, 2, . . . ,  ), we consider a review-augmented user sequence in which item
+interactions and review feedback are jointly modeled. Given the historical sequence up to step  - 1,
+
+                       S< =       (1, 1), (2, 2), . . . , ( -1,  -1) ,           (2)
+
+                         
+
+our goal is to predict the next target item  . Formally, we aim to learn a generative recommendation
+
+model
+
+                                             :  S <      ,                       (3)
+
+                                                  
+
+where  denotes model parameters.
+
+   To support generative modeling, we represent both items and reviews in a unified token space.
+Let z( ) and z( ) denote the tokenized representations of item  and review  , respectively. Then
+the historical sequence can be rewritten as
+
+              S< =     z(1), z(1), z(2), z(2), . . . , z( -1), z( -1)         .  (4)
+
+                
+
+Accordingly, the recommendation objective is to generate the tokenized representation of the next
+
+target item:
+
+                                             z( )     | S<  .                    (5)
+
+                                                          
+
+   Based on this formulation, we construct the training set as
+
+              D=       S <        ,  z(  ),  z  (  )    U, 2     ,               (6)
+
+                         
+
+where z( ) is the tokenized target item and z( ) is the corresponding review of the user. The
+learning problem in this work is therefore to perform next-item generation over review-augmented
+user sequences while preserving the item-centric recommendation objective. However, incorporat-
+ing review tokens into the unified generative space introduces ambiguity in the prediction
+target, since both item sequences and review sequences become plausible continuations
+under the same context.
+
+   To resolve this ambiguity, the proposed RAGR framework addresses two sub-problems in se-
+quence: (1) how to train a generative model over the mixed item­review SID sequence so that
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+RAGR: Review-Augmented Generative Recommendation                                                                                                                                      5
+
+review context enriches preference modeling (Section 3.3), and (2) how to align the generation
+objective so that the model favors item SIDs over review SIDs at prediction positions (Section 3.4).
+
+3 The proposed RAGR method
+
+RAGR Overall Pipeline                    Tokenizer Training                                            Codebook1 Codebook2 Codebook3
+
+Tokenizer             RQ-VAE             Personal Care                                                 0123                  0123     0123
+Training                                 A set of skincare...
+                                                                                 embedding
+    Item Text          User Review       Spices                                                                                                                            embedding
+                                         A collection of...                                            = +3                  = +1     ...
+Personal Care         I'm obsessed with
+A set of skincare...  this set...               ...                                                       3+1 + 2 =
+
+     RQ-VAE                RQ-VAE        Jewelry Display                                 Item token<a_3><b_1><c_2>
+                                         A beaded necklace...
+
+Item SID              Review SID
+
+Review-Augmented User                    Review-Augmented User Sequence Modeling                                                                                 Item 998
+          Sequence                                                                                                                                           <a_26><b_32>..
+
+                                         Personal Care         I'm obsessed      ...                   Jewelry Display
+                                         A set of skincare...                                          A beaded necklace...
+                                                               with this set...
+                                            RQ-VAE                                                         RQ-VAE
+GR Training Data                                               RQ-VAE                                                                 GR Model
+         Train
+                                         <a_42><b_21> ..       <a_92><b_41>..                          <a_26><b_32>..        <a_42><b_21> .. <a_92><b_41>..
+     GR Model
+                                                               Next Item SID Prediction                                      Item 27  ... User Rev to 27
+
+                                         Personal Care         I'm obsessed      Jewelry Display       The red and                                           User Rev to 998
+                                         A set of skincare...  with this set...  A beaded necklace...  yellow beads...                                       <a_26><b_39>..
+
+  Item-Centric Task                         RQ-VAE               RQ-VAE              RQ-VAE              RQ-VAE                       GR Model
+Generation Alignment
+
+Next Item Prediction Task                <a_42><b_21> .. <a_92><b_41>.. <a_26><b_32>..<a_26><b_39>..                         <a_42><b_21> .. <a_92><b_41>.. <a_26><b_32>..
+                                                                                                                                      ... User Rev to 27
+                                                      Next Review SID Prediction                                             Item 27                         Item 998
+
+Prefer                Reject
+
+Item SID              Review SID         Item-Centric Task Generation Alignment                                                         Item 998             User Rev SID
+                                                                                                                                      <a_26><b_32>..         <a_26><b_39>..
+                                                                               Chosen
+                                                                                 item                  <a_26><b_32>..                 Chosen Reject
+
+DPO Training data                        Personal Care         ... I'm obsessed                                                       GR Model
+         Train                           A set of skincare...
+                                                               with this set...
+      GR Model
+                                         <a_42><b_21> ..       <a_92><b_41>.. Reject                   <a_26><b_39>..
+                                                                                 Review
+                                                                                                                             <a_42><b_21> .. <a_92><b_41>..
+
+                                                                                                                              Item 27 User Rev to 27 ...
+
+Fig. 2. The overall framework of the proposed RAGR, which consists of three main stages: Tokenizer Training,
+Review-Augmented User Sequence Modeling, and Item-Centric Task Generation Alignment.
+
+3.1 Overview of RAGR
+
+As illustrated in Fig. 2, RAGR consists of three stages: Tokenizer Training, Review-Augmented User
+Sequence Modeling, and Item-Centric Task Generation Alignment.
+
+   In the first stage, we train a tokenizer based on RQ-VAE [29] to map both items and reviews
+into a unified semantic ID space. This stage produces discrete token representations required for
+subsequent generative modeling. In the second stage, we construct review-augmented user
+sequences by interleaving item interactions with their associated review feedback. Based on such
+sequences, the generative recommender is trained for next item generation, so that recommendation
+is conditioned not only on item interactions but also on semantic evidence derived from review
+feedback. In the third stage, we introduce item-centric task generation alignment to preserve
+the task boundary of next item recommendation. Specifically, we employ DPO-based preference
+alignment to bias generation toward target items rather than review text, so that review feedback
+serves as evidence for item selection instead of becoming a competing generation target.
+
+                                                            ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+6                                                                                                               Zhang et al.
+
+3.2 Tokenizer Training
+
+To address the need for a unified discrete token space for both item interactions and review feedback,
+we first train a semantic tokenizer based on item text. As shown in Fig. 2, we first encode item text
+into dense semantic representations with an LLM-based text encoder, and then train an RQ-VAE [29]
+tokenizer to quantize such representations into multi-level discrete codes. In this way, each item can
+be represented as a semantic ID sequence that serves as the basis for subsequent review-augmented
+generative recommendation.
+
+   Formally, let  denote the textual content associated with item   I, such as its title, category,
+or description. We first employ a pretrained LLM-based text encoder to obtain a dense embedding
+
+                                                        e =  ( ),                                                        (7)
+
+where  (·) denotes the text encoder and e  R is the semantic embedding of item . Compared
+with raw item IDs, such text-informed representations provide richer semantic information and
+serve as the basis for tokenizer learning.
+
+   Based on these item embeddings, we train a residual quantization variational autoencoder (RQ-
+VAE) to discretize the continuous semantic space into a sequence of code indices. Specifically, given
+an item embedding e , the encoder of RQ-VAE first maps it into a latent representation
+
+                                                       h = enc (e ),                                                     (8)
+
+where enc (·) denotes the encoder network. We then apply residual quantization over  codebooks
+{C (1), C (2), . . . , C ( ) } in a coarse-to-fine manner. At the -th level, the residual representation is
+
+quantized by selecting the nearest codeword from the corresponding codebook:
+
+                                           ( )  =  arg min  r(-1) - c()                   2                              (9)
+
+                                                                                           ,
+                                                                  
+                                                                                     2
+
+where c()  C () denotes the -th codeword in the -th codebook, and r(-1) is the residual to        
+      
+
+be quantized at level . The residual is updated as
+
+                                                r ( )  =  r ( - 1 )    -  c  ( )    ,                                    (10)
+
+                                                                               ()
+                                                                             
+                                                                                
+
+with  r(0)  =  h .  After    levels  of  quantization,    the  item       representation      is  approximated  by  the  sum
+
+       
+
+of selected codewords:
+
+                                                            
+
+                                                   h^                  ( )
+
+                                                        =           c    ()  .                                           (11)
+
+                                                                     
+                                                           =1 
+
+   Accordingly, each item  is represented as a multi-level discrete semantic ID
+
+                                           z() =        (1) (2)                   ( )  ,                                 (12)
+                                                        ,  , . . . , 
+                                                                                  
+
+which serves as its tokenized representation in the unified generative space. Intuitively, earlier
+codebooks capture coarse-grained semantics, while later codebooks progressively refine the rep-
+resentation with finer-grained details. Following standard residual quantization objectives [17],
+we train the RQ-VAE by minimizing the discrepancy between the latent representation and its
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+RAGR: Review-Augmented Generative Recommendation                                    7
+
+quantized approximation, together with codebook and commitment regularization:
+
+Ltok = h - h^ 2
+
+                           2
+
+Lrec
+
+                                                                           2
+
+            sg r(-1)                                        -     c  ( )
++
+                                                                       ()
+                                                                  
+=1                                                                         2        (13)
+                                                                    
+
+                                                    Lcode
+
+                                                                              2
+
+                                                  r ( -1 )  - sg  c  ( )         .
++ 
+                                                                       ()
+                                                                     
+=1                                                                            2
+                                                                       
+
+                                                    Lcommit
+
+where sg[·] denotes the stop-gradient operator and  is the commitment coefficient.
+
+3.3 Review-Augmented User Sequence Modeling
+
+To address the limitation that existing generative recommendation models primarily capture what
+users selected but not why they selected it, we augment the conventional item-only interaction
+sequence with review feedback, so that each historical interaction is represented by both its item
+semantic ID and its corresponding review semantic ID. As illustrated in Fig. 2, instead of organizing
+user behavior as a pure item trajectory, we interleave item and review tokens in chronological
+order, allowing the generative recommender to condition sequence modeling on both behavioral
+outcomes and semantic feedback evidence.
+
+   Let z( ) and z( ) denote the semantic IDs of item  and review  , respectively, obtained from the
+tokenizer trained in the first stage (Section 3.2). For each user , we construct the review-augmented
+sequence as
+
+S = z(1), z(1), z(2), z(2), . . . , z( ), z( ) .                                    (14)
+
+Compared with conventional item-only sequences, this formulation allows the model to observe not
+only what the user interacted with, but also how the user described or evaluated those interactions.
+
+   Based on the review-augmented sequence, we construct a unified textual generation task by
+serializing item SIDs and review SIDs into autoregressive training instances. Specifically, we
+generate two types of sequence-to-sequence samples from the same review-augmented interaction
+history. The first type is next-item SID prediction, where the input consists of the historical item-
+review sequence up to step  - 1, and the target is the semantic ID sequence of the next item z( ).
+The second type is next-review SID prediction, where the input additionally includes the target item
+z( ), and the target is the corresponding review semantic ID sequence z( ). In both cases, the
+model is trained as a standard generative recommender over textualized semantic IDs, rather than
+as two separate task-specific predictors.
+
+   Formally, let (x, y) denote a generic training instance constructed from the review-augmented
+sequence, where x is the serialized input sequence and y is the target semantic ID sequence to be
+generated. Then the GR model is optimized with a unified autoregressive generation objective:
+
+            
+
+Lseq = -                                            log  (y | x),                   (15)
+
+          (x,y)  Dseq
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+8                                                                                              Zhang et al.
+
+where Dseq denotes the collection of all serialized next-item and next-review training instances.
+Under this formulation, item prediction and review prediction are not treated as separate op-
+timization objectives, but as two forms of textual sequence generation derived from the same
+review-augmented user behavior.
+
+   This unified sequence modeling strategy provides two benefits. First, it exposes the model to a
+finer-grained generative sequence that interleaves item interactions and review feedback, thereby
+enriching user sequence modeling beyond pure item transitions. Second, it allows the GR model
+to learn the semantic dependency between items and their associated feedback within a shared
+generative space, which lays the foundation for the subsequent item-centric task alignment stage.
+
+3.4 Item-Centric Task Generation Alignment
+
+To address the risk that review-augmented sequence modeling may blur the task boundary of
+next-item recommendation and inadvertently drive the model to generate review semantic IDs, we
+further introduce an item-centric task alignment stage that explicitly aligns the GR model toward
+target item generation rather than review generation. As illustrated in Fig. 2, the key idea is to treat
+the target item semantic ID as the preferred output and the corresponding review semantic ID as
+the rejected output under the same context, so that review feedback remains informative evidence
+for item selection instead of becoming a competing generation target.
+
+   Formally, let x denote the serialized review-augmented context constructed from the historical
+sequence before the target interaction, i.e.,
+
+                              x = z(1), z(1), . . . , z( -1), z( -1) .                         (16)
+
+For each target interaction at step , we form a preference pair
+
+                                                x , y+ , y- ,                                  (17)
+
+where
+
+                                   y+ = z( ),   y- = z( ).                                     (18)
+
+Here, y+ is the preferred output because it corresponds to the next target item that should be
+recommended, while y- is the rejected output because it corresponds to review feedback, which
+
+should inform recommendation but should not replace the recommendation target itself. Based on
+
+these pairs, we construct a training set
+
+                              Ddpo = x , y+ , y-   U, 2     .                                  (19)
+
+We then apply DPO [27] to align the GR model toward the preferred item output. Let  denote the
+current GR model and ref denote a reference model. To improve readability, we first define the
+relative preference score between the target item and the review signal under the same context as
+
+         (x,                  y+,  y-)  =  log   (y+ | x)      -  log          (y- | x)     .  (20)
+                                                ref (y+ | x)                  ref (y- | x)
+
+For each preference triple (x, y+, y-)  Ddpo, the DPO loss is then written as
+
+                              DPO (x, y+, y-) = - log    (x, y+, y-) ,                         (21)
+
+and the overall objective is
+
+                              LDPO = E(x,y+,y- )Ddpo DPO (x, y+, y-) .                         (22)
+
+Here,  (·) denotes the sigmoid function, and  is a temperature coefficient that controls the
+sharpness of optimization.
+
+   This objective explicitly encourages the GR model to assign a higher conditional likelihood to the
+
+target item semantic ID than to the review semantic ID under the same review-augmented context.
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+RAGR: Review-Augmented Generative Recommendation                          9
+
+In this way, review feedback is not removed from the generative sequence; instead, it is retained
+as contextual evidence while the model is aligned to preserve the item-centric recommendation
+objective. Consequently, the task alignment stage complements the previous sequence modeling
+stage: the latter enriches the user sequence with semantic feedback, whereas the former ensures
+that such feedback improves item generation without shifting the task from next-item prediction to
+review generation.
+
+4 Experiment
+
+In this section, we conduct comprehensive experiments to evaluate the proposed RAGR framework.
+The experiments are designed to answer the following five research questions:
+· RQ1: To what extent can RAGR improve the performance of existing generative recommendation
+
+  backbones on next-item recommendation?
+· RQ2: How effective are the two key components of RAGR, namely Review-Augmented User
+
+  Sequence Modeling and Item-Centric Task Generation Alignment?
+· RQ3: Which tokenizer training strategy is most effective for RAGR: training RQ-VAE on item
+
+  text only, review text only, or both item and review text?
+· RQ4: How sensitive is RAGR to the number of semantic ID tokens used in the tokenizer?
+· RQ5: How sensitive is RAGR to the hyperparameter settings of DPO-based task alignment?
+
+   We first present the experimental settings, including datasets, baselines, evaluation metrics,
+and implementation details. We then answer the above research questions through a series of
+experiments.
+
+4.1 Experimental Settings
+
+                                 Table 1. Statistics of the datasets after preprocessing.
+
+Datasets #Users #Items #Inter. #RAGR Train #Val. #Test
+
+Beauty  22,363 12,101 198,502                     285,189  22,363 22,363
+Toys    19,412 11,924 167,597                     238,134  19,412 19,412
+Sport   35,598 18,357 296,337                     414,684  35,598 35,598
+
+# represents the number of users, items, interactions, and samples.
+
+4.1.1 Datasets. To evaluate the effectiveness of RAGR, we conduct experiments on three bench-
+mark datasets from the Amazon review datasets [10]: Amazon-Beauty (Beauty for short), Amazon-
+Sports and Outdoors (Sport for short), and Amazon-Toys and Games (Toys for short).1 These
+datasets contain both user­item interaction records and user-written reviews, making them partic-
+ularly suitable for evaluating review-augmented generative recommendation. For each dataset, we
+organize user behaviors into chronological interaction sequences, where each interaction is paired
+with its corresponding review text. Following common practice in sequential recommendation, we
+remove users and items with fewer than five interactions to ensure sufficient behavioral context. We
+then sort all interactions by timestamp and adopt the leave-one-out evaluation protocol [16, 29]: for
+each user, the last interaction is used for testing, the second last interaction is used for validation,
+and the remaining interactions are used for training. In our setting, the review text associated with
+each historical interaction is retained, so that both item interactions and post-decision feedback
+can be incorporated into the review-augmented user sequence. Table 1 summarizes the statistics of
+the three datasets.
+
+1https://cseweb.ucsd.edu/~jmcauley/datasets/amazon/links.html
+
+        ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+10                                                                                   Zhang et al.
+
+4.1.2 Baselines. To comprehensively evaluate the proposed method, we compare RAGR with
+two groups of baselines, including representative sequential recommenders and recent generative
+recommendation models.
+
+   Sequential recommenders.
+
+    · GRU4Rec [11]: GRU4Rec is a classical sequential recommender that models user interaction
+       sequences with gated recurrent units (GRUs). By recurrently updating hidden states along
+       the interaction trajectory, it captures short-term sequential dependency and predicts the next
+       item based on the encoded user state.
+
+    · BERT4Rec [32]: BERT4Rec extends bidirectional Transformer modeling to sequential recom-
+       mendation. Instead of relying on unidirectional next-step prediction, it adopts an objective
+       to learn bidirectional contextual representations over user interaction sequences, thereby
+       capturing richer dependency patterns among historical items.
+
+    · SASRec [16]: SASRec is a self-attention-based sequential recommender that uses Transformer-
+       style attention blocks to model long-range dependencies in user interaction histories. By
+       selectively attending to relevant past items, it effectively captures both short-term and long-
+       term sequential signals for next-item prediction.
+
+    · S3-Rec [50]: S3-Rec enhances sequential recommendation through self-supervised represen-
+       tation learning. It introduces multiple auxiliary pretraining tasks over item attributes, item
+       co-occurrence, and sequence context, so that the model can learn more informative sequence
+       representations for next-item prediction.
+
+   Generative recommenders.
+
+    · TIGER [29]: TIGER is a representative generative recommender that tokenizes each item into
+       a multi-level semantic ID and reformulates recommendation as an autoregressive generation
+       problem. Instead of predicting over a fixed item vocabulary, it generates the semantic ID
+       sequence of the next target item conditioned on the historical item sequence, thereby bridging
+       generative retrieval and sequential recommendation.
+
+    · LETTER [36]: LETTER further improves generative recommendation by learning more
+       effective semantic tokenization for items. It enhances the quality of item semantic IDs and
+       the corresponding generative retrieval process, leading to stronger next-item prediction
+       performance under the generative recommendation paradigm.
+
+4.1.3 Evaluation Metrics. Following common practice in sequential recommendation [16, 29],
+we evaluate all methods with top- ranking metrics, including HIT@K and NDCG@K, where
+  {5, 10, 20}. For each test instance, the model ranks the ground-truth next item together with a
+set of sampled negative items, and the ranking performance is then measured accordingly.
+
+   HIT@K measures whether the ground-truth item appears in the top- ranked list:
+
+               1   
+              |Q|
+    HIT@K  =            1  rank                                                   ,  (23)
+
+                     Q
+
+where Q denotes the set of evaluation instances, rank is the rank position of the ground-truth
+item for instance , and 1(·) is the indicator function.
+
+   NDCG@K further takes the ranking position of the ground-truth item into account and assigns
+higher scores when the item is ranked closer to the top:
+
+    NDCG@K = 1  1 rank   .                                                           (24)
+              |Q |  Q log2 (rank + 1)
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+RAGR: Review-Augmented Generative Recommendation  11
+
+4.1.4 Implementation Details. To verify the effectiveness and generality of RAGR across
+different GR backbones, we instantiate RAGR on two representative GR models, resulting in
+TIGER+RAGR and LETTER+RAGR. For a fair comparison, all baselines are trained and evalu-
+ated under the same data split and evaluation protocol. For conventional sequential recommenders,
+only item interaction sequences are used as input, following their original settings. For generative
+recommenders, we adopt their standard item tokenization and autoregressive prediction settings,
+while our method further incorporates review feedback into the unified generative sequence.
+
+   For the tokenizer training stage, we use T52 as a text encoder to obtain embeddings for items
+and reviews. For the RQ-VAE architecture, we use a six-layer encoder/decoder MLP with hidden
+dimensions [2048, 1024, 512, 256, 128, 64]. The number of residual codebooks is set to 4, and each
+codebook contains 256 codewords, and the codeword dimension set to 32. We enable k-means
+initialization for the codebooks with 100 iterations. The number of clusters is set to 10. In our
+implementation, the RQ-VAE is optimized with the AdamW optimizer, using a learning rate of
+1 × 10-3, a batch size of 2048, and a weight decay of 1 × 10-4. The tokenizer is trained for at most
+2000 epochs, with evaluation of the collision rate.
+
+   For review-augmented user sequence modeling, we interleave item semantic IDs and review
+semantic IDs in chronological order to construct the input sequence. The maximum history length
+is set to 20, and longer interaction histories are truncated from the left. For the GR backbone, we
+use T5 [28] as the base generative model. The model is trained for 200 epochs using the AdamW
+optimizer, with a learning rate of 1 × 10-3, a per-device batch size of 256, gradient accumulation
+steps of 2, and a weight decay of 0.01. We adopt a cosine learning rate scheduler with a warmup
+ratio of 0.01.
+
+   For item-centric task generation alignment, we initialize the aligned model from the GR
+model trained in the previous stage, and use it as the policy model in DPO. The  in Eq. (21) is
+set to 0.5 to 0.7 with sensitivity analysis in Sections 4.6), and the reference model is fixed during
+alignment training. The model is trained using the AdamW optimizer, with a learning rate of
+1 × 10-6, a per-device batch size of 256.
+
+   All experiments were conducted on an Ubuntu server equipped with eight NVIDIA RTX PRO
+6000 GPUs (96 GB). For the main performance experiment, all results are the average of three runs
+with different random seeds: 42, 43, and 44.
+
+4.2 Overall Performance (RQ1)
+
+To answer RQ1, we conducted a comprehensive performance comparison against SR baselines.
+Table 2 reports the overall performance comparison on Beauty, Toys, and Sport. Several observations
+can be drawn.
+
+   First, RAGR consistently improves both GR backbones, namely TIGER and LETTER,
+across all datasets and all evaluation metrics. For TIGER, the relative improvements range from
+7% to 26%. In particular, on Beauty, TIGER+RAGR improves TIGER by 13%/15% on HIT@5/NDCG@5
+and by 9%/11% on HIT@20/NDCG@20. On Toys, the gains are even larger, reaching 24% on HIT@5
+and 26% on NDCG@5, while remaining consistently above 20% on most metrics. On Sport, although
+the absolute gains are relatively smaller, RAGR still achieves stable improvements, ranging from
+8% to 19%. For LETTER, RAGR also brings consistent improvements on all three datasets, with
+relative gains ranging from 7% to 20%. These results demonstrate that the proposed framework is
+not tied to a specific GR backbone, but can be effectively generalized across different generative
+recommendation architectures.
+
+2https://huggingface.co/sentence-transformers/sentence-t5-base
+                                                            ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+12                                                                          Zhang et al.
+
+Table 2. Performance comparison on Beauty, Toys, and Sport. Imp. denotes the relative improvement of RAGR
+over its corresponding backbone model in each metric.
+
+Dataset Metric GRU4Rec BERT4Rec SASRec S3-Rec TIGER TIGERImp. LETTER LETTER Imp.
+
+                                   +RAGR                                    +RAGR
+
+          HIT@5    0.0174  0.0202  0.0377 0.0361 0.0386 0.0435 13%  0.0371  0.0446 20%
+          NDCG@5   0.0108  0.0111  0.0220 0.0228 0.0254 0.0292 15%  0.0253  0.0294 16%
+Beauty HIT@10      0.0323  0.0311  0.0605 0.0598 0.0607 0.0649 7%   0.0582  0.0677 16%
+          NDCG@10  0.0156  0.0155  0.0303 0.0305 0.0325 0.0361 11%  0.0321  0.0370 15%
+          HIT@20   0.0513  0.0518  0.0933 0.0940 0.0866 0.0944 9%   0.0885  0.1019 15%
+          NDCG@20  0.0204  0.0207  0.0385 0.0391 0.0391 0.0435 11%  0.0397  0.0455 15%
+
+          HIT@5 0.0147     0.0140  0.0369 0.0376 0.0331 0.0410 24%  0.0321  0.0386 20%
+          NDCG@5 0.0095    0.0082  0.0217 0.0238 0.0206 0.0259 26%  0.0210  0.0243 16%
+Toys HIT@10 0.0257         0.0177  0.0591 0.0604 0.0526 0.0630 20%  0.0512  0.0604 18%
+          NDCG@10 0.0130   0.0090  0.0289 0.0311 0.0269 0.0329 22%  0.0272  0.0312 15%
+          HIT@20 0.0420    0.0333  0.0860 0.0910 0.0781 0.0934 20%  0.0770  0.0902 17%
+          NDCG@20 0.0172   0.0104  0.0356 0.0388 0.0333 0.0406 22%  0.0337  0.0387 15%
+
+Sport  HIT@5       0.0152  0.0114  0.0212 0.0204 0.0231 0.0267 16%  0.0240  0.0264 10%
+       NDCG@5      0.0102  0.0085  0.0138 0.0136 0.0148 0.0176 19%  0.0156  0.0172 10%
+       HIT@10      0.0231  0.0224  0.0311 0.0306 0.0385 0.0415 8%   0.0403  0.0433 7%
+       NDCG@10     0.0127  0.0091  0.0177 0.0169 0.0197 0.0224 14%  0.0209  0.0227 9%
+       HIT@20      0.0359  0.0300  0.0506 0.0483 0.0564 0.0619 10%  0.0612  0.0661 8%
+       NDCG@20     0.0159  0.0080  0.0220 0.0213 0.0242 0.0274 13%  0.0262  0.0284 9%
+
+    "" indicates statistically significant improvements (two-sided t-test with  < 0.05) over the corresponding backbone model.
+
+   Second, RAGR not only improves strong generative baselines, but also achieves the best
+overall performance against conventional sequential recommenders. On all three datasets,
+both TIGER+RAGR and LETTER+RAGR outperform GRU4Rec, BERT4Rec, SASRec, and S3-Rec
+across all evaluation metrics. This is notable because these SR baselines already represent strong
+and diverse modeling paradigms, including recurrent, Transformer-based, and self-supervised
+approaches. The consistent superiority of RAGR therefore suggests that incorporating review
+feedback into the generative sequence provides additional predictive signals beyond what can be
+captured by item-only interaction modeling.
+
+   Third, review-augmented sequence modeling appears to be especially beneficial in
+scenarios where textual feedback carries stronger preference signals. This pattern is most
+evident on Toys, where the gains of RAGR are consistently larger than those on Beauty and Sport.
+Moreover, the improvements are consistently observed on both HIT@K and NDCG@K, indicating
+that RAGR improves not only the ability to retrieve the ground-truth next item, but also the quality
+of its ranking. These results further support the effectiveness of integrating review feedback directly
+into the generative sequence.
+
+4.3 Ablation Study (RQ2)
+
+To answer RQ2 and understand the contribution of each component in RAGR, we conduct an
+ablation study on two GR backbones. As illustrated in Fig. 3, we progressively extend the training
+paradigm from the original item-only generative recommendation to the full RAGR framework.
+Specifically, the compared variants are defined as follows:
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+RAGR: Review-Augmented Generative Recommendation                                                                           13
+
+· +Input: The original item-only input sequence is augmented with review semantic IDs, while
+  the original next-item prediction target remains unchanged.
+
+· +Task: Review prediction is further introduced into the textual generation process, so that both
+  next-item SID prediction and next-review SID prediction are jointly modeled within the same
+  unified sequence generation framework.
+
+· +RAGR: The proposed item-centric task alignment is further incorporated, where the target item
+  SID is treated as the chosen output and the corresponding review SID is treated as the rejected
+  output in DPO training.
+
+           Next Item SID Prediction                 Next Item SID Prediction                 Next Item SID Prediction           Recommendation Task Alignment
+Input:                                   Input:                                   Input:                                   Input:
+'<a_231><b_8><c_23> Item1                '<a_231><b_8><c_23> Item1                '<a_231><b_8><c_23> Item1                '<a_231><b_8><c_23> Item1
+<a_17><b_207><c_185> Item2'              <a_64><b_15><c_239> User rev to item 1   <a_64><b_15><c_239> User rev to item 1   <a_64><b_15><c_239> User rev to item 1
+labels:                                  <a_17><b_207><c_185> Item2               <a_17><b_207><c_185> Item2               <a_17><b_207><c_185> Item2
+' <a_172><b_194><c_149> Item3'           <a_17><b_40><c_93> User rev to item 2',  <a_17><b_40><c_93> User rev to item 2',  <a_17><b_40><c_93> User rev to item 2',
+                                         labels:                                  labels:
+  a) Training Samples of TIGER           ' <a_172><b_194><c_149> Item3'           ' <a_172><b_194><c_149> Item3'           Chosen:
+                                                                                                                           ' <a_172><b_194><c_149> Item3'
+           Next Item SID Prediction                Next Review SID Prediction               Next Review SID Prediction
+Input:                                   Input:                                   Input:                                   Reject:
+'<a_231><b_8><c_23> Item1                <a_231><b_8><c_23> Item1                 <a_231><b_8><c_23> Item1                 <a_45><b_17><c_166> User rev to item 3
+<a_64><b_15><c_239> User rev to item 1   <a_64><b_15><c_239> User rev to item 1   <a_64><b_15><c_239> User rev to item 1
+<a_17><b_207><c_185> Item2               <a_17><b_207><c_185> Item2               <a_17><b_207><c_185> Item2
+<a_17><b_40><c_93> User rev to item 2',  <a_17><b_40><c_93> User rev to item 2    <a_17><b_40><c_93> User rev to item 2
+labels:                                  <a_172><b_194><c_149> Item3,             <a_172><b_194><c_149> Item3,
+' <a_172><b_194><c_149> Item3'           labels:                                  labels:
+                                         <a_45><b_17><c_166> User rev to item 3   <a_45><b_17><c_166> User rev to item 3
+
+b) Training Samples of TIGER+Input c) Training Samples of TIGER+Task              d) Training Samples of TIGER+GRAG
+
+Fig. 3. Illustration of the progressively enhanced training paradigms in the ablation study. Starting from
+the original item-only training of TIGER, we gradually introduce review-augmented input (+Input), review-
+augmented task modeling (+Task), and finally the full RAGR framework with item-centric DPO alignment
+(+RAGR).
+
+   The results are reported in Table 3, from which several observations can be made. First, simply
+expanding the input sequence with review signals (+Input) does not improve performance;
+instead, it consistently degrades both TIGER and LETTER on all three datasets. For example,
+on Beauty, TIGER drops from 0.0386 to 0.0260 in HIT@5, and LETTER drops from 0.0371 to 0.0311.
+Similar degradation can also be observed on Toys and Sport, where the +Input variant underperforms
+the original backbone across all evaluation metrics. This result indicates that review information
+cannot be effectively utilized by merely inserting review semantic IDs into the input side while
+keeping the original next-item prediction objective unchanged. In this setting, review tokens
+introduce additional heterogeneous signals into the user sequence, but the model is not explicitly
+trained to understand their role or predict them within the generative process. As a result, the
+augmented sequence may disturb the original item-transition patterns and increase the difficulty of
+sequence modeling. This observation confirms that review augmentation is not a trivial input-level
+extension: without a matched training objective, review SIDs may behave more like noise than
+useful preference evidence.
+
+   Second, after extending the training objective to include review prediction (+Task),
+performance improves substantially over both the original backbone and the +Input
+variant. For instance, on Toys, TIGER+Task reaches 0.0405/0.0258 on HIT@5/NDCG@5, clearly
+outperforming both TIGER and TIGER+Input; similarly, LETTER+Task also achieves large gains
+over the corresponding backbone. The same trend is consistently observed on Beauty and Sport,
+suggesting that the benefit of review modeling is robust across datasets and backbones. Compared
+with +Input, the +Task variant does not merely expose the model to review SIDs, but further
+requires the model to generate them as part of the unified sequence modeling process. This makes
+review tokens meaningful training targets rather than passive contextual tokens, encouraging
+the model to learn the semantic correspondence between user interactions and their associated
+
+                                         ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+14                                                                 Zhang et al.
+
+Table 3. Ablation study of input expansion, task expansion, and task alignment on Beauty, Toys, and Sport.
+
+    Dataset  Method        H@5     N@5     H@10    N@10    H@20    N@20
+    Beauty
+    Toys     TIGER         0.0386  0.0254  0.0607  0.0325  0.0866  0.0391
+    Sport    TIGER+Input   0.0260  0.0164  0.0417  0.0215  0.0619  0.0265
+             TIGER+Task    0.0427  0.0289  0.0649  0.0361  0.0938  0.0434
+             TIGER+RAGR    0.0435  0.0292  0.0649  0.0361  0.0944  0.0435
+
+             LETTER        0.0371  0.0253  0.0582  0.0321  0.0885  0.0397
+             LETTER+Input  0.0311  0.0205  0.0511  0.0269  0.0778  0.0336
+             LETTER+Task   0.0421  0.0280  0.0634  0.0353  0.0971  0.0435
+             LETTER+RAGR   0.0446  0.0294  0.0677  0.0370  0.1019  0.0455
+
+             TIGER         0.0331  0.0206  0.0526  0.0269  0.0781  0.0333
+             TIGER+Input   0.0273  0.0174  0.0424  0.0223  0.0676  0.0287
+             TIGER+Task    0.0405  0.0258  0.0624  0.0327  0.0930  0.0402
+             TIGER+RAGR    0.0410  0.0259  0.0630  0.0329  0.0934  0.0406
+
+             LETTER        0.0321  0.0210  0.0512  0.0272  0.0770  0.0337
+             LETTER+Input  0.0273  0.0174  0.0424  0.0223  0.0676  0.0287
+             LETTER+Task   0.0382  0.0240  0.0600  0.0310  0.0901  0.0386
+             LETTER+RAGR   0.0386  0.0243  0.0604  0.0312  0.0902  0.0387
+
+             TIGER         0.0231  0.0148  0.0385  0.0197  0.0564  0.0242
+             TIGER+Input   0.0191  0.0120  0.0317  0.0161  0.0482  0.0202
+             TIGER+Task    0.0266  0.0170  0.0413  0.0223  0.0606  0.0271
+             TIGER+RAGR    0.0267  0.0176  0.0415  0.0224  0.0619  0.0274
+
+             LETTER        0.0240  0.0156  0.0403  0.0209  0.0612  0.0262
+             LETTER+Input  0.0194  0.0126  0.0310  0.0164  0.0484  0.0208
+             LETTER+Task   0.0263  0.0172  0.0430  0.0226  0.0658  0.0284
+             LETTER+RAGR   0.0264  0.0172  0.0433  0.0227  0.0661  0.0284
+
+feedback. These results indicate that review SIDs become beneficial only when they are explicitly
+incorporated into the generative task, allowing the model to jointly model item transitions and
+review-based preference signals within the same token space.
+
+   Third, adding the proposed item-centric task alignment further improves performance
+in most settings and consistently yields the best overall results. On Beauty, TIGER+RAGR
+improves over TIGER+Task from 0.0427 to 0.0435 in HIT@5 and from 0.0434 to 0.0435 in NDCG@20,
+while LETTER+RAGR further improves over LETTER+Task from 0.0421 to 0.0446 in HIT@5 and
+from 0.0971 to 0.1019 in HIT@20. On Toys, the improvement from +Task to +RAGR is also consistent
+for both backbones, and on Sport, although the gains are relatively smaller, RAGR still maintains
+stable advantages over +Task in most metrics. These results show that task expansion alone is not
+sufficient to fully address the tension introduced by mixed item-review generation. Once review
+prediction is added, the model may allocate part of its generation capacity to review SIDs, which
+are useful as preference evidence but should not dominate the next-item recommendation objective.
+By introducing DPO-based item-centric alignment, RAGR explicitly encourages the model to prefer
+target item SIDs over review SIDs at prediction positions. Therefore, review tokens are used to
+enrich the generative context while the final optimization direction remains anchored to item
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+RAGR: Review-Augmented Generative Recommendation                                                                                                                                                                                                                                      15
+
+recommendation. This verifies that the proposed alignment mechanism is necessary for turning
+review prediction into an effective auxiliary signal rather than a competing generation objective.
+
+                                                                                                   SID Distribution Comparison: Item vs Review vs Mixed
+
+                            Item SID - Pos 1 Top 10                                                   Item SID - Pos 2 Top 10                                                       Item SID - Pos 3 Top 10                                                  Item SID - Pos 4 Top 10
+
+                 2000                                                                       150                                                                           250                                                                      120
+                                                                                                                                                                          200
+Frequency Count  1500                                                                       125                                                                           150                                                                      100
+                                                                                                                                                                          100
+                                                                                            100                                                                            50                                                                      80
+
+                 1000                                                                       75                                                                              0                                                                      60
+                                                                                                                                                                               <c_166<>c_127<>c_139><c_9><c_235<>c_134<>c_155><c_50><c_27><c_72>
+                 500                                                                        50                                                                                                                                                     40
+                                                                                                                                                                                  Review SID - Pos 3 Top 10
+                                                                                            25                                                                                                                                                     20
+                                                                                                                                                                         8000
+                 0                                                                          0                                                                                                                                                      0     <d_0> <d_1><d_84><d_208><d_83><d_143><d_15><d_204<>d_145><d_3>
+                   <a_73><a_47><a_34><a_152<>a_154<>a_192<>a_132<>a_127<>a_162<>a_150>        <b_37><b_251><b_46><b_4><b_212><b_15><b_82><b_115><b_41><b_21>             6000
+
+                        Review SID - Pos 1 Top 10                                                  Review SID - Pos 2 Top 10                                             4000                                                                      6000  Review SID - Pos 4 Top 10
+
+                 30000                                                                      15000                                                                        2000                                                                      5000
+
+Frequency Count  25000                                                                      12500                                                                           0
+                                                                                                                                                                               <c_70><c_129<>c_139<>c_232><c_40><c_114<>c_183><c_54><c_142><c_10>
+                 20000                                                                      10000                                                                                                                                                  4000
+                                                                                                                                                                                   Mixed SID - Pos 3 Top 10
+                 15000                                                                      7500                                                                                                                                                   3000
+                                                                                                                                                                         8000
+                 10000                                                                      5000                                                                                                                                                   2000
+                                                                                                                                                                         6000
+                 5000                                                                       2500                                                                                                                                                   1000
+                                                                                                                                                                         4000
+                 0                                                                          0                                                                                                                                                         0
+                   <a_73><a_47><a_154<>a_192><a_34><a_132<>a_248<>a_127<>a_162><a_92>         <b_249<>b_244><b_84><b_219<>b_175<>b_158<>b_122><b_82><b_230<>b_240>       2000                                                                            <d_0> <d_1> <d_3> <d_2><d_13><d_6> <d_7><d_10><d_244<>d_142>
+
+                        Mixed SID - Pos 1 Top 10                                                   Mixed SID - Pos 2 Top 10                                                 0                                                                                Mixed SID - Pos 4 Top 10
+                                                                                                                                                                               <c_70><c_129<>c_139<>c_232><c_40><c_114<>c_183><c_54><c_142><c_10>
+                 30000                                                                      15000                                                                                                                                                  6000
+                 25000                                                                      12500
+Frequency Count  20000                                                                      10000                                                                                                                                                  5000
+                 15000                                                                       7500
+                 10000                                                                       5000                                                                                                                                                  4000
+                  5000                                                                       2500
+                                                                                                                                                                                                                                                   3000
+                     0                                                                          0
+                        <a_73><a_47><a_154<>a_192><a_34><a_132<>a_248<>a_127<>a_162><a_92>         <b_249<>b_244><b_84><b_219<>b_175<>b_158><b_82><b_122<>b_230<>b_240>                                                                            2000
+
+                                                                                                                                                                                                                                                   1000
+
+                                                                                                                                                                                                                                                   0
+                                                                                                                                                                                                                                                      <d_0> <d_1> <d_3> <d_2><d_13><d_6> <d_7><d_10><d_244<>d_142>
+
+Fig. 4. Comparison of Top-10 SID frequency distributions across item-only, review-only, and mixed item-
+review sequences.
+
+   To further understand why review augmentation improves recommendation performance, we
+compare the Top-10 SID frequency distributions of item-only, review-only, and mixed item-review
+sequences across four token positions, as shown in Fig. 4. Several observations can be made. First,
+item SIDs and review SIDs exhibit markedly different frequency patterns. The item-side distribution
+is relatively concentrated around a limited number of frequently occurring SIDs, especially at the
+first and third positions, indicating that item tokens mainly reflect recurring semantic patterns
+in product descriptions. In contrast, review SIDs show a much heavier concentration on several
+high-frequency tokens, particularly at the first position, while still introducing a different set of
+semantic IDs from the item side. This suggests that reviews are not merely redundant textual
+descriptions of items; instead, they encode user-side evaluative semantics that are distributed
+differently from item content.
+
+   Second, the mixed item-review sequence inherits signals from both sides. Compared with the
+item-only SID distribution, the mixed distribution activates additional review-related SIDs and
+reshapes the frequency profile across token positions. This indicates that incorporating reviews
+does not simply enlarge the training sequence length, but changes the semantic composition of
+the sequence itself. As a result, the model is exposed to a richer token space that contains both
+behavioral outcomes, represented by item SIDs, and user preference rationales, represented by
+review SIDs.
+
+   Third, this distributional difference helps explain the effectiveness of RAGR. Existing SID-based
+GR methods mainly improve the expressiveness of item representation, but the user sequence
+remains an item-only trajectory. By contrast, review augmentation expands the sequence from a
+
+                                                                                                   ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+16                                                                                                                                                                                                    Zhang et al.
+
+purely behavioral sequence to a mixed behavioral-semantic sequence. This allows the autoregressive
+
+model to learn from semantic feedback that directly reflects users' post-interaction evaluations,
+
+such as satisfaction, dissatisfaction, usage experience, and fine-grained preferences. Therefore,
+
+the gains of +Task and +RAGR in Table 3 can be attributed not only to the additional textual
+
+information introduced by reviews, but also to the improved utilization of the unified SID space
+
+during training.
+
+           Next Item SID Prediction
+Input:
+'<a_231><b_8><c_23> Item1
+
+4.4 Tokenlizer Experiment (RQ3) <a_17><b_207><c_185> Item2'
+
+labels:
+
+To answer RQ3, we consider three tokenizer training strategies, as illustrated in Fig. 5. Since the ' <a_172><b_194><c_149> Item3'
+                                                                             Next Item SID Prediction                                               Next Item SID Prediction                               Recommendation Task Alignment
+                                                                                                                                                                                                      Input:
+                                                                  Input:                                                                 Input:                                                       '<a_231><b_8><c_23> Item1
+                                                                                                                                                                                                      <a_64><b_15><c_239> User rev to item
+                                                                  '<a_231><b_8><c_23> Item1                                              '<a_231><b_8><c_23> Item1                                    <a_17><b_207><c_185> Item2
+                                                                  <a_64><b_15><c_239> User rev to item 1                                 <a_64><b_15><c_239> User rev to item 1
+
+                                                                  <a_17><b_207><c_185> Item2                                             <a_17><b_207><c_185> Item2
+                                                                  <a_17><b_40><c_93> User rev to item 2',                                <a_17><b_40><c_93> User rev to item 2',
+
+proposed framework relies'la<obae_nls1:72a><ub_n19i4f>i<ec_d149s>emItema3n' tic ID spal'a<cbae_els1:7f2o><rb_b19o4>t<hc_1i4t9e> mItemi3n' teractions a<an_1d7><rbe_4v0>i<ecw_93> User rev to item 2
+
+feedback, the quality of the tokenizer is critical to the effectiveness of subsequent review-augmented Next Item SID Prediction
+sequence modeling and item-centric task alignment. Input:
+
+'<a_231><b_8><c_23> Item1
+<a_64><b_15><c_239> User rev to item 1
+
+· Item Text-Only: the RQ-VAE tokenizer is trained only on item text embeddings. <a_17><b_207><c_185> Item2
+                                                                           Next Review SID Prediction                                             Next Review SID Prediction                          Chosen:
+                                                                                                                                                                                                      ' <a_172><b_194><c_149> Item3'
+                                                                  Input:                                                                 Input:
+                                                                                                                                                                                                      Reject:
+                                                                  <a_231><b_8><c_23> Item1                                               <a_231><b_8><c_23> Item1                                     <a_45><b_17><c_166> User rev to item
+                                                                  <a_64><b_15><c_239> User rev to item 1                                 <a_64><b_15><c_239> User rev to item 1
+
+                                                                  <a_17><b_207><c_185> Item2                                             <a_17><b_207><c_185> Item2
+                                                                  <a_17><b_40><c_93> User rev to item 2                                  <a_17><b_40><c_93> User rev to item 2
+
+· Review Text-Only: <a_17><b_40><c_93> User rev to item 2',  the  R<laab_Qe1ls7:-2V><Ab_1E94>t<oc_k14e9n> iIzteem3r,is  trained          only on review text <a_172><b_194><c_149> Item3,  embeddings.
+
+labels:                                                                                                                                  labels:
+
+' <·a_1I7t2>e<bm_194a><nc_d149R> eItevm3ie' w Text:<ta_h45e><Rb_Q17>-<Vc_A166E> tUosekr reevntoiizteemr3is trai<na_e45d><bo_1n7><tch_1e66c> oUmserbreivntoaitetmio3n of item text and
+
+b) TrarineivngieSwamptleesxtofeTmIGbEeRd+Idnipnutgs. c) Training Samples of TIGER+Task                                                                  d) Training Samples of TIGER+GRAG
+
+To provide a more direct comparison, Table 4 summarizes the training efficiency and collision rates
+of the three tokenizer training strategies across the three datasets.
+
+    Personal Care         Embedding    RQ-VAE                                I'm obsessed with                          Embedding          RQ-VAE       Personal Care                      Embedding    RQ-VAE
+    A set of skincare...             Training Data                           this set...                                                 Training Data  A set of skincare...                          Training Data
+
+           ...                            Train                                    ...                                                        Train           ...                                          Train
+
+    Spices                             RQ-VAE                                The red and yellow                                            RQ-VAE       I'm obsessed with                               RQ-VAE
+    A collection of...                                                       beads...                                                                   this set...
+
+              a) Item Text-Only                                              b) Review Text-only                                                        c) Item and Review Text
+
+Fig. 5. Illustration of the three tokenizer: training RQ-VAE on item text only, review text only, and both item
+and review text.
+
+                                                             Item Text-Only  Review Text-Only                                            Item and Review Text
+              TIGER (HIT)                                               TIGER (NDCG)                                                     TIGER+RAGR (HIT) TIGER+RAGR (NDCG)
+
+Beauty  0.10                                                      0.04                                                             0.10                 0.04
+
+        0.05                                                      0.02                                                             0.05                 0.02
+
+        0.00 @5           @10 @20 0.00 @5                                    @10 @20 0.00 @5                                             @10 @20 0.00 @5                                   @10 @20
+
+Toys    0.10                                   0.04                                               0.10                                                        0.04
+                                               0.02                                                                                                           0.02
+        0.05                                                                                      0.05
+
+        0.00 @5           @10 @20 0.00 @5                                    @10 @20 0.00 @5                                             @10 @20 0.00 @5                                   @10 @20
+
+Sport   0.10                                   0.04                                               0.10                                                        0.04
+                                               0.02                                                                                                           0.02
+        0.05                                                                                      0.05
+
+        0.00 @5 @10 @20 0.00 @5 @10 @20 0.00 @5 @10 @20 0.00 @5 @10 @20
+
+Fig. 6. Impact of different tokenizer training strategies on downstream recommendation performance. We
+compare tokenizers trained on Item Text-Only, Review Text-Only, and Item and Review Text under both TIGER
+and TIGER+RAGR.
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+RAGR: Review-Augmented Generative Recommendation                          17
+
+Table 4. Comparison of different tokenizer training strategies in terms of training efficiency and collision rate
+(Col.).
+
+Tokenizer             Training Time Beauty Col. Toys Col. Sport Col.
+
+Item Text-Only        2s/epoch                    0.0009  0.0011  0.0025
+Review Text-Only      29s/epoch                   0.0009  0.0012  0.0024
+Item and Review Text  33s/epoch                   0.0008  0.0044  0.0005
+
+   Overall, the tokenizer experiment leads to three main observations. First, Item Text-Only
+consistently achieves the strongest downstream recommendation performance in most settings, for
+both the original TIGER backbone and the review-augmented TIGER+RAGR variant. As shown in
+Fig. 6, the item-text tokenizer yields the highest HIT and NDCG values on Beauty, Toys, and Sport
+in the majority of cases. This suggests that, for generative recommendation, learning semantic IDs
+from item text provides a more stable and effective token space for next-item prediction.
+
+   Second, Review Text-Only generally performs the worst among the three strategies. Although
+the review text contains rich user preference signals, using it alone to train the tokenizer appears
+to shift the item sid distribution, which weakens the quality of item representations and harms
+downstream recommendation performance. In contrast, Item and Review Text often performs
+better than Review Text-Only, but still does not consistently surpass Item Text-Only. This
+indicates that directly mixing review text into tokenizer training does not necessarily lead to a
+better semantic ID space, even though review feedback is beneficial at the sequence modeling stage.
+
+   Third, Table 4 shows that Item Text-Only is also substantially more efficient, requiring only 2s
+per epoch, compared with 29s and 33s for Review Text-Only and Item and Review Text, respec-
+tively. Although the collision rates do not always perfectly align with downstream recommendation
+performance, the item-text tokenizer provides the best overall trade-off between efficiency and
+effectiveness. Therefore, in the remaining experiments, we adopt Item Text-Only as the default
+tokenizer training strategy.
+
+4.5 SID Sensitivity Experiment (RQ4)
+
+                    Table 5. Collision rates under different SID numbers on the three datasets.
+
+           SID Num Beauty Col. Toys Col. Sport Col.
+
+           3          0.0121                      0.0017  0.0045
+
+           4          0.0009                      0.0012  0.0026
+
+           5          0.0007                      0.0003  0.0018
+
+   To answer RQ4, we investigate how the number of semantic ID tokens affects the effectiveness of
+RAGR. Intuitively, the number of semantic ID tokens controls the granularity of the discrete semantic
+space. Fewer tokens lead to a smaller semantic space and thus a higher risk of collisions, whereas
+more tokens improve semantic distinctiveness but may increase the difficulty of autoregressive
+generation. Therefore, studying the sensitivity of RAGR to the SID number is important for balancing
+representation quality and recommendation performance.
+
+   We vary the SID number from 3 to 5 and report both the tokenizer collision rate and the
+downstream recommendation performance. Table 5 summarizes the collision rate under different
+SID numbers on Beauty, Toys, and Sport. As expected, increasing the SID number consistently
+
+                                                            ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+18                                                                          Zhang et al.
+                                                                            KKK===15200
+                Beauty       0.11    Toys                       Sport
+
+    0.09                     0.09                 0.06
+                                                  0.05
+    HIT0.07                  0.07                 0.04
+                                                  0.03
+        0.05                 0.05
+
+        0.03 3  4         5  0.03 3  4         5  0.02 3       4         5
+
+        0.05                 0.05
+
+    NDCG0.04                 0.04                 0.03
+
+        0.03                 0.03                 0.02
+
+    0.02 3      sid 4num  5  0.01 3  sid 4num  5  0.01         sid 4num  5
+                                                            3
+
+Fig. 7. Impact of the number of semantic ID tokens on recommendation performance. We report HIT@K and
+NDCG@K (  {5, 10, 20}) on Beauty, Toys, and Sport under different SID numbers.
+
+reduces the collision rate across all datasets. For example, on Beauty, the collision rate decreases
+from 0.0121 when using 3 semantic ID tokens to 0.0009 and 0.0007 when using 4 and 5 tokens,
+respectively. Similar trends are observed on Toys and Sport. This confirms that longer semantic
+IDs indeed improve token distinctiveness and reduce representation collisions. However, a lower
+collision rate does not necessarily translate into better recommendation performance. Figure 7
+reports the downstream results, from which several observations can be drawn.
+
+   First, using 4 semantic ID tokens achieves the best overall performance across the three datasets
+and both metrics. On Beauty, Toys, and Sport, SID number 4 consistently gives the strongest HIT
+and NDCG results, indicating that it provides the most effective balance between semantic distinc-
+tiveness and generation difficulty. Second, the relationship between SID length and performance is
+clearly non-monotonic. When the SID number is too small, the collision rate increases, leading
+to multiple items sharing the same or highly similar semantic IDs. In this case, the tokenizer
+loses item-level discriminability, and the model can only learn a coarse semantic partition of the
+item space. For example, on Beauty, SID number 3 still yields relatively competitive results, even
+though its collision rate is much higher than that of SID number 4. A plausible explanation is that
+the higher collision rate causes semantically similar or high-frequency items to be merged into
+shared semantic IDs, which introduces a smoothing effect and partially alleviates data sparsity in
+generation. However, such gains come at the cost of reduced item distinguishability, which limits
+further performance improvement. Third, increasing the SID number from 4 to 5 further reduces
+collision rates, but consistently hurts recommendation performance. This suggests that once se-
+mantic collisions are sufficiently controlled, making the semantic ID sequence even longer mainly
+enlarges the generation space and increases autoregressive decoding difficulty. As a result, the
+model faces a harder generation problem without receiving commensurate gains in representation
+quality.
+
+   Overall, the results suggest that SID length controls a trade-off between semantic uniqueness
+and generation complexity. Too few tokens lead to excessive collisions and insufficient item dis-
+crimination, while too many tokens make next-item generation unnecessarily sparse and difficult.
+Therefore, a moderate SID length is most desirable in practice. Based on these results, we set the
+SID number to 4 as the default configuration of RAGR.
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+RAGR: Review-Augmented Generative Recommendation                                                                19
+
+           (a) HIT@5                                   (b) HIT@10                                  (c) HIT@20
+
+0.04    2  3      4 0.90 0.60 0.30 0.01     0.07    2  3      4 0.90 0.60 0.30 0.01     0.09    2  3      4 0.90 0.60 0.30 0.01
+0.04                                        0.06                                        0.09
+0.04       (d) NDCG@5                       0.06       (e) NDCG@10                      0.09       (f) NDCG@20
+0.04                                        0.06                                        0.09
+        e2poch 3  4 0.90 0.60 0b.3e0ta0.01  0.06    e2poch 3  4 0.90 0.60 0b.3e0ta0.01  0.09    e2poch 3  4 0.90 0.60 0b.3e0ta0.01
+0.04 1                                      0.06                                        0.09
+                                            0.06                                        0.09
+0.03                                        0.06                                        0.09
+0.03
+0.03                                        0.06 1                                           1
+0.03
+0.03                                        0.04                                        0.04
+                                            0.04                                        0.04
+0.03 1                                      0.04                                        0.04
+                                            0.04                                        0.04
+                                            0.04                                        0.04
+                                            0.04                                        0.04
+
+                                            0.04 1                                      0.04 1
+
+Fig. 8. Sensitivity analysis of the DPO-based task alignment with respect to the preference coefficient
+ and training epoch. We report HIT@{5, 10, 20} and NDCG@{5, 10, 20} under different hyperparameter
+combinations.
+
+4.6 DPO Sensitivity Experiment (RQ5)
+
+To answer RQ5, we investigate how sensitive RAGR is to the hyperparameter settings of DPO-based
+task alignment. In particular, we focus on the preference coefficient , which controls the sharpness
+of preference optimization, and the training epoch, which determines the extent to which the GR
+backbone is further aligned toward item-centric generation. Since DPO is introduced to preserve the
+task boundary of next-item recommendation after review signals are incorporated, understanding its
+hyperparameter sensitivity is important for assessing the stability and robustness of the proposed
+alignment strategy. Figure 8 visualizes the performance landscape under different combinations of
+ and training epoch in terms of HIT@{5, 10, 20} and NDCG@{5, 10, 20}. Several observations can
+be made.
+
+   First, the performance surface is generally smooth rather than highly irregular, indicating that
+the proposed DPO-based alignment is reasonably stable over a broad range of hyperparameter
+settings. Second, for most evaluation metrics, moderate values of  consistently lead to better
+performance than overly small or overly large values. This suggests that if  is too small, the
+preference signal becomes too weak to effectively enforce item-centric alignment; in contrast, if 
+is too large, the model may overemphasize the chosen­rejected contrast and thus harm the original
+generative recommendation capability. Third, the interaction between  and training epoch further
+reveals that the best performance is usually achieved within a moderate training range, rather than
+at the earliest or latest alignment epochs. This indicates that DPO-based task alignment should
+be sufficiently strong to shift the model toward target item generation, but not so strong as to
+overfit the preference pairs. In other words, the sensitivity analysis confirms that the effectiveness
+of RAGR does not rely on an extremely narrow hyperparameter region, while also showing that
+proper tuning of  and training epoch is beneficial for obtaining the best performance.
+
+   Overall, the results demonstrate that the proposed item-centric task alignment is robust to
+hyperparameter variation and can stably improve recommendation performance across a reasonably
+wide range of settings. Based on the validation results, we select the corresponding  and epoch
+
+                                                            ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+20                                                                            Zhang et al.
+
+combination that achieves the best trade-off between performance and stability as the default
+configuration in our experiments.
+
+5 Related work
+
+5.1 Sequential Recommendation
+
+Sequential recommendation (SR) aims to model users' evolving preferences from their historical
+interaction sequences and predict the next item they are likely to engage with. As one of the most
+fundamental paradigms in recommender systems [25, 33], it has been extensively studied under
+the next-item prediction formulation, which explicitly reflects the dynamic nature of user interests
+and has become a standard testbed for modeling sequential behavior.
+
+   Existing sequential recommendation methods mainly differ in how they encode the interaction
+sequence and capture dependency patterns within it. Early studies relied on recurrent architec-
+tures, such as GRU4Rec [11], to model sequential transitions through hidden-state propagation,
+establishing the foundation for sequence-aware recommendation. Later, Transformer-based models
+became dominant, including SASRec [16] and BERT4Rec [32], which leverage self-attention and
+bidirectional contextual modeling to learn more expressive sequence representations and capture
+long-range dependency more effectively. Building on these backbones, subsequent work further
+improved robustness and generalization through self-supervised learning and contrastive objectives.
+Representative examples include S3-Rec [50], which introduces auxiliary pretext tasks to strengthen
+sequence representation learning, and contrastive learning approaches [42], which encourage more
+discriminative user modeling under augmented views of behavior sequences.
+
+   Beyond architecture design, recent studies have also explored richer inductive biases for sequen-
+tial recommendation. Temporal modeling methods [44] incorporate time intervals and temporal
+contexts into user modeling, dynamic graph approaches [45] capture high-order collaborative
+dependencies beyond linear sequences, and hyper adapter mechanisms [19] improve parameter
+adaptation under heterogeneous recommendation scenarios. More recently, LLM-enhanced repre-
+sentations [21, 34] have been introduced to inject stronger semantic priors into recommendation
+models, further broadening the representational capacity of SR. Taken together, these advances
+have substantially improved the ability of SR models to encode user interaction histories and
+forecast future behaviors.
+
+   Despite these advances, most existing SR methods still model user behavior as an item-only
+interaction sequence and optimize for next-item prediction. As a result, they mainly capture
+what users selected, while overlooking richer behavior signals such as reviews and feed-
+back that may help explain why users selected or rejected items. This limitation is nontrivial,
+because in real-world recommendation scenarios, user decision-making is rarely reflected by item
+transitions alone. Users often browse, compare, purchase, and then leave explicit feedback, and such
+feedback may reveal fine-grained preference cues that are difficult to infer from item co-occurrence
+patterns alone. In contrast, our work moves beyond item-only sequence modeling by incorporating
+review feedback into the generative user sequence.
+
+5.2 Generative Recommendation
+
+Generative recommendation (GR) reformulates recommendation as a generation problem, where
+the model produces the target item through autoregressive decoding rather than ranking over a
+fixed item vocabulary. By replacing conventional scoring-and-ranking pipelines with sequence
+generation, GR opens up a new modeling perspective for recommendation and has recently emerged
+as a rapidly growing research direction. Recent surveys have highlighted that progress in this
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+RAGR: Review-Augmented Generative Recommendation  21
+
+paradigm is mainly driven by three closely related aspects: tokenization, generative architecture,
+and optimization [4, 14, 18].
+
+   Existing GR methods mainly focus on how to represent items as generatable tokens and how
+to improve the efficiency and effectiveness of generation. A representative line of work learns
+semantic IDs for items and performs next-item generation over these discrete identifiers, such as
+TIGER [29] and LETTER [36]. The central idea behind this line is to transform item recommendation
+into a token generation task by mapping items into structured discrete codes, thereby avoiding
+direct classification over an extremely large item vocabulary. In this way, GR provides a scalable
+alternative to conventional recommendation formulations while also creating a unified interface
+between recommendation and sequence generation.
+
+   Building on this idea, more recent studies have further investigated tokenization and decoding
+strategies for generative recommendation. Representative efforts include ID tokenization for LLM-
+based recommendation [15, 26], parallel decoding of long semantic IDs [12], contextual tokenization
+of action sequences [13], unified sparse-dense generative recommendation [43], acceleration-
+oriented decoding architectures [39], and combine semantic and collaborative code [41]. Collectively,
+these studies have substantially advanced the tokenization mechanism, decoding efficiency, and
+architectural design of generative recommendation, making GR increasingly practical and expressive
+as a recommendation paradigm.
+
+   Despite these advances, however, existing GR methods still largely remain within the traditional
+next-item prediction paradigm. That is, the user sequence is still predominantly modeled as
+an item-only interaction sequence, and the generation target remains the next item. In
+other words, although GR replaces raw item IDs with semantic IDs and casts recommendation into
+an autoregressive generation process, it mainly changes how items are represented and generated,
+rather than what constitutes the user sequence itself. As a result, the expressive capacity of item
+representation has been
+
+5.3 Review-Aware Recommendation
+
+Review-aware recommendation aims to leverage user-generated reviews to enrich preference
+modeling beyond pure interaction signals. As discussed in recent surveys [9, 40], reviews have
+been widely recognized as a valuable source of semantic evidence for recommendation, because
+they contain rich information about user opinions, product attributes, and decision rationale.
+
+   A large body of prior work incorporates reviews as auxiliary textual features for matching or
+rating prediction. Early methods jointly modeled users and items with review text to improve
+recommendation quality [47], while subsequent studies explored aspect-aware modeling [3, 24],
+review-level explanation and interpretability [2, 5], review property modeling [38], and graph-based
+or hypergraph-based semantic interaction modeling [20, 31]. At the same time, several studies have
+critically examined the actual utility of reviews in recommendation and discussed their limitations
+and possible improvements [30]. More recently, with the rise of large language models, another
+line of work has attempted to enhance recommendation by exploiting the text understanding
+and reasoning capability of LLMs, such as recommendation-as-language-processing [7], prompt-
+based personalized recommendation [22], rationale-enhanced LLM recommendation [37], and
+review-analysis-based feature enhancement [1].
+
+   Despite their differences, most existing review-aware recommendation methods still treat re-
+views as auxiliary features and side information outside the core recommendation sequence. In
+other words, reviews are typically used to enhance user/item representations or improve
+matching, rather than being incorporated into a unified generative sequence together
+with item interactions. In contrast, our work explicitly maps review feedback into the same
+semantic ID space as items, integrates reviews into the generative user sequence itself, and further
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+22  Zhang et al.
+
+introduces item-centric task alignment to ensure that review signals enhance next-item generation
+without becoming competing generation targets.
+
+6 Conclusion
+
+In this paper, we take a first step toward rethinking generative recommendation beyond the
+conventional item-only paradigm. We argue that the longstanding assumption of modeling user
+sequences solely as item trajectories constitutes a fundamental limitation, as it captures what users
+choose but overlooks why they choose it. To our knowledge, this work is the first to bring review
+feedback directly into the generative recommendation paradigm by encoding reviews as tokens
+within the user sequence itself. Based on this idea, we propose Review-Augmented Generative
+Recommendation (RAGR), a general framework that augments item-only behavioral sequences
+with review semantics while preserving the next-item recommendation objective.
+
+   Specifically, RAGR first learns a unified semantic ID space for both items and reviews through
+a shared tokenizer, enabling heterogeneous behavioral and textual signals to be represented in a
+compatible generative form. It then constructs review-augmented user sequences by chronologically
+interleaving item semantic IDs with their corresponding review semantic IDs, allowing review
+feedback to participate directly in autoregressive sequence modeling. To prevent review tokens
+from becoming competing prediction targets, we further introduce an item-centric task generation
+alignment strategy based on direct preference optimization, which encourages the model to leverage
+reviews as contextual evidence while remaining focused on next-item generation.
+
+   Extensive experiments on three real-world datasets demonstrate the effectiveness, robustness,
+and generality of RAGR. Across multiple generative recommendation backbones, RAGR consis-
+tently improves recommendation performance over strong item-only baselines, showing that review
+feedback provides complementary preference information that cannot be fully captured by interac-
+tion sequences alone. Moreover, ablation studies verify the necessity of both review-augmented
+sequence modeling and item-centric alignment, while further analyses on tokenizer choices and
+alignment hyperparameters suggest that the proposed framework is broadly applicable and stable
+under different settings.
+
+   Overall, this work highlights a promising direction for enriching generative recommendation
+with more expressive user-side signals. By moving reviews from external auxiliary features into
+the generative sequence itself, RAGR opens up a new perspective on how behavioral outcomes
+and preference rationales can be jointly modeled within a unified recommendation framework. In
+the future, we hope this idea can inspire broader exploration of generative recommendation with
+richer forms of user feedback, such as search queries, comments, conversations, and multimodal
+interactions, as well as more fine-grained alignment strategies that further balance semantic
+understanding and recommendation accuracy.
+
+Acknowledgments
+This research was supported by the Science Challenge Project, No.TZ2025005 and the National
+Natural Science Foundation of China (NSFC) under Grants 72071029, 72231010, 62502404. This
+research was partially supported by Hong Kong Research Grants Council (Research Impact Fund
+No.R1015-23, Collaborative Research Fund No.C1043-24GF, General Research Fund No.11218325),
+Institute of Digital Medicine of City University of Hong Kong (No.9229503), Huawei (Huawei
+Innovation Research Program), and the Graduate Research Fund of the School of Economics and
+Management of Dalian University of Technology (No. DUTSEMDRFKO1).
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+RAGR: Review-Augmented Generative Recommendation  23
+
+References
+
+ [1] Maram Assi, Safwat Hassan, and Ying Zou. 2024. Llm-cure: Llm-based competitor user review analysis for feature
+      enhancement. ACM Transactions on Software Engineering and Methodology (2024).
+
+ [2] Chong Chen, Min Zhang, Yiqun Liu, and Shaoping Ma. 2018. Neural attentional rating regression with review-level
+      explanations. In Proceedings of the 2018 World Wide Web Conference. 1583­1592.
+
+ [3] Zhiyong Cheng, Ying Ding, Lei Zhu, and Mohan Kankanhalli. 2018. Aspect-aware latent factor model: Rating prediction
+      with ratings and reviews. In Proceedings of the 2018 World Wide Web Conference. 639­648.
+
+ [4] Yashar Deldjoo, Zhankui He, Julian McAuley, Anton Korikov, Scott Sanner, Arnau Ramisa, René Vidal, Maheswaran
+      Sathiamoorthy, Atoosa Kasirzadeh, and Silvia Milano. 2024. A review of modern recommender systems using generative
+      models (gen-recsys). In Proceedings of the 30th ACM SIGKDD conference on Knowledge Discovery and Data Mining.
+      6448­6458.
+
+ [5] Xin Dong, Jingchao Ni, Wei Cheng, Zhengzhang Chen, Bo Zong, Dongjin Song, Yanchi Liu, Haifeng Chen, and
+      Gerard De Melo. 2020. Asymmetrical hierarchical networks with attentive interactions for interpretable review-based
+      recommendation. In Proceedings of the AAAI Conference on Artificial Intelligence, Vol. 34. 7667­7674.
+
+ [6] Hui Fang, Danning Zhang, Yiheng Shu, and Guibing Guo. 2020. Deep learning for sequential recommendation:
+      Algorithms, influential factors, and evaluations. ACM Transactions on Information Systems 39, 1 (2020), 1­42.
+
+ [7] Shijie Geng, Shuchang Liu, Zuohui Fu, Yingqiang Ge, and Yongfeng Zhang. 2022. Recommendation as language
+      processing (rlp): A unified pretrain, personalized prompt & predict paradigm (p5). In Proceedings of the 16th ACM
+      Conference on Recommender Systems. 299­315.
+
+ [8] Zhen Hai, Kuiyu Chang, Jung-Jae Kim, and Christopher C Yang. 2013. Identifying features in opinion mining via
+      intrinsic and extrinsic domain relevance. IEEE Transactions on Knowledge and Data Engineering 26, 3 (2013), 623­634.
+
+ [9] Emrul Hasan, Mizanur Rahman, Chen Ding, Jimmy Xiangji Huang, and Shaina Raza. 2025. Review-based Recommender
+      Systems: A Survey of Approaches, Challenges and Future Perspectives. ACM Comput. Surv. 58, 1, Article 25 (Sept.
+      2025), 41 pages.
+
+[10] Ruining He and Julian McAuley. 2016. Ups and downs: Modeling the visual evolution of fashion trends with one-class
+      collaborative filtering. In proceedings of the 25th International conference on World Wide Web. 507­517.
+
+[11] Balázs Hidasi, Alexandros Karatzoglou, Linas Baltrunas, and Domonkos Tikk. 2015. Session-based recommendations
+      with recurrent neural networks. arXiv preprint arXiv:1511.06939 (2015).
+
+[12] Yupeng Hou, Jiacheng Li, Ashley Shin, Jinsung Jeon, Abhishek Santhanam, Wei Shao, Kaveh Hassani, Ning Yao, and
+      Julian McAuley. 2025. Generating long semantic ids in parallel for recommendation. In Proceedings of the 31st ACM
+      SIGKDD Conference on Knowledge Discovery and Data Mining V. 2. 956­966.
+
+[13] Yupeng Hou, Jianmo Ni, Zhankui He, Noveen Sachdeva, Wang-Cheng Kang, Ed H. Chi, Julian McAuley, and
+      Derek Zhiyuan Cheng. 2025. ActionPiece: Contextually Tokenizing Action Sequences for Generative Recommendation.
+      In Forty-second International Conference on Machine Learning.
+
+[14] Yupeng Hou, An Zhang, Leheng Sheng, Jiancan Wu, Xiang Wang, Tat-Seng Chua, and Julian McAuley. 2025. Towards
+      large generative recommendation: A tokenization perspective. In Proceedings of the 34th ACM International Conference
+      on Information and Knowledge Management. 6821­6824.
+
+[15] Clark Mingxuan Ju, Liam Collins, Leonardo Neves, Bhuvesh Kumar, Louis Yufeng Wang, Tong Zhao, and Neil Shah.
+      2025. Generative Recommendation with Semantic IDs: A Practitioner's Handbook. In Proceedings of the 34th ACM
+      International Conference on Information and Knowledge Management. 6420­6425.
+
+[16] Wang-Cheng Kang and Julian McAuley. 2018. Self-attentive sequential recommendation. In 2018 IEEE International
+      Conference on Data Mining (ICDM). IEEE, 197­206.
+
+[17] Doyup Lee, Chiheon Kim, Saehoon Kim, Minsu Cho, and Wook-Shin Han. 2022. Autoregressive image generation
+      using residual quantization. In Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition.
+      11523­11532.
+
+[18] Xiaopeng Li, Bo Chen, Junda She, Shiteng Cao, You Wang, Qinlin Jia, Haiying He, Zheli Zhou, Zhao Liu, Ji Liu, et al.
+      2025. A survey of generative recommendation from a tri-decoupled perspective: Tokenization, architecture, and
+      optimization. (2025).
+
+[19] Xiaopeng Li, Fan Yan, Xiangyu Zhao, Yichao Wang, Bo Chen, Huifeng Guo, and Ruiming Tang. 2023. Hamur: Hyper
+      adapter for multi-domain recommendation. In Proceedings of the 32nd ACM International Conference on Information
+      and Knowledge Management. 1268­1277.
+
+[20] Donghua Liu, Jia Wu, Jing Li, Bo Du, Jun Chang, and Xuefei Li. 2020. Adaptive hierarchical attention-enhanced gated
+      network integrating reviews for item recommendation. IEEE Transactions on Knowledge and Data Engineering 34, 5
+      (2020), 2076­2090.
+
+[21] Qidong Liu, Xian Wu, Wanyu Wang, Yejing Wang, Yuanshao Zhu, Xiangyu Zhao, Feng Tian, and Yefeng Zheng. 2025.
+      Llmemb: Large language model can be a good embedding generator for sequential recommendation. In Proceedings of
+      the AAAI Conference on Artificial Intelligence, Vol. 39. 12183­12191.
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+24                                                                            Zhang et al.
+
+[22] Hanjia Lyu, Song Jiang, Hanqing Zeng, Yinglong Xia, Qifan Wang, Si Zhang, Ren Chen, Chris Leung, Jiajie Tang,
+      and Jiebo Luo. 2024. Llm-rec: Personalized recommendation via prompting large language models. In Findings of the
+      Association for Computational Linguistics: NAACL 2024. 583­612.
+
+[23] Julian McAuley and Jure Leskovec. 2013. Hidden factors and hidden topics: understanding rating dimensions with
+      review text. In Proceedings of the 7th ACM Conference on Recommender Systems. 165­172.
+
+[24] Zheng Nie and Peijie Sun. 2026. HADSF: Aspect Aware Semantic Control for Explainable Recommendation. In
+      Proceedings of the Nineteenth ACM International Conference on Web Search and Data Mining. 509­519.
+
+[25] Li-Wei Pan, Wei-Ke Pan, Mei-Yan Wei, Hong-Zhi Yin, and Zhong Ming. 2026. A survey on sequential recommendation.
+      Frontiers of Computer Science 20, 3 (2026), 2003606.
+
+[26] Haohao Qu, Wenqi Fan, Zihuai Zhao, and Qing Li. 2025. Tokenrec: Learning to tokenize id for llm-based generative
+      recommendations. IEEE Transactions on Knowledge and Data Engineering (2025).
+
+[27] Rafael Rafailov, Archit Sharma, Eric Mitchell, Christopher D Manning, Stefano Ermon, and Chelsea Finn. 2023. Direct
+      preference optimization: Your language model is secretly a reward model. Advances in Neural Information Processing
+      Systems 36 (2023), 53728­53741.
+
+[28] Colin Raffel, Noam Shazeer, Adam Roberts, Katherine Lee, Sharan Narang, Michael Matena, Yanqi Zhou, Wei Li, and
+      Peter J Liu. 2020. Exploring the limits of transfer learning with a unified text-to-text transformer. Journal of Machine
+      Learning Research 21, 140 (2020), 1­67.
+
+[29] Shashank Rajput, Nikhil Mehta, Anima Singh, Raghunandan Hulikal Keshavan, Trung Vu, Lukasz Heldt, Lichan Hong,
+      Yi Tay, Vinh Tran, Jonah Samost, et al. 2023. Recommender systems with generative retrieval. Advances in Neural
+      Information Processing Systems 36 (2023), 10299­10315.
+
+[30] Noveen Sachdeva and Julian McAuley. 2020. How useful are reviews for recommendation? A critical review and
+      potential improvements. In Proceedings of the 43rd International ACM SIGIR Conference on Research and Development in
+      Information Retrieval. 1845­1848.
+
+[31] Chuan Shi, Binbin Hu, Wayne Xin Zhao, and Philip S Yu. 2018. Heterogeneous information network embedding for
+      recommendation. IEEE Transactions on Knowledge and Data Engineering 31, 2 (2018), 357­370.
+
+[32] Fei Sun, Jun Liu, Jian Wu, Changhua Pei, Xiao Lin, Wenwu Ou, and Peng Jiang. 2019. BERT4Rec: Sequential recom-
+      mendation with bidirectional encoder representations from transformer. In Proceedings of the 28th ACM International
+      Conference on Information and Knowledge Management. 1441­1450.
+
+[33] Chenyang Wang, Weizhi Ma, Chong Chen, Min Zhang, Yiqun Liu, and Shaoping Ma. 2023. Sequential recommendation
+      with multiple contrast signals. ACM Transactions on Information Systems 41, 1 (2023), 1­27.
+
+[34] Hanbing Wang, Xiaorui Liu, Wenqi Fan, Xiangyu Zhao, Venkataramana Kini, Devendra Pratap Yadav, Fei Wang, Zhen
+      Wen, and Hui Liu. 2025. Rethinking large language model architectures for sequential recommendations. In Proceedings
+      of the 14th International Joint Conference on Natural Language Processing and the 4th Conference of the Asia-Pacific
+      Chapter of the Association for Computational Linguistics. 3376­3391.
+
+[35] Jizhe Wang, Pipei Huang, Huan Zhao, Zhibo Zhang, Binqiang Zhao, and Dik Lun Lee. 2018. Billion-scale commodity
+      embedding for e-commerce recommendation in alibaba. In Proceedings of the 24th ACM SIGKDD international conference
+      on knowledge discovery & data mining. 839­848.
+
+[36] Wenjie Wang, Honghui Bao, Xinyu Lin, Jizhi Zhang, Yongqi Li, Fuli Feng, See-Kiong Ng, and Tat-Seng Chua. 2024.
+      Learnable item tokenization for generative recommendation. In Proceedings of the 33rd ACM International Conference
+      on Information and Knowledge Management. 2400­2409.
+
+[37] Xinfeng Wang, Jin Cui, Yoshimi Suzuki, and Fumiyo Fukumoto. 2024. Rdrec: Rationale distillation for llm-based
+      recommendation. In Proceedings of the 62nd Annual Meeting of the Association for Computational Linguistics (Volume 2:
+      Short Papers). 65­74.
+
+[38] Xi Wang, Iadh Ounis, and Craig Macdonald. 2021. Leveraging review properties for effective recommendation. In
+      Proceedings of the Web Conference 2021. 2209­2219.
+
+[39] Yejing Wang, Shengyu Zhou, Jinyu Lu, Ziwei Liu, Langming Liu, Maolin Wang, Wenlin Zhang, Feng Li, Wenbo
+      Su, Pengjie Wang, et al. 2025. NEZHA: A Zero-sacrifice and Hyperspeed Decoding Architecture for Generative
+      Recommendations. arXiv preprint arXiv:2511.18793 (2025).
+
+[40] Le Wu, Xiangnan He, Xiang Wang, Kun Zhang, and Meng Wang. 2022. A survey on accuracy-oriented neural
+      recommendation: From collaborative filtering to information-rich recommendation. IEEE Transactions on Knowledge
+      and Data Engineering 35, 5 (2022), 4425­4445.
+
+[41] Longtao Xiao, Haozhao Wang, Cheng Wang, Linfei Ji, Yifan Wang, Jieming Zhu, Zhenhua Dong, Rui Zhang, and Ruixuan
+      Li. 2025. UNGER: Generative Recommendation with A Unified Code via Semantic and Collaborative Integration. ACM
+      Transactions on Information Systems 44, 2, Article 31 (Dec. 2025), 31 pages. doi:10.1145/3773771
+
+[42] Xu Xie, Fei Sun, Zhaoyang Liu, Shiwen Wu, Jinyang Gao, Jiandong Zhang, Bolin Ding, and Bin Cui. 2022. Contrastive
+      learning for sequential recommendation. In 2022 IEEE 38th International Conference on Data Engineering (ICDE). IEEE,
+      1259­1273.
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+RAGR: Review-Augmented Generative Recommendation  25
+
+[43] Yuhao Yang, Zhi Ji, Zhaopeng Li, YI LI, Zhonglin Mo, Yue Ding, Kai Chen, Zijian Zhang, Jie Li, shuanglong li, and LIU
+      LIN. 2025. Sparse Meets Dense: Unified Generative Recommendations with Cascaded Sparse-Dense Representations.
+      In The Thirty-ninth Annual Conference on Neural Information Processing Systems.
+
+[44] Wenwen Ye, Shuaiqiang Wang, Xu Chen, Xuepeng Wang, Zheng Qin, and Dawei Yin. 2020. Time matters: Sequential
+      recommendation with complex temporal information. In Proceedings of the 43rd International ACM SIGIR Conference
+      on Research and Development in Information Retrieval. 1459­1468.
+
+[45] Mengqi Zhang, Shu Wu, Xueli Yu, Qiang Liu, and Liang Wang. 2022. Dynamic graph neural networks for sequential
+      recommendation. IEEE Transactions on Knowledge and Data Engineering 35, 5 (2022), 4741­4753.
+
+[46] Zihuai Zhao, Wenqi Fan, Jiatong Li, Yunqing Liu, Xiaowei Mei, Yiqi Wang, Zhen Wen, Fei Wang, Xiangyu Zhao, Jiliang
+      Tang, et al. 2024. Recommender systems in the era of large language models (llms). IEEE Transactions on Knowledge
+      and Data Engineering 36, 11 (2024), 6889­6907.
+
+[47] Lei Zheng, Vahid Noroozi, and Philip S Yu. 2017. Joint deep modeling of users and items using reviews for recommen-
+      dation. In Proceedings of the tenth ACM International Conference on Web search and Data Mining. 425­434.
+
+[48] Guorui Zhou, Na Mou, Ying Fan, Qi Pi, Weijie Bian, Chang Zhou, Xiaoqiang Zhu, and Kun Gai. 2019. Deep interest
+      evolution network for click-through rate prediction. In Proceedings of the AAAI Conference on Artificial Intelligence,
+      Vol. 33. 5941­5948.
+
+[49] Guorui Zhou, Xiaoqiang Zhu, Chenru Song, Ying Fan, Han Zhu, Xiao Ma, Yanghui Yan, Junqi Jin, Han Li, and Kun Gai.
+      2018. Deep interest network for click-through rate prediction. In Proceedings of the 24th ACM SIGKDD international
+      conference on knowledge discovery & data mining. 1059­1068.
+
+[50] Kun Zhou, Hui Wang, Wayne Xin Zhao, Yutao Zhu, Sirui Wang, Fuzheng Zhang, Zhongyuan Wang, and Ji-Rong
+      Wen. 2020. S3-rec: Self-supervised learning for sequential recommendation with mutual information maximization. In
+      Proceedings of the 29th ACM International Conference on Information and Knowledge Management. 1893­1902.
+
+Received 20 June 2026
+
+ACM Trans. Inf. Syst., Vol. 1, No. 1, Article . Publication date: June 2026.
+

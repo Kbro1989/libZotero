@@ -1,0 +1,561 @@
+                                                                                                                                                                              LiDAR-MIMO: Efficient Uncertainty Estimation
+                                                                                                                                                                                     for LiDAR-based 3D Object Detection
+
+                                                                                                                                                                 Matthew Pitropov1, Chengjie Huang2, Vahdat Abdelzad1, Krzysztof Czarnecki1, and Steven Waslander3
+
+                                                                                                                                                                    Abstract-- The estimation of uncertainty in robotic vision,             68
+                                                                                                                                                                 such as 3D object detection, is an essential component in                                                                                                       Ensemble (4)
+                                                                                                                                                                 developing safe autonomous systems aware of their own per-
+                                                                                                                                                                 formance. However, the deployment of current uncertainty                   67
+                                                                                                                                                                 estimation methods in 3D object detection remains challenging
+arXiv:2206.00214v1 [cs.CV] 1 Jun 2022                                                                                                                            due to timing and computational constraints. To tackle this                66                Ensemble (2)
+                                                                                                                                                Performance (mAP)issue, we propose LiDAR-MIMO, an adaptation of the multi-
+                                                                                                                                                                 input multi-output (MIMO) uncertainty estimation method                    65  MIMO-BEV (2)
+                                                                                                                                                                 to the LiDAR-based 3D object detection task. Our method
+                                                                                                                                                                 modifies the original MIMO by performing multi-input at the                64
+                                                                                                                                                                 feature level to ensure the detection, uncertainty estimation,
+                                                                                                                                                                 and runtime performance benefits are retained despite the                  63 Baseline                                MC Dropout (4)
+                                                                                                                                                                 limited capacity of the underlying detector and the large                  62
+                                                                                                                                                                 computational costs of point cloud processing. We compare
+                                                                                                                                                                 LiDAR-MIMO with MC dropout and ensembles as baselines                      61
+                                                                                                                                                                 and show comparable uncertainty estimation results with only
+                                                                                                                                                                 a small number of output heads. Further, LiDAR-MIMO can                    30  40       50   60  70        80         90  100 110 120
+                                                                                                                                                                 be configured to be twice as fast as MC dropout and ensembles,
+                                                                                                                                                                 while achieving higher mAP than MC dropout and approaching                                       Execution time (ms)
+                                                                                                                                                                 that of ensembles.
+                                                                                                                                                                                                                                            Fig. 1. The detection performance (mAP) compared to the inference time
+                                                                                                                                                                                        I. INTRODUCTION                                     (execution time) for different uncertainty estimation methods (including
+                                                                                                                                                                                                                                            baseline and proposed one in red) of the PointPillars model trained on the
+                                                                                                                                                                    Deep neural networks (DNNs) are currently indispens-                    KITTI dataset. The number inside parentheses for the ensemble indicates
+                                                                                                                                                                 able for implementing perception in robotics, including au-                the number of instances used for uncertainty estimation.
+                                                                                                                                                                 tonomous vehicles. Since perception is inherently uncertain,
+                                                                                                                                                                 real-time and reliable estimation of perceptual uncertainty                uncertainty as a statistic over their outputs (e.g., variance of
+                                                                                                                                                                 is essential for the safe operation of such systems. Object                the outputs). The need to perform multiple network passes
+                                                                                                                                                                 detectors based on DNNs produce a confidence score, e.g.,                  makes these methods computationally expensive and thus
+                                                                                                                                                                 max softmax, for each detection. However, such scores are                  challenging to deploy in constrained real-time environments
+                                                                                                                                                                 inaccurate estimates of the actual probability of perception               such as autonomous vehicles.
+                                                                                                                                                                 errors, that is, predictive uncertainty [1].
+                                                                                                                                                                                                                                               To address this challenge, we propose LiDAR-MIMO,
+                                                                                                                                                                    Bayesian Neural Networks (BNNs) [2] are a disciplined                   an adaptation of the multi-input multi-output (MIMO) un-
+                                                                                                                                                                 approach to provide accurate estimates of uncertainty. The                 certainty estimation method [7] to the task of 3D object
+                                                                                                                                                                 key idea of BNNs is to place a prior probability distribution              detection in LiDAR point clouds. MIMO is a method shown
+                                                                                                                                                                 over the network parameters and use Bayesian inference to                  to provide state-of-the-art uncertainty estimates in image
+                                                                                                                                                                 determine a posterior. Bayesian inference is computation-                  classification, but at a fraction of the computational cost of
+                                                                                                                                                                 ally expensive and intractable for the large network sizes                 the existing methods. The key idea behind the MIMO method
+                                                                                                                                                                 used in autonomous driving perception tasks such as object                 is to train a single network with multiple inputs and outputs
+                                                                                                                                                                 detection. Thus, much of the current work has focused on                   (one per input) and then feed a single image in multiple times
+                                                                                                                                                                 approximations that provide uncertainty estimates with a                   during inference, utilizing the resulting output distribution to
+                                                                                                                                                                 reasonable computation cost. Deep ensembles [3] and Monte                  estimate predictive uncertainty.
+                                                                                                                                                                 Carlo (MC) dropout [4] are well established approximation
+                                                                                                                                                                 methods and have also been applied to object detection [5],                   Although images are easily combined by stacking in the
+                                                                                                                                                                 [6]. The key idea is to sample multiple models from an                     MIMO method, adapting MIMO to 3D LiDAR object detec-
+                                                                                                                                                                 approximation of the posterior distribution and compute                    tion is not as straightforward. It requires combining multiple
+                                                                                                                                                                                                                                            input point clouds, which can be costly and potentially negate
+                                                                                                                                                                    1Department of Electrical and Computer Engineering, University          the performance advantage of MIMO. Therefore, we propose
+                                                                                                                                                                 of Waterloo, Canada. Contacts: matthew.pitropov@uwaterloo.ca, vah-         to extend the original idea such that the multi-input happens
+                                                                                                                                                                 dat.abdelzad@uwaterloo.ca, krzysztof.czarnecki@uwaterloo.ca                at the feature level. It eliminates having the voxelization
+                                                                                                                                                                                                                                            bottleneck and transfer such a bottleneck to the middle layers
+                                                                                                                                                                    2David R. Cheriton School of Computer Science, University of Waterloo,  of the network. We perform multi-input over the bird's-eye-
+                                                                                                                                                                 Canada. Contact: c.huang@uwaterloo.ca                                      view (BEV) feature maps. This is different from the original
+                                                                                                                                                                                                                                            MIMO which stacks raw inputs, but is key for the LiDAR-
+                                                                                                                                                                    3University of Toronto Robotics Institute, Canada. Contact:             based 3D object detection. We associate the success of this
+                                                                                                                                                                 steven.waslander@utoronto.ca                                               extension with the fact that the voxel feature network does
+not have enough capacity to have a significant contribution      objects. The BEV feature maps are sometimes referred to as
+to uncertainty estimation.                                       a "2D pseudo image" [16].
+
+   We evaluate the resulting LiDAR-MIMO design using two         B. Uncertainty estimation for classification
+different 3D object detectors and compare them with MC
+dropout and ensembles. We demonstrate that LiDAR-MIMO               The predictive uncertainty of a classification network has
+has comparable performance with MC dropout and ensemble          two components [17]: epistemic uncertainty, which is due
+in terms of uncertainty estimation quality, as measured by       to the uncertainty over the model parameters caused by the
+scoring rules and calibration errors. However, it achieves this  limited availability of data; and aleatoric uncertainty, which
+while being twice as fast as MC dropout and ensemble, and        is due to the inherent noise in the data itself. The predictive
+having a higher detection performance (mAP) than both the        distribution output by a network should adequately reflect
+vanilla DNN (baseline) and MC dropout, as shown in Fig. 1.       both sources of uncertainty, which is the case for Bayesian
+The baseline model is trained without any extensions for         inference for NNs. However, since exact such inference is
+uncertainty estimation.                                          computationally intractable, practical realizations of BNNs
+                                                                 that place a distribution on their weights are necessarily
+   The main contributions of this paper are as follows: (i)      approximations, relying on making prior assumptions about
+We are the first to adapt the MIMO architecture to LiDAR-        the class of distributions for the weights and using dif-
+based 3D object detection, confirming the effectiveness of       ferent approximate inference methods, including variational
+this method in this new task. (ii) We modify the MIMO            Bayes [18] and Markov Chain Monte Carlo methods [2].
+architecture to combine inputs at feature level rather than      These methods are highly sensitive to hyper-parameters and
+raw inputs to reduce data processing, which is key for           difficult to scale to large datasets and network architec-
+LiDAR point clouds in real-time constrained environments.        tures [19].
+Further, this modification also takes better advantage of the
+limited available capacity in the underlying object detector        A more practical class of approximate BNNs, which we
+compared to the original approach. (iii) We extensively          discuss in the remainder of this section, rely on some form of
+evaluate LiDAR-MIMO over multiple 3D object detectors            model ensembling that samples models from the approximate
+and show LiDAR-MIMO has higher mAP than MC dropout,              posterior and combines their outputs to compute the resulting
+comparable performance on uncertainty assessments, and is        predictive distribution. For classification, the predictive dis-
+only marginally slower than the underlying vanilla detector.     tribution is simply the mean of the categorical distributions
+As a result, LiDAR-MIMO can be can be twice as fast as           from each ensemble member [20]. For regression, each
+using MC dropout or ensembles.                                   member is usually designed as a variance network [21],
+                                                                 which is trained with two outputs, the mean and variance,
+     II. BACKGROUND AND RELATED WORKS                            using the so-called aleatoric regression loss [17]. The overall
+                                                                 predictive distribution is then characterized by the mean
+A. 3D object detection for LiDAR point clouds                    and variance of the resulting mixture distribution [3]. We
+                                                                 now briefly introduce ensembles and MC dropout, which
+   LiDAR-based 3D object detection has emerged as a piv-         are the two main practical methods for approximating BNNs
+otal component of autonomous driving systems, with point-        found in literature, and MIMO, which aims at reducing the
+based [8], [9], voxel-based [10], [11], [12], [13], and hybrid   computational cost of these methods.
+approaches showing steadily improvement [14]. Voxel-based        Deep ensembles [3]: A state of the art baseline in un-
+approaches that exploit the bird's-eye view (BEV) projection,    certainty estimation is to train multiple models with the
+such as PointPillars (PP) [13] and SECOND (SC) [11],             same architecture and ensure their diversity by random
+achieve competitive detection performance at low compu-          initialization of weights and training data shuffling. Ensem-
+tational cost, which makes them attractive for deployment        bling is shown to outperform MC dropout on uncertainty
+on AVs. Information for BEV feature map creation is listed       prediction metrics [3]. In particular, it shows much stronger
+within the papers. Although hybrid approaches, like PV-          diversity of outputs than MC dropout, since each model is
+RCNN [14], have higher mean average precision (mAP), they        trained independently [7]. Although easily parallelized, deep
+also add substantial computational cost. For example, PV-        ensembles remain very costly in terms of both processing
+RCNN [14] achieves 82.97% mAP on the KITTI benchmark,            and memory use.
+compared to 80.29% mAP for SC, but SC runs 2x faster than        MC dropout [4]: MC dropout employs dropout both during
+PV-RCNN [15].                                                    training and inference and obtains multiple predictions by
+                                                                 performing multiple forward passes with different dropout
+   Fig. 2 highlights the main components of a voxel-based        network realizations for the same input. Normally dropout
+detector using PP and SC as examples (ignore the elements        layers are added throughout the network as a regularization
+in red for now). The input point cloud is first voxelized into   method to reduce over-fitting [22]. Interestingly, MC dropout
+pillar (PP) or cuboid (SC) voxels. These are fed into a voxel    has been shown to be equivalent to approximate Bayesian
+feature extraction (VFE) network, which is PointNet [16]         inference in deep Gaussian processes [4].
+for PP and sparse 3D convolutions for SC. The BEV pro-           MIMO [7]: Similar to MC dropout, a multi-input multi-
+jection of the resulting features, or BEV feature maps, are      output (MIMO) network represents an ensemble as a single
+then passed to a backbone, which applies 2D convolutions.
+Finally, the backbone features are passed to a detection head,
+which outputs classes and bounding boxes of the detected
+                                          MIMO-BEV
+
+                                                                 Detection Head  Predictions
+                                                                       (SSD)
+
+         Voxelize          Voxel Feature            Backbone
+                                               Ensemble Predictions
+                              Network               (2D CNN)                                  Cluster
+
+ Point
+            Voxels                   BEV
+                 Detection Head
+Clouds                                    Features                     (SSD)
+
+                                                                                 Predictions
+
+         Fig. 2. The network architecture of a LiDAR-MIMO 3D object detector with additions highlighted in red
+
+network, but unlike MC dropout, it requires only a single           Similarly, Zhong et al. [26] modify the SECOND architec-
+forward pass during inference. The main idea is to stack         ture with a variance regression output and capture aleatoric
+multiple inputs as a combined input into a single network        uncertainty via an adapted aleatoric loss function. The loss
+with multiple copies of its classification head, one per input.  improves the uncertainty prediction for angular parameters
+The network is trained by stacking different inputs and then     by using the von Mises distribution.
+giving each classification head the ground truth label of the
+corresponding input for its loss function. During inference,        Harakeh and Waslander [27] conduct an in-depth survey
+instead of stacking different inputs, the same input is stacked  and evaluation of predictive uncertainty for deep 2D object
+to satisfy the input tensor size requirement. Each head makes    detection architectures using different aleatoric regression
+its own prediction for the same input, which results in the      losses, MC dropout, and ensemble methods. To evaluate
+desired sample set of outputs. MIMO relies on the fact that      the methods, they use mAP, calibration error, and scoring
+modern DNNs are overparameterized and uses the available         rules. The results highlight i) the importance of scoring
+network capacity to fit multiple independent subnetworks.        rules for capturing the reliability of output distributions, ii)
+Because each output head is trained by independently sam-        issues with NMS while seeking output sample sets, and
+pled inputs, given sufficient capacity, the MIMO predictions     iii) computational and performance limitations of ensemble
+can match the diversity of a deep ensemble [7].                  and MC dropout methods. Our work follows in this vein of
+                                                                 rigorous evaluation of predictive uncertainty, and addresses
+   When compared with MC dropout and ensembles, the              the high computational cost of MC dropout and ensembles.
+MIMO method was demonstrated to provide a prediction
+time similar to a vanilla deterministic network. MIMO               We are unaware of any work adapting MIMO for uncer-
+achieved this while outperforming the classification accuracy    tainty estimation for 3D object detection or LiDAR inputs.
+of MC dropout, and approaching that of an ensemble [7].
+It also had Negative Log-Likelihood (NLL) and Expected                III. LIDAR-MIMO 3D OBJECT DETECTION
+Calibration Error (ECE) [23] scores comparable to deep
+ensembles, indicating uncertainty estimation of similarly           Fig. 2 depicts our proposed adaptation of the MIMO
+high quality. Recently, MIMO has been adapted for the task       method to LiDAR-based 3D object detection, with the com-
+of 2D object detection showing similar performance results       ponents of the underlying 3D object detector (e.g, Point-
+[24].                                                            Pillars or SECOND) in black and the extensions required
+                                                                 by LiDAR-MIMO in red. We propose a design variant for
+C. Uncertainty estimation for object detection                   combining multiple inputs named MIMO-BEV. In MIMO-
+                                                                 BEV, we stack BEV feature maps of point cloud inputs as
+   Uncertainty estimation has recently also attracted interest   multiple inputs. In the following sections, we describe the
+in the context of object detection. For this task, uncertainty   input combination, the loss functions, and the clustering of
+estimation methods are used both for object classification and   the predictions from the multiple heads.
+bounding box-regression, which results in bounding boxes
+being represented by probability distributions. In contrast      A. Input combination
+to classification, object detection also needs to deal with
+multiple object hypotheses, and thus steps such as non-             In order to provide our 3D object detector DNN with
+maximum suppression (NMS) need to be refined or extended         multiple inputs we went through three potential variants. We
+to deal with bounding boxes as probability distributions.        named these variants MIMO-noID, MIMO-ID and MIMO-
+                                                                 BEV.
+   Most closely related to our work, Feng et al. [25] pro-
+pose a probabilistic LiDAR-based 3D vehicle detector with           The MIMO-noID variant combined the point clouds from
+dropout layers and a variance regression output for predicted    different frames resulting in one large point cloud. This
+variances. They find that adding the variance regression         resulted in low mAP performance as the detection heads
+output improves vehicle detection accuracy. The authors did      could not focus on features from a single input. To fix this,
+not evaluate uncertainty estimation, but the results show        we decided to create the MIMO-ID variant. This variant,
+that the occlusion level and vehicle distance correlate with     adds an additional head ID feature to each point to allow the
+the aleatoric uncertainty, and the vehicle detection accuracy    network to differentiate among the inputs.
+correlates with the epistemic uncertainty.
+                                                                    For the MIMO-BEV variant, the main idea is that the
+                                                                 equivalent of stacking images for MIMO in image classi-
+                                                                 fication is stacking the BEV pseudo image in 3D object
+                                                                 detection. Fig. 3 depicts the MIMO-BEV architecture for
+Point Cloud 1     Voxelize     Voxel Feature                       BEV Pseudo Image 1        Stack
+Point Cloud 2                     Network
+
+                                                                                                                 Backbone Input
+
+               1            2                                      BEV Pseudo Image 2     3
+
+                            Fig. 3. Pseudo image stacking for MIMO-BEV with two inputs
+
+training. In step 1, one point cloud for each detection head is    include seven regression variables: centroid position, x, y, z,
+individually voxelized, followed by step 2 where those voxels      length, width, height and orientation. The log variance,
+are sent into the VFE network. Note that the voxelization           = log 2, for each parameter is regressed for numerical
+and VFE functions take one input point cloud and are called        stability, to avoid the possibility of dividing by zero [17].
+separately for each input. The input point clouds can be           When data has high uncertainty, the first term becomes 0 and
+from different frames or the same frame, with the likelihood       the model's loss only contains the second term. This causes
+depending on the chosen MIMO parameters. These param-              the loss to be less affected by data with higher uncertainty.
+eters are the number of heads, input repetition, and batch
+repetition and are discussed in Sec. 4. At this point each                    Lvar  =  1  exp(-T )(ygt  -  ux)2  +  1 T 1        (1)
+point cloud has been converted into separate BEV psuedo                                2                            2
+images (feature maps), which are then stacked together in
+step 3 as input for the Backbone. During testing, we instead       Regression on angular parameters: For regression on
+use the following modified steps to reduce execution time
+while keeping the same performance. A single point cloud           linear parameters, the loss function is derived from the
+is voxelized in step 1 and sent through the VFE network for
+step 2. The output, which is the pseudo image, is duplicated       Negative Log-Likelihood (NLL) of the Gaussian density
+multiple times depending on the number of heads in step 3.
+Then, these the pseudo images are stacked in step 4 and used       function. In contrast, for regression on angular parameters,
+as input to the backbone.
+                                                                   which are periodic, a periodic approximation of the Gaussian
+   In contrast to MIMO-BEV, MIMO-ID can also fit sub-
+networks into the VFE network, rather than just the Back-          distribution should be used [26]. Thus, we use Equation (2),
+bone. MIMO-ID showed two issues, however. The need to
+duplicate and modify the point cloud input for each MIMO           derived from the NLL of the von Mises PDF (see [26] for
+head increased data processing time by a factor 2.8, which
+increased the total inference time by a factor of 1.7 compared     details).
+to MIMO-BEV for PointPillars. Also, while the variant
+produces similar uncertainty estimation results as MIMO-               Lvar = log I0(exp(-)) - exp(-) cos ( - t) (2)
+BEV for PointPillars, it does not for SECOND, possibly                                    +V ELU ( - 0)
+because of capacity issues in the VFE of the latter. Due
+to page limitations and performance we do not include the          C. Output clustering and merging
+numerical results for MIMO-ID.
+                                                                      In the MIMO architecture, it is necessary to merge out-
+B. Loss functions                                                  puts to obtain the final predictions (see Fig. 2). This is
+                                                                   straightforward for image classification, because of the single
+Classification loss: We use a softmax version of the original      object per input to be classified. In contrast, for object
+focal loss [28], which allows us to use uncertainty evaluation     detection, we may have multiple objects per input and thus
+metrics such as the Brier Score that require a probability         need to cluster and merge the detections of the same object
+distribution over all classes. This is different from the default  from multiple heads. One might consider applying NMS to
+choice in PointPillars and SECOND implementations, which           the combined output of all models, however, this does not
+use one sigmoid per class.                                         take into account the number of objects, models or object
+Regression on linear parameters: To obtain variances               classes. To group predictions, we adopted the consensus
+for the bounding box regression values, we add an extra            clustering method, shown to perform best compared to the
+convolution layer as output to the detection head(s) for           affirmative (at least one) and unanimous (all members must
+heteroscedastic regression [17]. For such a regression, the        agree) methods [29]. Consensus clustering requires more
+noise is data-dependent and must be learned as part of the         than the number of outputs divided by 2 in order for the
+loss function, see Equation (1) [25], [17]. The ground-truth       cluster to be valid. To merge predictions, we used the
+bounding box ygt and predicted bounding box ux parameters          mean method. Roza et al. [30] implemented several different
+                                                                   box merging strategies, and showed significant variations on
+                                                                   sample-based uncertainty estimates resulting from different
+                                                                   strategies. Based on their results, we used the mean method,
+                                                                   which had the best performance overall. Orientation angles
+                                                                   need a special consideration, however, since they could differ
+                                                                   by 180° in the outputs. To handle this case, we instead take
+                                                                   the angle from the box with the highest confidence to remove
+the negative effect of mean methods on bimodal distributions.      MIMO-BEV: MIMO-BEV requires additional code for
+For example, two clustered predictions with 0° and 180°            psuedo images combination and adding multiple heads.
+would result in worse prediction with a mean angle of 90°.         There are three hyper parameters for MIMO: number of
+                                                                   heads, input repetition (IR) and batch repetition (BR). We
+                       IV. EXPERIMENTS                             selected the number of heads to be 2 as the base networks
+                                                                   have low capacity. IR is used to select a percentage of frame
+   In this section, we evaluate our proposed LiDAR-MIMO            groupings in a batch to have matching frame, while BR
+architecture against other uncertainty estimation methods on       duplicates each frame in a batch for smoother training. Since
+publicly available AV datasets. We demonstrate that LiDAR-         we are using a low batch size we were able to train with an
+MIMO produces on par uncertainty estimates while having            IR of 0% and a BR of 0. This model is trained with a batch
+lower inference latency, which is paramount for safety-            size of 3 with 120 epochs.
+critical and resource-constrained applications such as AVs.
+                                                                      Tab. I specifies the runtime parameters for the evaluated
+A. Datasets                                                        models. The number of forward passes is the number of
+                                                                   times that a model is run for input to output(s). The number
+   All experiments were performed through training with the        of outputs is the number of NMS outputs after all forward
+KITTI dataset [31]. The KITTI dataset is a widely-used             passes are run. For example, an MC dropout model is run 4
+multimodal dataset for autonomous driving in clear weather.        times to get 4 outputs, and a MIMO model is run once for 2
+The full training set of the dataset is used to train each model.  outputs, since it is set for 2 heads. We use two heads since
+For mAP and partition counts, we report the results the on         our experiments have shown that PointPillars and SECOND
+the full validation (val) set. For uncertainty evaluation, we      do not have sufficient capacity to accommodate three or
+follow Feng et al. [32] and split the val set equally into the     more independent subnetworks, and adding more capacity
+recalibration (recal) set and the evaluation (eval) set. The       would come with increased runtime. This is consistent with
+recal set is used to determine score thresholds and calibrate      the original MIMO work [7], where the optimal number of
+the models. The eval set is then used to test the calibrated       subnetworks for the studied image classification networks is
+model by calculating the scoring rules and calibration errors.     2-3. The MC dropout and ensemble output amounts have
+                                                                   been selected to have comparable performance with our
+B. Models                                                          MIMO model while also having low execution time.
+
+   We evaluate LiDAR-MIMO against MC dropout and en-               C. Evaluation metrics
+sembles on two detectors, PointPillars (PP) and SECOND
+(SC). We use the PP and SC implementations provided in                We evaluate models based on the detection performance,
+OpenPCDet [33], and extend them with MC dropout, ensem-            inference time, and uncertainty estimates for both classifica-
+bling, and MIMO-BEV. We refer to the resulting detectors           tion and regression.
+for MC dropout, ensemble and MIMO-BEV as multi-output.             Detection: 3D object detection algorithms are generally
+More efficient ensemble approaches such as TreeNet [34]            evaluated using the average precision (AP) metric, first
+or BatchEnsemble [35] were not tested due to their lower           introduced in the PASCAL VOC 2007 object detection chal-
+performance compared to a standard ensemble [7].                   lenge [36]. The calculation of AP is based on the area under
+Baseline: The baseline models for evaluating detection per-        the precision-recall curve calculated for 40 recall points.
+formance use the original PP and SC implementations. For           Classification uncertainty: We evaluate this uncertainty
+KITTI, we use the PP and SC models provided with Open-             based on the softmax distribution extracted for each predic-
+PCDet. All baseline models are trained with the sigmoid            tion using two metrics: negative log-likelihood (NLL) and
+focal loss for 80 epochs.                                          Brier score, which are both proper [37]. The NLL score
+Multi-output: Each multi-input model shares the same               is a local scoring rule which only evaluates the softmax
+voxel-feature network, backbone, and head from the original        distribution at the ground truth label. The Brier score [38] is
+PP and SC, with some exceptions for MC dropout and                 a non-local and strictly proper scoring rule which evaluates
+MIMO-BEV as described shortly. Further, all multi-output           the whole softmax distribution by taking the squared error
+detectors use the softmax focal classification loss, smooth        between a predictive probability from the network and its
+L1 regression losses, and the previously described aleatoric       one-hot encoded ground truth label. For our qualitative
+regression losses, and share the same clustering and merging       results we calculate the Shannon entropy (SE) along with
+stage. Each multi-input model is trained for an extra 40           the mutual information (MI) [20]. SE contains the total
+epochs compared to the baseline models in order to have            predictive uncertainty (epistemic and aleatoric) while MI
+the models converge with the new loss functions.                   captures only the epistemic uncertainty.
+MC dropout: We create a variant of the backbone by
+inserting a dropout layer, with 0.5 probability, after the ReLU       To evaluate the classification calibration, we use an ex-
+of each deconvolution block. During inference, we keep the         tension of Average Calibration Error (ACE) called Marginal
+dropout layers active for MC dropout. This model is trained        Calibration Error (MCE) [39]. ACE calculates the absolute
+with a batch size of 6 for 120 epochs.                             error averaged over all score intervals equally and only
+Ensemble: We train four unique models to form our ensem-           considers the uncertainty calibration quality on the object's
+ble. Each model is trained with a different random seed for
+frame order shuffling, for a batch size of 6 with 120 epochs.
+                                                         TABLE I
+THE INFERENCE TIME (IN ms) FOR THE POINTPILLARS MODELS TRAINED ON THE KITTI DATASET
+
+    Model     # Fwd   Outputs   Minimum                              Data     VFE         Backbone   Total
+              Passes           Cluster Size                       Processing              + Heads   Time 
+   Baseline               1
+MC dropout       1        4           -                                       1 Fwd Pass      16      36
+Ensemble (4)     4        4          3                                                        20      100
+Ensemble (2)     4        2          3                            16          4               20      112
+MIMO-BEV         2        2          2                                                        20      64
+                 1                   2                            16          4               25      45
+
+                                                                  16          4
+
+                                                                  16          4
+
+                                                                  16          4
+
+ground-truth class. In contrast, MCE measures the uncer-          dropout layers. Due to this caching, the calculation adds the
+tainty of a classifier's predicted distribution over all classes  data processing time to the VFE time, which is then added
+of interest.                                                      to the number of forward passes multiplied by the backbone
+Regression uncertainty: For regression parameters, we eval-       and heads time. As seen in Tab. I, MIMO-BEV is 60% faster
+uate uncertainty based on the predicted means and variances       than ensemble and 55% faster than the MC dropout.
+for each prediction that can be matched to a ground-truth
+object. We use NLL and energy scores [40] as proper                  2) Average precision and detection partitions: For each
+scoring rules. The energy score is a strictly proper and non-     network architecture, we show separate tables with mAP and
+local score, analogous to the Brier score for classification.     counts for individual detection partitions.
+It is derived from energy distance. To calculate it, we
+use an efficient Monte-Carlo approximation for multivariate          Tab. II and Tab. III contain the results for their respective
+Gaussians [40]. For our qualitative results we calculate the      models trained on the KITTI dataset. In both cases, the
+spatial uncertainty for a 3D bounding box using epistemic         MIMO-BEV model exceeds the mAP score of the MC
+and aleatoric total variance (ETV and ATV) [25]. The total        dropout and baseline model, while approaching the ensemble
+variance is the trace of the covariance matrix. For ETV, the      models. The MIMO models have higher FPBG than the
+covariance matrix is created using the regression values from     baseline model; however, their FPML is lower than all others
+a bounding box cluster while for ATV it is created using the      except ensemble. The ensemble models have the largest
+predicted variances from a bounding box cluster.                  increase in mAP after clustering; for example, the individual
+                                                                  member outputs scored 62-63% mAP for PointPillars on
+   For the calibration error, we use a method created by          KITTI. The ensemble also has the lowest FPBG count. Fig. 1
+Kuleshov et al. [41], which is an extension to calibration        plots mAP and execution time for the PointPillars models
+methods for classification. Instead of the confidence scores      trained on KITTI. The smaller improvement of MIMO over
+being used to place predictions into bins based on thresholds,    the SECOND baseline may indicate that the latter makes
+the CDF is used to place predictions.                             better use of its available capacity than PointPillars.
+Detection partitions: We focus on three partitions in order
+to see clear differences in the uncertainty metrics [42], [27].                                      TABLE II
+True Positives (TP) are predictions that match a ground-truth     THE MAP AND DETECTION PARTITIONS FOR THE POINTPILLARS
+(GT) box with an IoU over the TP IoU threshold. Mis-
+localized false positives (FPML) are predictions that match                   MODELS TRAINED OVER THE KITTI DATASET
+with a GT box, but their IoU is below the TP IoU threshold
+and higher than 0.1. The last partition is background false               Model           mAP        TP FPML FPBG
+positives (FPBG), where the prediction has a lower than 0.1                               (%) 
+IoU with all GT boxes and thus it is highly likely that the              Baseline         62.42                Counts Per Partition
+prediction should be background.                                      MC dropout          61.70
+                                                                      Ensemble (4)        67.24     8128 4204 47028
+D. Results                                                            Ensemble (2)        65.44     7969 4600 39274
+                                                                      MIMO-BEV            64.61     8406 3452 31844
+   1) The inference time: Tab. I shows the inference time                                           8428 4099 82842
+of each uncertainty estimation method for PointPillars and                                          8332 3857 56988
+the KITTI dataset. All timings were calculated using a
+computer with an i7-8700K CPU and Titan Xp GPU. Data                                                TABLE III
+processing time is the time to load the point cloud and           THE MAP AND DETECT PARTITIONS FOR THE SECOND MODELS
+perform voxelization. For each model except MC dropout,
+the calculation for total time is data processing time added to                     TRAINED OVER THE KITTI DATASET
+the number of forward passes multiplied by the time for data
+to pass through the network. For the MC dropout model an                  Model           mAP        TP FPML FPBG
+efficient implementation can have the VFE network output                                  (%) 
+cached and reused for each forward pass that encounters the              Baseline         65.37                Counts Per Partition
+                                                                      MC dropout          64.89
+                                                                      Ensemble (4)        68.82     8397 3837 36713
+                                                                      Ensemble (2)        67.77     8371 3833 33541
+                                                                      MIMO-BEV            65.45     8654 3213 24871
+                                                                                                    8656 3702 60640
+                                                                                                    8534 3581 44113
+
+                                                                     3) Uncertainty evaluation metrics: The uncertainty re-
+                                                                  sults are laid out in Tab. IV and Tab. V. Scores are averaged
+                                                                  over IoU thresholds from 0.5 to 0.95, with a 0.05 increment.
+                                                                      TABLE IV
+              UNCERTAINTY EVALUATION FOR THE POINTPILLARS MODELS TRAINED OVER THE KITTI DATASET
+
+    Model         NLL (Cls)             Brier Score             NLL (Reg)        Energy Score     MCE      CE
+                                                                                                 (Cls)   (Reg) 
+MC dropout    TP  FPML FPBG         TP  FPML FPBG               TP  FPML         TP  FPML        0.2296  0.0602
+Ensemble (4)                                                                                     0.1995  0.0688
+Ensemble (2)  0.3521 0.4096 1.0870  0.1941 0.2359 0.8306        -4.8418 -2.1827  0.4540 0.6580   0.2160  0.0694
+MIMO-BEV                                                                                         0.2070  0.0642
+              0.3569 0.4260 1.0130  0.1960 0.2454 0.7752        -4.8780 -2.2568  0.4458 0.6813
+
+              0.3558 0.4177 1.0362  0.1943 0.2406 0.7923        -4.9023 -2.2127  0.4422 0.6774
+
+              0.3652 0.4445 0.9870  0.2011 0.2609 0.7633        -5.0020 -2.3396  0.4332 0.6704
+
+                                                                        TABLE V
+                  UNCERTAINTY EVALUATION FOR THE SECOND MODELS TRAINED OVER THE KITTI DATASET
+
+    Model         NLL (Cls)             Brier Score             NLL (Reg)        Energy Score     MCE      CE
+                                                                                                 (Cls)   (Reg) 
+MC dropout    TP  FPML FPBG         TP  FPML FPBG               TP  FPML         TP  FPML        0.2352  0.0504
+Ensemble (4)                                                                                     0.2078  0.0657
+Ensemble (2)  0.3211 0.372 1.1448   0.1663 0.2039 0.8853        -5.8268 -1.4789  0.2835 0.5553   0.2161  0.0629
+MIMO-BEV                                                                                         0.2004  0.0639
+              0.3521 0.3915 1.0957  0.1929 0.2182 0.8412        -5.5626 -2.3645  0.3151 0.5664
+
+              0.3509 0.3971 1.0840  0.1911 0.2240 0.8288        -5.6425 -2.1949  0.2937 0.5647
+
+              0.3432 0.3991 1.0442  0.1852 0.2262 0.8073        -5.3963 -2.5290  0.3589 0.5368
+
+For each threshold we follow Harakeh and Waslander [27] by      Fig. 4. Top: Ground truth objects are displayed for this KITTI frame on
+calculating a score threshold that maximizes the F1 score in    the camera image as well as the BEV projection along with the difficulty
+order to remove low scoring predictions. Temperature scal-      number. Bottom: Each row is a multi-output model with two TP predictions.
+ing [43] is also performed per class at each score threshold    The left one is the truncated car in the camera view and the right one is
+to calibrate the predictions.                                   the occluded yellow car in the distance. The blue box is the mean cluster
+                                                                prediction while the grey box is the 95% confidence interval for the width
+   MC dropout often outperforms the other models for clas-      and height of the prediction. Details on cluster size, softmax score, Shannon
+sification NLL and Brier Score in the TP and FPML, while        entropy, epistemic total variance and aleatoric total variance are included at
+MIMO-BEV performs well for FPBGs. The MC dropout                the bottom.
+model has predictions with higher confidence leading to
+lower scores. The MIMO-BEV model outputs lower con-             detection relies on the composition of BEV feature maps,
+fidence predictions, causing a better score for FPBGs.          which is applicable to efficient 3D object detectors, such as
+                                                                PointPillars and SECOND. The stacking approach is likely
+   For the regression scores, the MIMO-BEV model performs       to work well for other LiDAR-based 3D object detectors that
+well on the KITTI dataset, with some best scores being          are based on LiDAR BEV projections, but also LiDAR range
+taken by MC dropout. Once again the scores are low and          images. Further, MIMO-ID can be used for any LiDAR-
+are similar. The calibration errors are similar among all the   based detector, but it comes with increased data processing
+models. The MCE values tend to be lowest for MIMO-BEV           time. In general, MIMO is limited by the capacity of the
+and ensemble, while the CE is lowest for MC dropout and         underlying detector, which in our experiments allowed us
+MIMO-BEV.                                                       to fit only two sub-networks. In future work, we plan to
+                                                                explore LiDAR-MIMO with larger capacity networks and
+   Fig. 4 visualizes qualitative results for the PointPillars   more detection heads, and adapting LiDAR-MIMO to other
+models trained on the KITTI dataset. The close TP prediction    3D detector designs, such as ones based on LiDAR range
+has a higher softmax score, lower SE, and lower total           images.
+variances. The further TP prediction has a lower softmax
+score, and increased SE as well as ATV. The MI is zero
+or close to zero for each prediction, while the ETV is also
+low but increases with distance. ETV is the lowest for the
+MIMO-BEV model. Our results agree with previous work
+in this area displaying a large increase in aleatoric variance
+with distance away from the LiDAR sensor.
+
+                        V. CONCLUSION
+
+   LiDAR-MIMO offers fast and high-quality detection and
+uncertainty estimation, which is crucial for safety-critical
+and resource-constrained robotic vision, such as found in
+autonomous driving. In our experiments, LiDAR-MIMO
+achieves consistently higher mAP than MC dropout, while
+approaching ensembles. Further, similar to the other two
+methods, LiDAR-MIMO produces high-quality uncertainty
+estimates as measured by calibration errors and scoring rules,
+but without the large runtime overhead of the other methods.
+Our design for adapting MIMO to LiDAR-based 3D object
+                     ACKNOWLEDGMENT                                          [20] Y. Gal, "Uncertainty in Deep Learning," Ph.D. dissertation, University
+                                                                                   of Cambridge, 2016.
+   Several members within our lab also helped with the
+                                                                             [21] D. A. Nix and A. S. Weigend, "Estimating the mean and variance of
+creation of this paper. Our co-op students Charles Zhang                           the target probability distribution," in ICNN, vol. 1, 1994, pp. 55­60.
+
+and Martin Ma contributed to the creation and testing of the                 [22] N. Srivastava, G. Hinton, A. Krizhevsky, I. Sutskever, and R. Salakhut-
+                                                                                   dinov, "Dropout: A Simple Way to Prevent Neural Networks from
+calibration error calculations. The MASc student Spencer                           Overfitting," The journal of machine learning research, vol. 15, no. 1,
+                                                                                   pp. 1929­1958, 2014.
+Delcore contributed to the uncertainty evaluation pipeline
+                                                                             [23] M. P. Naeini, G. Cooper, and M. Hauskrecht, "Obtaining Well Cal-
+and validated many of the calculations that we use for the                         ibrated Probabilities Using Bayesian Binning," in AAAI, 2015, p.
+                                                                                   2901­2907.
+various metrics within the paper.
+                                                                             [24] S. Cygert and A. Czyzewski, "Robust Object Detection with Multi-
+                            REFERENCES                                             input Multi-output Faster R-CNN," arXiv preprint arXiv:2111.13065,
+                                                                                   2021.
+ [1] D. Hendrycks and K. Gimpel, "A baseline for Detecting Misclassified
+      and Out-of-Distribution Examples in Neural Networks," ICLR, 2017.      [25] D. Feng, L. Rosenbaum, and K. Dietmayer, "Towards Safe Au-
+                                                                                   tonomous Driving: Capture Uncertainty in the Deep Neural Network
+ [2] R. M. Neal, Bayesian learning for neural networks. Springer Science           For Lidar 3D Vehicle Detection," in ITSC, 2018, pp. 3266­3273.
+      & Business Media, 1996, vol. 118.
+                                                                             [26] Y. Zhong, M. Zhu, and H. Peng, "Uncertainty-Aware Voxel based 3D
+ [3] B. Lakshminarayanan, A. Pritzel, and C. Blundell, "Simple and                 Object Detection and Tracking with von-Mises Loss," 2020.
+      Scalable Predictive Uncertainty Estimation using Deep Ensembles,"
+      in NeurIPS, 2017, pp. 6402­6413.                                       [27] A. Harakeh and S. L. Waslander, "Estimating and Evaluating Regres-
+                                                                                   sion Predictive Uncertainty in Deep Object Detectors," in ICLR, 2021.
+ [4] Y. Gal and Z. Ghahramani, "Dropout as a Bayesian Approximation:
+      Representing Model Uncertainty in Deep Learning," in ICML, 2016,       [28] T.-Y. Lin, P. Goyal, R. Girshick, K. He, and P. Dolla´r, "Focal Loss
+      pp. 1050­1059.                                                               for Dense Object Detection," in ICCV, 2017, pp. 2980­2988.
+
+ [5] D. Feng, A. Harakeh, S. L. Waslander, and K. Dietmayer, "A Review       [29] A´ . Casado-Garc´ia and J. Heras, "Ensemble Methods for Object
+      and Comparative Study on Probabilistic Object Detection in Au-               Detection," in ECAI, 2020, pp. 2688­2695.
+      tonomous Driving," IEEE Transactions on Intelligent Transportation
+      Systems, pp. 1­20, 2021.                                               [30] F. S. Roza, M. Henne, K. Roscher, and S. Gu¨nnemann, "Assessing
+                                                                                   Box Merging Strategies and Uncertainty Estimation Methods in Mul-
+ [6] D. Miller, N. Su¨nderhauf, H. Zhang, D. Hall, and F. Dayoub, "Bench-          timodel Object Detection," in ECCV, 2020, pp. 3­10.
+      marking Sampling-based Probabilistic Object Detectors." in CVPR
+      Workshops, vol. 3, 2019, p. 6.                                         [31] A. Geiger, P. Lenz, and R. Urtasun, "Are we ready for Autonomous
+                                                                                   Driving? The KITTI vision benchmark suite," in CVPR, 2012, pp.
+ [7] M. Havasi, R. Jenatton, S. Fort, J. Z. Liu, J. Snoek, B. Lakshmi-             3354­3361.
+      narayanan, A. M. Dai, and D. Tran, "Training independent subnet-
+      works for robust prediction," in ICLR, 2021.                           [32] D. Feng, L. Rosenbaum, C. Glaeser, F. Timm, and K. Dietmayer, "Can
+                                                                                   We Trust You? On Calibration of a Probabilistic Object Detector for
+ [8] C. R. Qi, W. Liu, C. Wu, H. Su, and L. J. Guibas, "Frustum PointNets          Autonomous Driving," in IROS, 2019.
+      for 3D Object Detection from RGB-D Data," in CVPR, 2018, pp. 918­
+      927.                                                                   [33] O. D. Team, "OpenPCDet: An Open-source Toolbox for 3D Object
+                                                                                   Detection from Point Clouds," https://github.com/open-mmlab/Open
+ [9] S. Shi, X. Wang, and H. Li, "PointRCNN: 3D Object Proposal                    PCDet, 2020.
+      Generation and Detection from Point Cloud," in CVPR, 2019, pp.
+      770­779.                                                               [34] S. Lee, S. Purushwalkam, M. Cogswell, D. Crandall, and D. Batra,
+                                                                                   "Why M Heads are Better than One: Training a Diverse Ensemble of
+[10] J. Ku, M. Mozifian, J. Lee, A. Harakeh, and S. L. Waslander, "Joint 3D        Deep Networks," arXiv preprint arXiv:1511.06314, 2015.
+      Proposal Generation and Object Detection from View Aggregation,"
+      in IROS, 2018, pp. 1­8.                                                [35] Y. Wen, D. Tran, and J. Ba, "BatchEnsemble: an Alternative Approach
+                                                                                   to Efficient Ensemble and Lifelong Learning," in ICLR, 2020.
+[11] Y. Yan, Y. Mao, and B. Li, "SECOND: Sparsely Embedded Convolu-
+      tional Detection," Sensors, vol. 18, no. 10, p. 3337, 2018.            [36] M. Everingham, L. Van Gool, C. K. Williams, J. Winn, and A. Zis-
+                                                                                   serman, "The PASCAL Visual Object Classes (VOC) Challenge,"
+[12] Y. Zhou and O. Tuzel, "VoxelNet: End-to-End Learning for Point                International journal of computer vision, vol. 88, no. 2, pp. 303­338,
+      Cloud Based 3D Object Detection," in CVPR, 2018, pp. 4490­4499.              2010.
+
+[13] A. H. Lang, S. Vora, H. Caesar, L. Zhou, J. Yang, and O. Beijbom,       [37] T. Gneiting and A. E. Raftery, "Strictly Proper Scoring Rules, Predic-
+      "PointPillars: Fast Encoders for Object Detection from Point Clouds,"        tion, and Estimation," Journal of the American statistical Association,
+      in CVPR, 2019, pp. 12 697­12 705.                                            vol. 102, no. 477, pp. 359­378, 2007.
+
+[14] S. Shi, C. Guo, L. Jiang, Z. Wang, J. Shi, X. Wang, and H. Li, "PV-     [38] G. W. Brier, "Verification of Forecasts Expressed in Terms of Proba-
+      RCNN: Point-Voxel Feature Set Abstraction for 3D Object Detection,"          bility," Monthly weather review, vol. 78, no. 1, pp. 1­3, 1950.
+      in CVPR, 2020, pp. 10 529­10 538.
+                                                                             [39] A. Kumar, P. S. Liang, and T. Ma, "Verified Uncertainty Calibration,"
+[15] R. Qian, X. Lai, and X. Li, "3D Object Detection for Autonomous               NeurIPS, vol. 32, pp. 3792­3803, 2019.
+      Driving: A Survey," arXiv preprint arXiv:2106.10823, 2021.
+                                                                             [40] T. Gneiting, L. I. Stanberry, E. P. Grimit, L. Held, and N. A. Johnson,
+[16] C. R. Qi, H. Su, K. Mo, and L. J. Guibas, "PointNet: Deep Learning            "Assessing probabilistic forecasts of multivariate quantities, with an
+      on Point Sets for 3D Classification and Segmentation," in CVPR, 2017,        application to ensemble predictions of surface winds," Test, vol. 17,
+      pp. 652­660.                                                                 no. 2, p. 211, 2008.
+
+[17] A. Kendall and Y. Gal, "What Uncertainties Do We Need in Bayesian       [41] V. Kuleshov, N. Fenner, and S. Ermon, "Accurate Uncertainties for
+      Deep Learning for Computer Vision?" in NeurIPS, I. Guyon, U. V.              Deep Learning Using Calibrated Regression," in ICML, 2018, pp.
+      Luxburg, S. Bengio, H. Wallach, R. Fergus, S. Vishwanathan, and              2796­2804.
+      R. Garnett, Eds., 2017, pp. 5574­5584.
+                                                                             [42] D. Hoiem, Y. Chodpathumwan, and Q. Dai, "Diagnosing Error in
+[18] C. Blundell, J. Cornebise, K. Kavukcuoglu, and D. Wierstra, "Weight           Object Detectors," in ECCV, 2012, pp. 340­353.
+      Uncertainty in Neural Networks," in ICML, 2015, pp. 1613­1622.
+                                                                             [43] C. Guo, G. Pleiss, Y. Sun, and K. Q. Weinberger, "On Calibration of
+[19] W. J. Maddox, P. Izmailov, T. Garipov, D. P. Vetrov, and A. G. Wilson,        Modern Neural Networks," in ICML, 2017, pp. 1321­1330.
+      "A Simple Baseline for Bayesian Uncertainty in Deep Learning,"
+      NeurIPS, vol. 32, pp. 13 153­13 164, 2019.
+

@@ -1,0 +1,1597 @@
+arXiv:2211.01095v3 [cs.LG] 19 May 2025  Preprint
+
+                                        DPM-SOLVER++: FAST SOLVER FOR GUIDED SAM-
+                                        PLING OF DIFFUSION PROBABILISTIC MODELS
+
+                                         Cheng Lu, Yuhao Zhou, Fan Bao, Jianfei Chen, Chongxuan Li, Jun Zhu
+                                         Dept. of Comp. Sci. & Tech., Institute for AI, BNRist Center, THBI Lab
+                                         Tsinghua-Bosch Joint ML Center, Tsinghua University, Beijing, 100084 China
+                                         Gaoling School of Artificial Intelligence, Renmin University of China,
+                                         Beijing Key Laboratory of Big Data Management and Analysis Methods, Beijing, China
+                                         {lucheng.lc15, yuhaoz.cs}@gmail.com; bf19@mails.tsinghua.edu.cn
+                                         chongxuanli@ruc.edu.cn; {jianfeic, dcszj}@tsinghua.edu.cn
+
+                                                                                   ABSTRACT
+
+                                                   Diffusion probabilistic models (DPMs) have achieved impressive success in high-
+                                                   resolution image synthesis, especially in recent large-scale text-to-image generation
+                                                   applications. An essential technique for improving the sample quality of DPMs
+                                                   is guided sampling, which usually needs a large guidance scale to obtain the best
+                                                   sample quality. The commonly-used fast sampler for guided sampling is DDIM,
+                                                   a first-order diffusion ODE solver that generally needs 100 to 250 steps for high-
+                                                   quality samples. Although recent works propose dedicated high-order solvers and
+                                                   achieve a further speedup for sampling without guidance, their effectiveness for
+                                                   guided sampling has not been well-tested before. In this work, we demonstrate
+                                                   that previous high-order fast samplers suffer from instability issues, and they even
+                                                   become slower than DDIM when the guidance scale grows large. To further
+                                                   speed up guided sampling, we propose DPM-Solver++, a high-order solver for the
+                                                   guided sampling of DPMs. DPM-Solver++ solves the diffusion ODE with the data
+                                                   prediction model and adopts thresholding methods to keep the solution matches
+                                                   training data distribution. We further propose a multistep variant of DPM-Solver++
+                                                   to address the instability issue by reducing the effective step size. Experiments
+                                                   show that DPM-Solver++ can generate high-quality samples within only 15 to 20
+                                                   steps for guided sampling by pixel-space and latent-space DPMs.1
+
+                                        1 INTRODUCTION
+
+                                        Diffusion probabilistic models (DPMs) (Sohl-Dickstein et al., 2015; Ho et al., 2020; Song et al.,
+                                        2021b) have achieved impressive success on various tasks, such as high-resolution image synthe-
+                                        sis (Dhariwal & Nichol, 2021; Ho et al., 2022; Rombach et al., 2022), image editing (Meng et al.,
+                                        2022; Saharia et al., 2022a; Zhao et al., 2022), text-to-image generation (Nichol et al., 2021; Saharia
+                                        et al., 2022b; Ramesh et al., 2022; Rombach et al., 2022; Gu et al., 2022), voice synthesis (Liu et al.,
+                                        2022a; Chen et al., 2021a;b), molecule generation (Xu et al., 2022; Hoogeboom et al., 2022; Wu et al.,
+                                        2022) and data compression (Theis et al., 2022; Kingma et al., 2021). Compared with other deep
+                                        generative models such as GANs (Goodfellow et al., 2014) and VAEs (Kingma & Welling, 2014),
+                                        DPMs can even achieve better sample quality by leveraging an essential technique called guided sam-
+                                        pling (Dhariwal & Nichol, 2021; Ho & Salimans, 2021), which uses additional guidance models to
+                                        improve the sample fidelity and the condition-sample alignment. Through it, DPMs in text-to-image
+                                        and image-to-image tasks can generate high-resolution photorealistic and artistic images which are
+                                        highly correlated to the given condition, bringing a new trend in artificial intelligence art painting.
+
+                                        The sampling procedure of DPMs gradually removes the noise from pure Gaussian random variables
+                                        to obtain clear data, which can be viewed as discretizing either the diffusion SDEs (Ho et al., 2020;
+                                        Song et al., 2021b) or the diffusion ODEs (Song et al., 2021b;a) defined by a parameterized noise
+                                        prediction model or data prediction model (Ho et al., 2020; Kingma et al., 2021). Guided sampling
+
+                                            Corresponding Author.
+                                            1Code is available at https://github.com/LuChengTHU/dpm-solver
+
+                                                                                                   1
+Preprint
+
+DDIM (order = 1)      PNDM (order = 2)     DEIS-1 (order = 2)       DEIS-2 (order = 3)
+(Song et al., 2021a)  (Liu et al., 2022b)
+                                           (Zhang & Chen, 2022) (Zhang & Chen, 2022)
+
+DPM-Solver (order = 2) DPM-Solver-3 (order = 3) DDIM (thresholding) DPM-Solver++ (order = 2)
+
+(Lu et al., 2022)     (Lu et al., 2022)    (Saharia et al., 2022b)  (ours)
+
+Figure 1: Previous high-order solvers are unstable for guided sampling: Samples using the pre-trained
+DPMs (Dhariwal & Nichol, 2021) on ImageNet 256×256 with a classifier guidance scale 8.0, varying different
+samplers (and different solver orders) with only 15 function evaluations. : DDIM with the dynamic threshold-
+ing (Saharia et al., 2022b). Our proposed DPM-Solver++ (detailed in Algorithm 2) can generate better samples
+than the first-order DDIM, while other high-order samplers are worse than DDIM.
+
+of DPMs can also be formalized with such discretizations by combining an unconditional model with
+a guidance model, where a hyperparameter controls the scale of the guidance model (i.e. guidance
+scale). The commonly-used method for guided sampling is DDIM (Song et al., 2021a), which is
+proven as a first-order diffusion ODE solver (Salimans & Ho, 2022; Lu et al., 2022) and it generally
+needs 100 to 250 steps of large neural network evaluations to converge, which is time-consuming.
+
+Dedicated high-order diffusion ODE solvers (Lu et al., 2022; Zhang & Chen, 2022) can generate
+high-quality samples in 10 to 20 steps for sampling without guidance. However, their effectiveness
+for guided sampling has not been carefully examined before. In this work, we demonstrate that
+previous high-order solvers for DPMs generate unsatisfactory samples for guided sampling, even
+worse than the simple first-order solver DDIM. We identify two challenges of applying high-order
+solvers to guided sampling: (1) the large guidance scale narrows the convergence radius of high-order
+solvers, making them unstable; and (2) the converged solution does not fall into the same range with
+the original data (a.k.a. "train-test mismatch" (Saharia et al., 2022b)).
+
+Based on the observations, we propose DPM-Solver++, a training-free fast diffusion ODE solver
+for guided sampling. We find that the parameterization of the DPM critically impacts the solution
+quality. Subsequently, we solve the diffusion ODE defined by the data prediction model, which
+predicts the clean data given the noisy ones. We derive a high-order solver for solving the ODE with
+the data prediction parameterization, and adopt dynamic thresholding methods (Saharia et al., 2022b)
+to mitigate the train-test mismatch problem. Furthermore, we develop a multistep solver which uses
+smaller step sizes to address instability.
+
+As shown in Fig. 1, DPM-Solver++ can generate high-quality samples in only 15 steps, which is much
+faster than all the previous training-free samplers for guided sampling. Our additional experimental
+results show that DPM-Solver++ can generate high-fidelity samples and almost converge within only
+15 to 20 steps, for a wide variety of guided sampling applications, including both pixel-space DPMs
+and latent-space DPMs.
+
+                                                           2
+Preprint            NFE = 20              NFE = 50           NFE = 100
+          NFE = 10
+
+DPM-Solver++(2M)    DPM-Solver++(2M)      DPM-Solver++(2M)   DPM-Solver++(2M)
+        (ours)              (ours)                (ours)             (ours)
+
+     DDPM                DDPM                  DDPM               DDPM
+(Ho et al., 2020)   (Ho et al., 2020)     (Ho et al., 2020)  (Ho et al., 2020)
+
+SDE-DPM-Solver++1 SDE-DPM-Solver++1 SDE-DPM-Solver++1 SDE-DPM-Solver++1
+
+(ours)              (ours)                (ours)             (ours)
+
+SDE-DPM-Solver++(2M) SDE-DPM-Solver++(2M) SDE-DPM-Solver++(2M) SDE-DPM-Solver++(2M)
+
+(ours)              (ours)                (ours)             (ours)
+
+Figure 2: Different solvers for DeepFloyd-IF (DeepFloyd, 2023) (pixel-space guided sampling). Our proposed
+SDE-DPM-Solver++(2M) can generate better samples than other samplers. The SDE-DPM-Solver++1 is
+equivalent to DDIM with a special , as detailed in Sec. 6.1.
+
+2 DIFFUSION PROBABILISTIC MODELS
+
+In this section, we review diffusion probabilistic models (DPMs) and their sampling methods.
+
+2.1 FAST SAMPLING FOR DPMS BY DIFFUSION ODES
+
+Diffusion Probabilistic Models (DPMs) (Sohl-Dickstein et al., 2015; Ho et al., 2020; Song et al.,
+2021b) gradually add Gaussian noise to a D-dimensional random variable x0  RD to perturb
+the corresponding unknown data distribution q0(x0) at time 0 to a simple normal distribution
+
+                                       3
+Preprint
+
+qT (xT )  N (xT |0, ~2I) at time T > 0 for some ~ > 0. The transition distribution qt0(xt|x0) at
+each time t  [0, T ] satisfies
+
+                                       qt0(xt|x0) = N (xt|tx0, t2I),                                             (1)
+
+where t, t > 0 and the signal-to-noise-ratio (SNR) t2/t2 is strictly decreasing w.r.t. t (Kingma
+et al., 2021). Eq. (1) can be written as xt = tx0 + t, where   N (0, I).
+
+Parameterization: noise prediction and data prediction DPMs learn to recover the data x0
+based on the noisy input xT with a sequential denoising procedure. There are two alternative ways to
+define the model. The noise prediction model (xt, t) attempts to predict the noise  from the data
+xt, which optimizes the parameter  by the following objective (Ho et al., 2020; Song et al., 2021b):
+
+                                       min  Ex0   ,,t    (t)(xt, t) - 22              ,                          (2)
+
+                                         
+
+where x0  q0(x0),   N (0, I), t  U ([0, 1]), and (t) > 0 is a weighting function. Alternatively,
+the data prediction model x(xt, t) predicts the original data x0 based on the noisy xt, and its
+relationship with (xt, t) is given by x(xt, t) := (xt - t(xt, t))/t (Kingma et al., 2021).
+
+Diffusion ODEs Sampling by DPMs can be implemented by solving the diffusion ODEs (Song
+et al., 2021b;a; Liu et al., 2022b; Zhang & Chen, 2022; Lu et al., 2022), which is generally faster than
+other sampling methods. Specifically, sampling by diffusion ODEs need to discretize the following
+ODE (Song et al., 2021b) with t changing from T to 0:
+
+                          dxt    =  f (t)xt    +  g2(t)                   xT  N (0, ~2I),                        (3)
+                          dt                       2t (xt, t),
+
+and the equivalent diffusion ODE w.r.t. the data prediction model x is
+
+            dxt =                  g2(t)          xt  -  tg2(t)     x  (xt,    t),    xT  N (0, ~2I),            (4)
+            dt            f (t) + 2t2                      2t2
+
+where  the  coefficients  f (t)  =  d  log  t  ,  g2(t)  =  dt2  -  2  d  log  t  t2  (Kingma  et  al.,  2021).
+                                        dt                   dt            dt
+
+2.2 GUIDED SAMPLING FOR DPMS
+
+Guided sampling (Dhariwal & Nichol, 2021; Ho & Salimans, 2021) is a widely-used technique
+to apply DPMs for conditional sampling, which is useful in text-to-image, image-to-image, and
+class-to-image applications (Dhariwal & Nichol, 2021; Saharia et al., 2022b; Rombach et al., 2022;
+Nichol et al., 2021; Ramesh et al., 2022). Given a condition variable c, guided sampling defines a
+conditional noise prediction model ~(xt, t, c). There are two types of guided sampling methods,
+depending on whether they require a classifier model. Classifier guidance (Dhariwal & Nichol, 2021)
+leverages a pretrained classifier p(c|xt, t) to define the conditional noise prediction model by:
+
+                          ~(xt, t, c) := (xt, t) - s · txt log p(c|xt, t),                                       (5)
+
+where s > 0 is the guidance scale. In practice, a large s is usually preferred for improving the
+condition-sample alignment (Rombach et al., 2022; Saharia et al., 2022b) for guided sampling.
+Classifier-free guidance (Ho & Salimans, 2021) shares the same parameterized model (xt, t, c) for
+the unconditional and conditional noise prediction models, where the input c for the unconditional
+model is a special placeholder . The corresponding conditional model is defined by:
+
+                          ~(xt, t, c) := s · (xt, t, c) + (1 - s) · (xt, t, ).                                   (6)
+
+Then, samples can be drawn by solving the ODE (3) with (xt, t, c) in place of (xt, t).
+DDIM (Song et al., 2021a) is a typical solver for guided sampling, which generates samples in
+a few hundreds of steps.
+
+2.3 EXPONENTIAL INTEGRATORS AND HIGH-ORDER ODE SOLVERS
+
+It is shown in recent works (Lu et al., 2022; Zhang & Chen, 2022) that ODE solvers based on
+exponential integrators (Hochbruck & Ostermann, 2010) converge much faster than the traditional
+
+                                                            4
+Preprint
+
+solvers for solving the unconditional diffusion ODE (3). Given an initial value xs at time s > 0, Lu
+et al. (2022) derive the solution xt of the diffusion ODE (3) at time t as:
+
+          xt  =  t  xs  - t   t               (7)
+                 s
+                                 e-^(x^, )d,
+
+                             s
+
+where the ODE is changed from the time (t) domain to the log-SNR () domain by the change-of-
+variables formula. Here, the log-SNR t := log(t/t) is a strictly decreasing function of t with
+the inverse function t(·), and x^ := xt(), ^(x^, ) := (xt(), t()) are the corresponding
+change-of-variable forms for . Lu et al. (2022) showed that DDIM is a first-order solver for Eq. (7).
+
+They further proposed a high-order solver named "DPM-Solver", which can generate realistic samples
+
+for the unconditional model in only 10-20 steps.
+
+Unfortunately, the outstanding efficiency of existing high-order solvers does not transfer to guided
+sampling, which we shall discuss soon.
+
+3 CHALLENGES OF HIGH-ORDER SOLVERS FOR GUIDED SAMPLING
+
+Before developing new fast solvers, we first examine the performance of existing high-order diffusion
+ODE solvers and highlight the challenges.
+
+The first challenge is the large guidance scale causes high-order solvers to be instable. As shown in
+Fig. 1, for a large guidance scale s = 8.0 and 15 function evaluations, previous high-order diffusion
+ODE solvers (Lu et al., 2022; Zhang & Chen, 2022; Liu et al., 2022b) produce low-quality images.
+Their sample quality is even worse than the first-order DDIM. Moreover, the sample quality becomes
+even worse as the order of the solver gets higher.
+
+Intuitively, large guidance scales may amplify both the output and the derivatives of the model
+~ in Eq. (5). The derivatives of the model affect the convergence range of ODE solvers, and the
+amplification may cause high-order ODE solvers to need much smaller step sizes to converge, and
+thus the higher-order solvers may perform worse than the first-order solver. Moreover, high-order
+solvers require high-order derivatives, which are generally more sensitive to the amplifications. This
+further narrows the convergence radius.
+
+The second challenge is the "train-test mismatch" problem (Saharia et al., 2022b). The data lie
+in a bounded interval (e.g. [-1, 1] for image data). However, the large guidance scale pushes the
+conditional noise prediction model ~(xt, t, c) away from the true noise, which in turns make the
+sample (i.e. the converged solution x0 of diffusion ODEs) to fall out of the bound. In this case, the
+generated images are saturated and unnatural (Saharia et al., 2022b).
+
+4 DESIGNING TRAINING-FREE FAST SAMPLERS FOR GUIDED SAMPLING
+
+In this section, we design novel high-order diffusion ODE solvers for faster guided sampling. As
+discussed in Sec. 3, previous high-order solvers have instability and "train-test mismatch" issues for
+large guidance scales. The "train-test mismatch" issue arises from the ODE itself, and we find the
+parameterization of the ODE is critical for the converged solution to be bounded. While previous
+high-order solvers are designed for the noise prediction model ~, we solve the ODE (4) for the
+data prediction model x, which itself has some advantages and thresholding methods are further
+available to keep the samples bounded (Ho et al., 2020; Saharia et al., 2022b). We also propose a
+multistep solver to address the instability issue.
+
+4.1 DESIGNING SOLVERS BY DATA PREDICTION MODEL
+
+We follow the notations in Lu et al. (2022). Given a sequence {ti}iM=0 decreasing from t0 = T to
+tM = 0 and an initial value xt0  N (0|~2I), the solver aims to iteratively compute a sequence
+{x~ti }M i=0 to approximate the exact solution at each time ti, and the final value x~tM is the approximated
+sample by the diffusion ODE. Denote hi := ti - ti-1 for i = 1, . . . , M .
+
+For solving the diffusion ODE w.r.t. x in Eq. (4), we firstly propose a simplified formulation
+of the exact solution of diffusion ODEs w.r.t. x below. Such formulation exactly computes
+
+                             5
+Preprint
+
+the linear term in Eq. (4) and only remains an exponentially-weighted integral of x. Denote
+x^(x^, ) := x(xt(), t()) as the change-of-variable form of x for , we have:
+
+Proposition 4.1 (Exact solution of diffusion ODEs of x, proof in Appendix A). Given an initial
+value xs at time s > 0, the solution xt at time t  [0, s] of diffusion ODEs in Eq. (4) is:
+
+                                                xt  =    t  xs      +    t      t                                                                                    (8)
+                                                         s
+                                                                                   ex^(x^, )d.
+
+                                                                               s
+
+As the diffusion ODEs in Eq. (3) and Eq.(4) are equivalent, the exact solution formulations in Eq. (7)
+
+and Eq. (8) are also equivalent. However, from the prespective of designing ODE solvers, these
+                           aarneodthifefrertehnet.liFnierasrtltye,rEmq.(st7x)se.xMacotlryeocvoemr,ptuotedsetshigenliOneDaEr tseormlversst,xEsq, .w(h7i)leneEeqd.s(t8o)
+two formulations
+exactly computes
+
+approximate the integral e-d, while Eq. (8) needs to approximate exd, and these two
+
+integrals are different (recall that x := (xt - t)/t). Therefore, the high-order solvers based
+
+on Eq. (7) and Eq. (8) are essentially different. We further propose the general manner for design
+
+high-order ODE solvers based on Eq. (8) below.
+
+Given the previous value x~ti-1 at time ti-1, the aim of our solver is to approximate the exact solution
+
+at  time  ti.  Denote      x(n)()       :=      dnx^ (x,)           as   the   n-th   order  total    derivatives                 of  x       w.r.t.     logSNR            .
+                                                     dn
+For k  1, taking the (k - 1)-th Taylor expansion at ti-1 for x w.r.t.   [ti-1 , ti ] and substitute
+
+it into Eq. (8) with s = ti-1 and t = ti, we have
+
+    x~ti    =    ti        x~ti-1  + ti         k-1                                    ti    e        (              -      ti-1 )n   d  + O(hki +1),                (9)
+                ti-1                                                                  ti-1                                  n!
+                                                     x(n)(x^ti-1 , ti-1 )
+
+                                                n=0
+
+                                                                    estimated         analytically computed (Appendix A)                         omitted
+
+where the integral         e   (-ti-1           )n  d       can     be   analytically  computed                      by     integral-by-parts         (detailed      in
+                                      n!
+Appendix A). Therefore, to design a k-th order ODE solver, we only need to estimate the n-th order
+
+derivatives x(n)(ti-1 ) for n  k - 1 after omitting the O(hki +1) high-order error terms, which are
+well-studied techniques and we discussed in details in Sec. 4.2. A special case is k = 1, where the
+
+solver is the same as DDIM (Song et al., 2021a), and we discuss in Sec. 6.1.
+
+For k = 2, we use a similar technique as DPM-Solver-2 (Lu et al., 2022) to estimate the derivative
+
+x(1)(x^ti-1 , ti-1 ). Specifically, we introduce an additional intermediate time step si between ti-1
+and ti and combine the function values at si and ti-1 to approximate the derivative, which is the
+
+standard manner for singlestep ODE solvers (Atkinson et al., 2011). Overall, we need 2M + 1 time
+steps ({ti}M i=0 and {si}iM=1) which satisfies t0 > s1 > t1 > · · · > tM-1 > sM > tM . The detailed
+algorithm is proposed in Algorithm 1, where we combine the previous value x~ti-1 at time ti-1 with
+the intermediate value ui at time si to compute the value x~ti at time ti.
+
+                                                                                  Algorithm 2 DPM-Solver++(2M).
+
+Algorithm 1 DPM-Solver++(2S).                                                     Require: initial value xT , time steps {ti}iM=0, data prediction
+                                                                                       model x.
+
+Require: initial value xT , time steps {ti}iM=0 and {si}iM=1, data                1: Denote hi := ti - ti-1 for i = 1, . . . , M .
+     prediction model x.
+                                                                                  2: x~t0  xT . Initialize an empty buffer Q.
+ 1: x~t0  xT .
+ 2: for i  1 to M do                                                              3:  xQ~t1b-uf-fe-rttx01 x~(0x~-t0  , t0)  e-h1 - 1  x(x~t0 , t0)
+                                                                                  4:                                 t1
+3:  hi  ti - ti-1
+                                                                                  5: Q b-uf-fe-r x(x~t1 , t1)
+4:  r  i       si -ti-1
+5:
+                sihi               e-rihi - 1       x(x~ti-1 , ti-1)              6: for i  2 to M do
+    u  x~ i                -   si                                                            hi-1
+               ti-1 ti-1                                                          7:   ri     hi
+
+6:  Di         (1 -    1   )x  (x~ti-1  , ti-1  )+   1   x  (ui  ,  si)           8:   Di          1  +               1     x(x~ti-1 , ti-1)  -   1   x  (x~ti-2  ,  ti-2  )
+7:  x~ti              2ri               e-hi    -1  2ri                                                              2ri                         2ri
+                 ti
+               ti-1   x~ti-1 - ti                   Di                            9:   x~ti     x~ ti                       - ti  e-hi - 1       Di
+
+8: end for                                                                                     ti-1                  ti-1
+
+9: return x~tM                                                                    10: If i < M , then Q b-uf-fe-r x(x~ti , ti)
+                                                                                  11: end for
+
+                                                                                  12: return x~tM
+
+We name the algorithm as DPM-Solver++(2S), which means that the proposed solver is a second-order
+singlestep method. We present the theoretical guarantee of the convergence order in Appendix A. For
+
+                                                                               6
+Preprint
+
+k  3, as discussed in Sec. 3, high-order solvers may be unsuitable for large guidance scales, thus we
+mainly consider k = 2 in this work, and leave the solvers for higher orders for future study.
+
+Moreover, we provide a theoretical comparison between DPM-Solver-2 (Lu et al., 2022) and DPM-
+Solver++(2S) in Appendix B. We find that DPM-Solver++(2S) has a smaller constant before the
+high-order error terms, thus generally has a smaller discretization error than DPM-Solver-2.
+
+4.2 FROM SINGLESTEP TO MULTISTEP
+
+At each step (from ti-1 to ti), the proposed singlestep solver needs two sequential function evaluations
+of the neural network x. Moreover, the intermediate values ui are only used once and then discarded.
+Such method loses the previous information and may be inefficient. In this section, we propose
+another second-order diffusion ODE solver which uses the previous information at each step.
+
+In general, to approximate the derivatives x(n) in Eq. (9) for n  1, there is another mainstream
+approach (Atkinson et al., 2011): multistep methods (such as Adams­Bashforth methods). Given
+the previous values {x~tj }ji-=10 at time ti-1, multistep methods just reuse the previous values to
+approximate the high-order derivatives. Multistep methods are empirically more efficient than
+singlestep methods, especially for limited number of function evaluations. (Atkinson et al., 2011)
+
+We combine the techniques for designing multistep solvers with the Taylor expansions in Eq. (9) and
+further propose a multistep second-order solver for diffusion ODEs with x. The detailed algorithm
+is proposed in Algorithm 2, where we combine the previous values x~ti-1 and x~ti-2 to compute the
+value x~ti without additional intermediate values. We name the algorithm as DPM-Solver++(2M),
+which means that the proposed solver is a second-order multistep solver. We also present a detailed
+theoretical guarantee of the convergence order, which is stated in Appendix A.
+
+For a fixed budget N of the total number of function evaluations, multistep methods can use M = N
+steps, while k-th order singlestep methods can only use no more than M = N/k steps. Therefore,
+each step size hi of multistep methods is around 1/k of that of singlestep methods, so the high-order
+error terms O(hki ) in Eq. (9) of multistep methods may also be smaller than those of singlestep
+methods. We show in Sec. 7.1 that the multistep methods are slightly better than singlestep methods.
+
+4.3 COMBINING THRESHOLDING WITH DPM-SOLVER++
+
+For distributions of bounded data (such as the image data), thresholding methods (Ho et al., 2020;
+Saharia et al., 2022b) can push out-of-bound samples inwards and somehow reduce the adverse
+impact of the large guidance scale. Specifically, thresholding methods define a clipped data prediction
+model x^(xt, t, c) by elementwise clipping the original model x := (xt - t)/t within the
+data bound, which results in better sample quality for large guidance scales (Saharia et al., 2022b).
+As our proposed DPM-Solver++ is designed for the x model, we can straightforwardly combine
+thresholding methods with DPM-Solver++.
+
+5 FAST SOLVERS FOR DIFFUSION SDES
+
+Sampling by diffusion models can be alternatively implemented by solving Diffusion SDEs (Song
+et al., 2021b):
+
+                                            g2(t)
+                      dxt = [f (t)xt + t (xt, t)]dt + g(t)dw¯t,                             (10)
+
+where w¯t is the reverse-time Wiener process from T to 0. In this section, we consider the diffusion
+SDEs w.r.t. log-SNR , and derive the corresponding second-order solvers.
+
+Denote dw :=  -  dt   dw¯ t ()     as  the  corresponding  Wiener  process  w.r.t.  .  For  simplicity,  we
+                  dt
+
+denote x := xt(),  := t(), w := wt , (x, ) := (xt(), t()). For VP-type diffusion
+
+models (Song et al., 2021b) (i.e.  t2 + t2  =  1), we have  d log   =  2 and        d log   = -2 .       As
+                                                               d                       d
+
+                                               7
+Preprint
+
+f (t)  =   d log t   and g(t)      =   t      -2  dt    (Kingma   et  al.,  2021).  the   diffusion  SDEs  w.r.t.    is
+               dt                                  dt
+                                                                                
+                                dx = [2x - 2(x, )]d + 2dw
+                                                                                                                         (11)
+
+                                    = [-(1 + 2 )x + 2x(x, )]d + 2dw                                                      (12)
+
+By applying variation-of-constants formula, we propose the exact solution of diffusion SDEs as
+following.
+
+Proposition 5.1 (Exact solution of diffusion SDEs, proof in Appendix A). Given an initial value xs
+at time s > 0, the solution xt at time t  [0, s] of diffusion SDEs in Eq. (10) is:
+
+               t                       t                                      t
+               s
+       xt  =         xs  -  2t            e-(x, )d + 2t                          e-dw                                    (13)
+                                                                                                                         (14)
+                                    s                                        s
+
+               t                                    t                                          t
+               s
+           =         e-(t   -s  )  xs  + 2t             e-2(t-)x(x, )d + 2t                       e-(t-)dw.
+
+                                                 s                                            s
+
+Moreover, we can compute the Itô-integral by
+
+                                                                      
+
+                          t                             t                       e-t
+                                                                                
+                             e-dw =                        e-2d zs           =      2     e2(t-s) - 1zs,                 (15)
+
+                         s                              s
+
+                                                                  
+
+                             t                          t                      et
+                                                                               
+                                edw =                      e2d zs           =   2      1 - e-2(t-s)zs,                   (16)
+
+                            s                           s
+
+where zs  N (0, I). Thus, we can discretize the integral w.r.t.  or x to get the corresponding
+solvers for diffusion SDEs, which is presented below. For simplicity, we denote that h := t - s.
+
+SDE-DPM-Solver-1 Let zs  N (0, I). By assuming (x, )  (xs, s), we have
+
+                                xt  =     t  xs  -  2t(eh     -   1)(xs, s)     +   t     e2h - 1zs.                     (17)
+                                          s
+
+SDE-DPM-Solver++1 Let zs  N (0, I). By assuming x(x, )  x(xs, s), we have
+
+                            xt  =   t  e-h   xs  +  t(1    -  e-2h)x(xs, s)        +   t   1 - e-2hzs.                   (18)
+                                    s
+
+SDE-DPM-Solver-2M Let zs  N (0, I). Assume we have a previous solution xr with its
+
+model     output     (xr, r)       at  time   r  <  t.  Denote r1     =  r  -s  .  By assuming (x, )               (xs, s) +
+                                                                            h
+-s
+ r1 h  (   (xr    ,  r)  -   (xs ,  s)),   we    have
+
+xt     =   t   xs    -   2t(eh     - 1)(xs, s) - t(eh             - 1) (xr, r) - (xs, s)             + t   e2h - 1zs. (19)
+           s                                                                       r1
+
+SDE-DPM-Solver++(2M) Let zs  N (0, I). Assume we have a previous solution xr with
+
+its model output x(xr, r) at time r                     < t.     Denote r1      =   r  -s  .  By assuming x(x, ) 
+                                                                                       h
+                  -s
+x (xs ,    s)  +   r1 h  (x (xr ,      r)  -  x (xs ,   s)),  we  have
+
+xt  =  t   e-h    xs  +t(1-e-2h)x             (xs,  s)+    t(1    -   e-2h)     x(xr, r)-x(xs, s)          +t      1 - e-2hzs.
+       s                                                           2                       r1                              (20)
+
+6 RELATIONSHIP WITH OTHER FAST SAMPLING METHODS
+
+In essence, all training-free sampling methods for DPMs can be understood as either discretizing
+diffusion SDEs (Ho et al., 2020; Song et al., 2021b; Jolicoeur-Martineau et al., 2021; Tachibana et al.,
+2021; Kong & Ping, 2021; Bao et al., 2022b; Zhang et al., 2022) or discretizing diffusion ODEs (Song
+et al., 2021b;a; Liu et al., 2022b; Zhang & Chen, 2022; Lu et al., 2022). As DPM-Solver++ is designed
+for solving diffusion ODEs, in this section, we discuss the relationship between DPM-Solver++ and
+other diffusion ODE solvers. We further briefly discuss other fast sampling methods for DPMs.
+
+                                                                  8
+Preprint
+
+Table 1: Comparison between high-order diffusion ODE solvers based on exponential integrators, including
+DEIS (Zhang & Chen, 2022), DPM-Solver (Lu et al., 2022) and DPM-Solver++ (ours).
+
+First-Order                         DEIS              DPM-Solver           DPM-Solver++           SDE-DPM-Solver++
+Model Type                (Zhang & Chen, 2022)      (Lu et al., 2022)           (ours)                     (ours)
+Taylor Expansion                                                                                                 
+Solver Type (High-Order)      DDIM ( = 0)           DDIM ( = 0)            DDIM ( = 0)
+                                                                                   x           DDIM ( = t 1 - e-2h)
+
+                                    for t               ^ for                  x^ for                        x
+                                 Multistep             Singlestep      Singlestep + Multistep
+                                                                                                          x^ for 
+
+                                                                                                         Multistep
+
+6.1 COMPARISON WITH SOLVERS BASED ON EXPONENTIAL INTEGRATORS
+
+The general version of DDIM with   0 is (Song et al., 2021a)
+
+               x~ti = ti x(x~ti-1 , ti-1) + t2i - 2(x~ti-1 , ti-1) + zti-1 .                                           (21)
+
+Previous state-of-the-art fast diffusion ODE solvers (Lu et al., 2022; Zhang & Chen, 2022) leverages
+exponential integrators to solve diffusion ODEs with noise prediction models . In short, these
+solvers approximate the exact solution in Eq. (7) and include DDIM (Song et al., 2021a) with  = 0
+as the first-order case. Below we show that the first-order case for DPM-Solver++ is also DDIM.
+
+For k = 1, Eq. (9) becomes (after omitting the O(hki +1) terms)
+
+x~ti  =   ti   x~ti-1  +  ti  x  (x~ti-1  ,  ti-1)   ti   ed  =         ti   x~ti-1  -  ti  (e-hi  -  1)x  (x~ti-1  ,  ti-1).
+         ti-1                                       ti-1               ti-1
+
+Therefore, our proposed DPM-Solver++ is the high-order generalization of DDIM ( = 0) w.r.t. the
+data prediction model x. To the best of our knowledge, such generalization has not been proposed
+before. We list the detailed difference between previous high-order solvers based on exponential
+integrators and DPM-Solver++ in Table 1. We emphasize that although the first-order version of
+these solvers are equivalent, the high-order versions of these solvers are rather different.
+
+                                             
+In addition, for DDIM with  = t 1 - e-2h, it is easy to verify that such a stochastic DDIM
+is equivalent to SDE-DPM-Solver++1. Therefore, our proposed SDE-DPM-Solver++(2M) is a
+second-order generalized version of the first-order stochastic DDIM. To the best of our knowledge,
+such a finding is not revealed in previous works.
+
+6.2 OTHER FAST SAMPLING METHODS
+
+Samplers based on diffusion SDEs (Ho et al., 2020; Song et al., 2021b; Jolicoeur-Martineau et al.,
+2021; Tachibana et al., 2021; Kong & Ping, 2021; Bao et al., 2022b; Zhang et al., 2022) generally
+needs more steps to converge than those based on diffusion ODEs (Lu et al., 2022), because SDEs
+introduce more randomness and make denoising more difficult. Samplers based on extra training
+include model distillation (Salimans & Ho, 2022; Luhman & Luhman, 2021), learning reverse
+process variances (San-Roman et al., 2021; Nichol & Dhariwal, 2021; Bao et al., 2022a), and learning
+sampling steps (Lam et al., 2021; Watson et al., 2022). However, training-based samplers are hard to
+scale-up to pre-trained large DPMs (Saharia et al., 2022b; Rombach et al., 2022; Ramesh et al., 2022).
+There are other fast sampling methods by modifying the original DPMs to a latent space (Vahdat et al.,
+2021) or with momentum (Dockhorn et al., 2022). In addition, combining DPMs with GANs (Xiao
+et al., 2022; Wang et al., 2022) improves the sample quality of GANs and sampling speed of DPMs.
+
+7 EXPERIMENTS
+
+In this section, we show that DPM-Solver++ can speed up both the pixel-space DPMs and the
+latent-space DPMs for guided sampling. We vary different number of function evaluations (NFE)
+which is the numebr of calls to the model (xt, t, c) or x(xt, t, c), and compare DPM-Solver++
+with the previous state-of-the-art fast samplers for DPMs including DPM-Solver (Lu et al., 2022),
+DEIS (Zhang & Chen, 2022), PNDM (Liu et al., 2022b) and DDIM (Song et al., 2021a). We also
+convert the discrete-time DPMs to the continuous-time and use these continuous-time solvers. We
+refer to Appendix C for the detailed implementations and experiment settings.
+
+                                                          9
+Preprint
+
+     50                                                                            15                                                                                                                                                                                                            15
+     40                                                                                                                                                                                                                                                                                          14
+                               1st-order (DDIM)                                                       1st-order (DDIM)                                                                                                                                                                           13               1st-order (DDIM)
+     30                                                                                               2nd-order, singlestep (DPM-Solver++)                                                                                                                                                       12               2nd-order, multistep (DPM-Solver++)
+                               2nd-order,  (DPM-Solver)                            14                 2nd-order, multistep (DPM-Solver++)                                                                                                                                                        11               1st-order (DDIM)
+     20                                                                                                                                                                                                                                                                                          10               2nd-order, multistep (DPM-Solver++)
+                               2nd-order, x (DPM-Solver++)                         13
+     13                                                                                                                                                                                                                                                                                           9
+FID  12                                                                            12
+     11                                                               FID                                                                                                                                                                                                                         8
+     10                                                                                      FID11                                                                                                                                                                                                      10
+
+      9                                                                                                                                                                          FID10
+            10                                                                                                                                                                                          FID
+                                                                                   9
+                                                                                                                                                                                                                                                                                              MSE
+                15 20 25       50          100                                250       10       15 20 25      50                             100       250                                                                                                                                                 15 20 25                            50        100            250
+
+                               NFE                                                                           NFE                                                                                                                                                                                                                                NFE
+
+                (a) From  to x.                                                    (b) From singlestep to multistep.                                                                                                                                                                                         (c) Thresholding.
+
+Figure 3: Ablation study for DPM-Solver++. Sample quality measured by FID  of different sampling methods
+
+for DPMs on ImageNet 256x256 with guidance scale 8.0, varying the number of function evaluations (NFE).
+
+     50                                                             30                                             15                                                                                                                                                                                                                  0.7
+     40                        DPM-Solver++                                                                                                                                                                                                                                                      DPM-Solver++
+     30                                                                                          DPM-Solver++      14                                                                                                                                                                                                                                               DPM-Solver++
+                                                                                                                                                                                                                                                                                                                                                                    DDIM
+                               DDIM                                                              DDIM              13                                                                                                                                                                            DDIM             0.6                                               PNDM
+                                                                                                                                                                                                                                                                                                                                                                    DPM-Solver
+                               DDIM                                                              DDIM                                                                                                                                                                                            DDIM                                                               DEIS
+                                                                    20
+                                                                                                 PNDM              12                                                                                                                                                                            PNDM             0.5
+                               PNDM
+
+                               DPM-Solver                                                        DPM-Solver        11                                                                                                                                                                            DPM-Solver
+
+FID  20                        DEIS                                   15                         DEIS                                                                                                                                                                                            DEIS             0.4
+                                                                                                                                      10
+                                                                      14
+
+                                                                      13
+
+     15                                                               12                                           9                                                                                                                                                                                              0.3
+     14
+     13                                                               11
+     12
+     11                                                               10                                                                                                                                                                                                                                          0.2
+     10
+                                                                      9                                            8
+      9
+                                                                      8                                                                                                                                                                                                                                           0.1
+      8
+            10  15 20 25  50   100         250                            10  15 20 25      50   100         250                          10  15 20 25       50                                                                                                                                  100         250                            10  15 20 25       50   100       250
+
+                          NFE                                                               NFE                                                         NFE                                                                                                                                                                                                    NFE
+
+         (a) Pixel-space DPM (b) Pixel-space DPM (c) Pixel-space DPM (d) Latent-space DPM
+
+                (s = 8.0)                                                          (s = 4.0)                                                       (s = 2.0)                                                                                                                                                                                         (s = 7.5)
+
+Figure 4: (a-c) Sample quality measured by FID  of different sampling methods for DPMs on ImageNet
+256x256 with different guidance scale s, varying the number of function evaluations (NFE). : results by
+combining the solver with dynamic thresholding method (Saharia et al., 2022b). (d) Convergence error measured
+by L2-norm  (divided by dimension) between different sampling methods and 1000-step DDIM, varying the
+number of function evaluations (NFE), for the latent-space DPM "stable-diffusion" (Rombach et al., 2022) on
+MS-COCO2014 validation set, with the default guidance scale s = 7.5 in their official code.
+
+As previous solvers did not test the performance in guided sampling, we also carefully tune the
+baseline samplers by ablating the step size schedule (i.e. the choice for the time steps {ti}iM=0) and
+the solver order. We find that
+
+        · For the step size schedule, we search the time steps in the following choices: uniform t
+          (a widely-used setting in high-resolution image synthesis), uniform  (used in (Lu et al.,
+           2022)), uniform split of the power functions of t (used in (Zhang & Chen, 2022), detailed in
+          Appendix C), and we find that the best choice is uniform t. Thus, we use uniform t for the
+           time steps in all of our experiments for all of the solvers.
+
+        · We find that for a large guidance scale, the best choice for all the previous solvers is the
+           second-order (i.e. DPM-Solver-2 and DEIS-1). However, for a comprehensive comparison,
+          we run all the orders of previous solvers, including DPM-Solver-2 and DPM-Solver-3;
+           DEIS-1, DEIS-2 and DEIS-3 and choose their best result for each NFE in our comparison.
+
+We run both DPM-Solver++(2S) and DPM-Solver++(2M), and we find that for large guidance scales,
+the multistep DPM-Solver++(2M) performs better; and for a slightly small guidance scales, the
+singlestep DPM-Solver++(2S) performs better. We report the best results of DPM-Solver++ and all
+of the previous samplers in the following sections, the detailed values are listed in Appendix D.
+
+7.1 PIXEL-SPACE DPMS WITH GUIDANCE
+
+We firstly compare DPM-Solver++ with other samplers for the guided sampling with classifier-
+guidance on ImageNet 256x256 dataset by the pretrained DPMs(Dhariwal & Nichol, 2021). We mea-
+sure the sample quality by drawing 10K samples and computing the widely-used FID score (Heusel
+et al., 2017), where lower FID usually implies better sample quality. We also adopt the dynamic
+thresholding method (Saharia et al., 2022b) for both DDIM and DPM-Solver++. We vary the guidance
+scale s in 8.0, 4.0 and 2.0, the results are shown in Fig. 4(a-c). We find that for large guidance scales,
+all the previous high-order samplers (DEIS, PNDM, DPM-Solver) converge slower than the first-order
+DDIM, which shows that previous high-order samplers are unstable. Instead, DPM-Solver++ achieve
+
+                                                          10
+Preprint
+
+the best speedup performance for both large guidance scales and small guidance scales. Especially
+for large guidance scales, DPM-Solver++ can almost converge within only 15 NFE.
+
+As an ablation, we also compare the singlestep DPM-Solver-2, the singlestep DPM-Solver++(2S)
+and the multistep DPM-Solver++(2M) to demonstrate the effectiveness of our method. We use a
+large guidance scale s = 8.0 and conduct the following ablations:
+
+        · From  to x: As shown in Fig. 3a, by simply changing the solver from  to x (i.e.
+           from DPM-Solver-2 to DPM-Solver++(2S)), the solver can achieve a stable acceleration
+           performance which is faster than the first-order DDIM. Such result indicates that for guided
+           sampling, high-order solvers w.r.t. x may be more preferred than those w.r.t. .
+
+        · From singlestep to multistep: As show in Fig. 3b, the multistep DPM-Solver++(2M)
+           converges slightly faster than the singlestep DPM-Solver++(2S), which almost converges in
+          15 NFE. Such result indicates that for guided sampling with a large guidance scale, multistep
+           methods may be faster than singlestep methods.
+
+        · With or without thresholding: We compare the performance of DDIM and DPM-Solver++
+          with / without thresholding methods in Fig. 3c. Note that the thresholding method changes
+           the model x and thus also changes the converged solutions of diffusion ODEs. Firstly, we
+           find that after using the thresholding method, the diffusion ODE can generate higher quality
+           samples, which is consistent with the conclusion in (Saharia et al., 2022b). Secondly, the
+           sample quality of DPM-Solver++ with thresholding outperforms DPM-Solver++ without
+           thresholding under the same NFE. Moreover, when combined with thresholding, DPM-
+           Solver++ is faster than the first-order DDIM, which shows that DPM-Solver++ can also
+           speed up guided sampling by DPMs with thresholding methods.
+
+7.2 LATENT-SPACE DPMS WITH GUIDANCE
+
+We also evaluate DPM-Solver++ on the latent-space DPMs (Rombach et al., 2022), which is recently
+popular among the community due to their official code "stable-diffusion". We use the default
+guidance scale s = 7.5 in their official code. The latent-space DPMs map the image data with a
+latent code by training a pair of encoder and decoder, and then train a DPM for the latent code. As
+the latent code is unbounded, we do not apply the thresholding method.
+
+Specifically, we randomly sample 10K caption-image pairs from the MS-COCO2014 validation
+dataset and use the captions as conditions to draw 10K images from the pretrained "stable-diffusion"
+model, and we only draw a single image sample of each caption, following the standard evaluation
+procedures in (Nichol et al., 2021; Rombach et al., 2022). We find that all the solvers can achieve
+a FID around 15.0 to 16.0 even within only 10 steps, which is very close to the FID computed by
+the converged samples reported in the official page of "stable-diffusion". We believe it is due to the
+powerful pretrained decoder, which can map a non-converged latent code to a good image sample.
+
+For latent-space DPMs, different diffusion ODE solvers directly affect the convergence speed on
+the latent space. To further compare different samplers for latent-space DPMs, we directly compare
+different solvers according to the convergence error on the latent space by the L2-norm between the
+sampled x0 and the true solution x0 (and the error between them is x0 - x02/ D). Specifically,
+we firstly sample 10K noise variables from the standard normal distribution and fix them. Then we
+sample 10K latent codes by different DPM samplers, starting from the 10K fixed noise variables.
+As all these solvers can be understood as discretizing diffusion ODEs, we compare the sampled
+latent codes by the true solution x0 from a 999-step DDIM with samples x0 by different samplers
+within different NFE, and the results are shown in Fig. 4(d). We find that the supported fast samplers
+(DDIM and PNDM) in "stable-diffusion" converge much slower than DPM-Solver++ and DEIS, and
+we find that the second-order multistep DPM-Solver++ and DEIS achieve a quite close speedup on
+the latent space. Moreover, as "stable-diffusion" by default use PNDM with 50 steps, we find that
+DPM-Solver++ can achieve a similar convergence error with only 15 to 20 steps. We also present an
+empirical comparison of the sampled images between different solvers in Appendix D, and we find
+that DPM-Solver++ can indeed generate quite good image samples within only 15 to 20 steps.
+
+                                                          11
+Preprint
+
+8 CONCLUSIONS
+
+We study the problem of accelerating guided sampling of DPMs. We demonstrate that previous
+high-order solvers based on the noise prediction models are abnormally unstable and generate worse-
+quality samples than the first-order solver DDIM for guided sampling with large guidance scales. To
+address this issue and speed up guided sampling, we propose DPM-Solver++, a training-free fast
+diffusion ODE solver for guided sampling. DPM-Solver++ is based on the diffusion ODE with the
+data prediction models, which can directly adopt the thresholding methods to stabilize the sampling
+procedure further. We propose both singlestep and multistep variants of DPM-Solver++. Experiment
+results show that DPM-Solver++ can generate high-fidelity samples and almost converge within only
+15 to 20 steps, applicable for pixel-space and latent-space DPMs.
+
+ETHICS STATEMENT
+
+Like other deep generative models such as GANs, DPMs may also be used to generate adverse fake
+contents (images). The proposed solver can accelerate the guided sampling by DPMs which can
+further be used for image editing and generate photorealistic fake images. Such influence may further
+amplify the potential undesirable affects of DPMs for malicious applications.
+
+REPRODUCIBILITY STATEMENT
+
+Our code is based on the official code of DPM-Solver (Lu et al., 2022) and the pretrained checkpoints
+in Dhariwal & Nichol (2021) and Stable-Diffusion (Rombach et al., 2022). We will release it after the
+blind review. In addition, datasets used in experiments are publicly available. Our detailed experiment
+settings and implementations are listed in Appendix C, and the proof of the solver convergence
+guarantee are presented in Appendix A.
+
+REFERENCES
+
+Kendall Atkinson, Weimin Han, and David E Stewart. Numerical solution of ordinary differential
+   equations, volume 108. John Wiley & Sons, 2011.
+
+Fan Bao, Chongxuan Li, Jiacheng Sun, Jun Zhu, and Bo Zhang. Estimating the optimal covariance
+   with imperfect mean in diffusion probabilistic models. arXiv preprint arXiv:2206.07309, 2022a.
+
+Fan Bao, Chongxuan Li, Jun Zhu, and Bo Zhang. Analytic-DPM: An analytic estimate of the optimal
+   reverse variance in diffusion probabilistic models. In International Conference on Learning
+   Representations, 2022b.
+
+Nanxin Chen, Yu Zhang, Heiga Zen, Ron J. Weiss, Mohammad Norouzi, and William Chan. Wave-
+   grad: Estimating gradients for waveform generation. In International Conference on Learning
+   Representations, 2021a.
+
+Nanxin Chen, Yu Zhang, Heiga Zen, Ron J. Weiss, Mohammad Norouzi, Najim Dehak, and William
+   Chan. Wavegrad 2: Iterative refinement for text-to-speech synthesis. In International Speech
+   Communication Association, pp. 3765­3769, 2021b.
+
+DeepFloyd. If. https://github.com/deep-floyd/IF, 2023.
+
+Prafulla Dhariwal and Alexander Quinn Nichol. Diffusion models beat GANs on image synthesis. In
+   Advances in Neural Information Processing Systems, volume 34, pp. 8780­8794, 2021.
+
+Tim Dockhorn, Arash Vahdat, and Karsten Kreis. Score-based generative modeling with critically-
+   damped Langevin diffusion. In International Conference on Learning Representations, 2022.
+
+Ian J. Goodfellow, Jean Pouget-Abadie, Mehdi Mirza, Bing Xu, David Warde-Farley, Sherjil Ozair,
+   Aaron C. Courville, and Yoshua Bengio. Generative adversarial nets. In Advances in Neural
+   Information Processing Systems, volume 27, pp. 2672­2680, 2014.
+
+                                                          12
+Preprint
+
+Shuyang Gu, Dong Chen, Jianmin Bao, Fang Wen, Bo Zhang, Dongdong Chen, Lu Yuan, and
+   Baining Guo. Vector quantized diffusion model for text-to-image synthesis. In Proceedings of the
+  IEEE/CVF Conference on Computer Vision and Pattern Recognition, pp. 10696­10706, 2022.
+
+Martin Heusel, Hubert Ramsauer, Thomas Unterthiner, Bernhard Nessler, and Sepp Hochreiter.
+   GANs trained by a two time-scale update rule converge to a local Nash equilibrium. In Isabelle
+   Guyon, Ulrike von Luxburg, Samy Bengio, Hanna M. Wallach, Rob Fergus, S. V. N. Vishwanathan,
+   and Roman Garnett (eds.), Advances in Neural Information Processing Systems, volume 30, pp.
+   6626­6637, 2017.
+
+Jonathan Ho and Tim Salimans. Classifier-free diffusion guidance. In NeurIPS 2021 Workshop on
+  Deep Generative Models and Downstream Applications, 2021.
+
+Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising diffusion probabilistic models. In Advances in
+  Neural Information Processing Systems, volume 33, pp. 6840­6851, 2020.
+
+Jonathan Ho, Chitwan Saharia, William Chan, David J Fleet, Mohammad Norouzi, and Tim Salimans.
+   Cascaded diffusion models for high fidelity image generation. Journal of Machine Learning
+  Research, 23(47):1­33, 2022.
+
+Marlis Hochbruck and Alexander Ostermann. Exponential integrators. Acta Numerica, 19:209­286,
+   2010.
+
+Emiel Hoogeboom, Victor Garcia Satorras, Clément Vignac, and Max Welling. Equivariant diffusion
+   for molecule generation in 3D. In International Conference on Machine Learning, pp. 8867­8887.
+   PMLR, 2022.
+
+Alexia Jolicoeur-Martineau, Ke Li, Rémi Piché-Taillefer, Tal Kachman, and Ioannis Mitliagkas.
+   Gotta go fast when generating data with score-based models. arXiv preprint arXiv:2105.14080,
+   2021.
+
+Diederik P. Kingma and Max Welling. Auto-encoding variational bayes. In International Conference
+   on Learning Representations, 2014.
+
+Diederik P Kingma, Tim Salimans, Ben Poole, and Jonathan Ho. Variational diffusion models. In
+  Advances in Neural Information Processing Systems, 2021.
+
+Zhifeng Kong and Wei Ping. On fast sampling of diffusion probabilistic models. arXiv preprint
+   arXiv:2106.00132, 2021.
+
+Max WY Lam, Jun Wang, Rongjie Huang, Dan Su, and Dong Yu. Bilateral denoising diffusion
+   models. arXiv preprint arXiv:2108.11514, 2021.
+
+Jinglin Liu, Chengxi Li, Yi Ren, Feiyang Chen, and Zhou Zhao. Diffsinger: Singing voice synthesis
+  via shallow diffusion mechanism. In Proceedings of the AAAI Conference on Artificial Intelligence,
+  volume 36, pp. 11020­11028, 2022a.
+
+Luping Liu, Yi Ren, Zhijie Lin, and Zhou Zhao. Pseudo numerical methods for diffusion models on
+   manifolds. arXiv preprint arXiv:2202.09778, 2022b.
+
+Cheng Lu, Yuhao Zhou, Fan Bao, Jianfei Chen, Chongxuan Li, and Jun Zhu. Dpm-solver: A
+   fast ode solver for diffusion probabilistic model sampling in around 10 steps. arXiv preprint
+   arXiv:2206.00927, 2022.
+
+Eric Luhman and Troy Luhman. Knowledge distillation in iterative generative models for improved
+   sampling speed. arXiv preprint arXiv:2101.02388, 2021.
+
+Chenlin Meng, Yang Song, Jiaming Song, Jiajun Wu, Jun-Yan Zhu, and Stefano Ermon. SDEdit:
+   Image synthesis and editing with stochastic differential equations. In International Conference on
+  Learning Representations, 2022.
+
+Alex Nichol, Prafulla Dhariwal, Aditya Ramesh, Pranav Shyam, Pamela Mishkin, Bob McGrew,
+   Ilya Sutskever, and Mark Chen. Glide: Towards photorealistic image generation and editing with
+   text-guided diffusion models. arXiv preprint arXiv:2112.10741, 2021.
+
+                                                          13
+Preprint
+
+Alexander Quinn Nichol and Prafulla Dhariwal. Improved denoising diffusion probabilistic models.
+   In International Conference on Machine Learning, pp. 8162­8171. PMLR, 2021.
+
+Aditya Ramesh, Prafulla Dhariwal, Alex Nichol, Casey Chu, and Mark Chen. Hierarchical text-
+   conditional image generation with CLIP latents. arXiv preprint arXiv:2204.06125, 2022.
+
+Robin Rombach, Andreas Blattmann, Dominik Lorenz, Patrick Esser, and Björn Ommer. High-
+   resolution image synthesis with latent diffusion models. In Proceedings of the IEEE/CVF Confer-
+   ence on Computer Vision and Pattern Recognition, pp. 10684­10695, 2022.
+
+Chitwan Saharia, William Chan, Huiwen Chang, Chris Lee, Jonathan Ho, Tim Salimans, David Fleet,
+   and Mohammad Norouzi. Palette: Image-to-image diffusion models. In ACM SIGGRAPH 2022
+  Conference Proceedings, pp. 1­10, 2022a.
+
+Chitwan Saharia, William Chan, Saurabh Saxena, Lala Li, Jay Whang, Emily Denton, Seyed
+   Kamyar Seyed Ghasemipour, Burcu Karagol Ayan, S Sara Mahdavi, Rapha Gontijo Lopes, et al.
+   Photorealistic text-to-image diffusion models with deep language understanding. arXiv preprint
+   arXiv:2205.11487, 2022b.
+
+Tim Salimans and Jonathan Ho. Progressive distillation for fast sampling of diffusion models. In
+  International Conference on Learning Representations, 2022.
+
+Robin San-Roman, Eliya Nachmani, and Lior Wolf. Noise estimation for generative diffusion models.
+   arXiv preprint arXiv:2104.02600, 2021.
+
+Jascha Sohl-Dickstein, Eric Weiss, Niru Maheswaranathan, and Surya Ganguli. Deep unsupervised
+   learning using nonequilibrium thermodynamics. In International Conference on Machine Learning,
+   pp. 2256­2265. PMLR, 2015.
+
+Jiaming Song, Chenlin Meng, and Stefano Ermon. Denoising diffusion implicit models. In Interna-
+   tional Conference on Learning Representations, 2021a.
+
+Yang Song, Jascha Sohl-Dickstein, Diederik P. Kingma, Abhishek Kumar, Stefano Ermon, and Ben
+   Poole. Score-based generative modeling through stochastic differential equations. In International
+  Conference on Learning Representations, 2021b.
+
+Hideyuki Tachibana, Mocho Go, Muneyoshi Inahara, Yotaro Katayama, and Yotaro Watanabe. Itô-
+  Taylor sampling scheme for denoising diffusion probabilistic models using ideal derivatives. arXiv
+   preprint arXiv:2112.13339, 2021.
+
+Lucas Theis, Tim Salimans, Matthew D Hoffman, and Fabian Mentzer. Lossy compression with
+   gaussian diffusion. arXiv preprint arXiv:2206.08889, 2022.
+
+Arash Vahdat, Karsten Kreis, and Jan Kautz. Score-based generative modeling in latent space. In
+  Advances in Neural Information Processing Systems, volume 34, pp. 11287­11302, 2021.
+
+Zhendong Wang, Huangjie Zheng, Pengcheng He, Weizhu Chen, and Mingyuan Zhou. Diffusion-gan:
+  Training gans with diffusion. arXiv preprint arXiv:2206.02262, 2022.
+
+Daniel Watson, William Chan, Jonathan Ho, and Mohammad Norouzi. Learning fast samplers
+   for diffusion models by differentiating through sample quality. In International Conference on
+  Learning Representations, 2022.
+
+Lemeng Wu, Chengyue Gong, Xingchao Liu, Mao Ye, and Qiang Liu. Diffusion-based molecule
+   generation with informative prior bridges. arXiv preprint arXiv:2209.00865, 2022.
+
+Zhisheng Xiao, Karsten Kreis, and Arash Vahdat. Tackling the generative learning trilemma with
+   denoising diffusion GANs. In International Conference on Learning Representations, 2022.
+
+Minkai Xu, Lantao Yu, Yang Song, Chence Shi, Stefano Ermon, and Jian Tang. Geodiff: A geometric
+   diffusion model for molecular conformation generation. arXiv preprint arXiv:2203.02923, 2022.
+
+Qinsheng Zhang and Yongxin Chen. Fast sampling of diffusion models with exponential integrator.
+   arXiv preprint arXiv:2204.13902, 2022.
+
+                                                          14
+Preprint
+
+Qinsheng Zhang, Molei Tao, and Yongxin Chen. gddim: Generalized denoising diffusion implicit
+   models. arXiv preprint arXiv:2206.05564, 2022.
+
+Min Zhao, Fan Bao, Chongxuan Li, and Jun Zhu. Egsde: Unpaired image-to-image translation via
+   energy-guided stochastic differential equations. arXiv preprint arXiv:2207.06635, 2022.
+
+A ADDITIONAL PROOFS
+
+A.1 PROOF OF PROPOSITION 4.1
+
+Taking derivative w.r.t. t in Eq. (8) yields
+
+                   dxt = dt xs + dt                  t   ex^(x^, )d          +     dt      t  et    x^   (x^t  ,  t  )
+                   dt dt s dt                       s                              dt
+
+                          =      dt  xt   +  dt  t  et   x^  (x^t  ,  t  )
+                                 dt  t       dt
+
+                          =               g2(t)     xt    -  tg2(t)      x  (xt,   t),
+                                 f (t) + 2t2        t          2t2
+
+where  the   last  inequality       follows  from   the  definitions  f (t)  =     d  log  t  ,  g2(t)   =  dt2   -     2  d  log  t  t2  .
+                                                                                       dt                    dt                dt
+
+A.2 PROOF OF PROPOSITION 5.1
+
+Proof. For diffusion SDEs w.r.t. the noise prediction model , we have
+
+                      t  2 dxs               t      t  2                                         t       t  2 d
+                      s                                                                 2                
+          xt  =    e                 -2         e         d        (x,      )d     +                  e              dw                (22)
+
+                                             s                                                   s
+
+              =    t   xs    -   2   t    t         (x,   )d   +             t     t  dw                                               (23)
+                   s                s                                   2   s      
+
+                   t                      t                                      t
+                   s
+              =        xs    -   2t          e-(x, )d + 2t                          e-dw                                               (24)
+
+                                       s                                        s
+
+And for diffusion SDEs w.r.t. the data prediction model x, we have
+
+              x t                            t      t                                                    t        t
+                                                                                                   2              
+              s                                 e-                                                          e-
+xt = e-            (1+2   )d     s  +  2                 (1+2  )d     x     (x  ,  )d      +                            (1+2       )d        dw
+
+                                          s                                                              s
+
+                                                                                                                                       (25)
+
+=      t     e-(t     -s  )  xs  +2     t    t  e-(t     -)    x   (x    ,  )d     +              t   t     e-(t  -)          dw       (26)
+       s                               s                                                2        s                                     (27)
+
+       t                                     t                                                    t
+       s
+=            e-(t     -s  )  xs  + 2t           e-2(t-)x(x, )d + 2t                                  e-(t-)dw
+
+                                          s                                                      s
+
+A.3 DERIVATION OF SDE SOLVERS
+
+SDE-DPM-Solver-1 We have
+
+          t                                          t
+
+2t            e-(x, )d  2t                              e-d (xs, s) = 2t(e-s - e-t )(xs, s) (28)
+
+          s                                         s
+
+                                       = 2t(eh - 1)(xs, s)                                                                             (29)
+
+SDE-DPM-Solver++1 We have
+
+                           t                                                           t
+
+                   2t           e-2(t-)x(x, )d  2te-2t                                    e2d x(xs, s)                                 (30)
+
+                         s                                                            s
+
+                                                             = t(1 - e-2h)x(xs, s)                                                     (31)
+
+                                                               15
+Preprint
+
+SDE-DPM-Solver-2M We have
+
+             t
+
+2t              e-(x, )d                                                                     (32)
+
+             s
+
+ 2t            t           (xs ,    s)  +  2t        t
+                                           r1h
+                  e-d                                   e-( - s)d ((xr, r) - (xs, s)) (33)
+
+              s                                     s
+
+= 2t(eh - 1)(xs, s) + 2t                eh - 1 - h         (xr, r) - (xs, s)                 (34)
+                                             h                        r1
+
+We can also applying the same approximation as in Lu et al. (2022) by
+
+                                eh  -1  -h          h  + O(h2)    eh  -1                     (35)
+                                                                          ,
+                                    h               2                 2
+
+thus we have
+
+                          t
+
+                      2t     e-(x, )d                                                        (36)
+
+                          s
+
+                      2t(eh  -  1) (xs ,   s)   +  t(eh -   1)              -   (xs ,  s)).  (37)
+                                                        r1     ((xr, r)
+
+SDE-DPM-Solver++2M We have
+
+          t
+
+2t           e-2(t-)x(x, )d                                                                  (38)
+
+          s
+
+ 2te-2t            t                                         t                  x(xr, r) - x(xs, s)
+                                                                                           r1h
+                      e2d x(xs, s) + 2te-2t                     e2( - s)d                             (39)
+
+                  s                                         s
+
+= t(1 - e-2h)x(xs, s) + t           e-2h - 1 + 2h           x(xr, r) - x(xs, s)              (40)
+                                           2h                           r1
+
+We can also applying the same approximation as in Lu et al. (2022) by
+
+                             e-2h   - 1 + 2h        h  + O(h2)    1 - e-2h                   (41)
+                                                                             ,
+                                    2h                                   2
+
+thus we have
+
+                       t
+
+                  2t      e-2(t-)x(x, )d                                                     (42)
+
+                       s
+
+                  t(1  -  e-2h )x (xs ,    s)  +  t(1  - e-2h)    x(xr, r) - x(xs, s)        (43)
+                                                        2                     r1
+
+A.4 CONVERGENCE OF ALGORITHMS
+
+We make the following assumptions as in Lu et al. (2022) for x, i.e.,
+        · x(0), x(1) and x(2) exist and are continuous (and hence are bounded).
+        · The map x  x(x, t) is L-Lipschitz.
+        · hmax := max1jM hj = O(1/M ).
+
+We also assume further
+
+        · ri > c > 0 for all i = 1, · · · , M .
+
+Then, both algorithms are second-order:
+Proposition A.1. Under the above assumptions, when hmax is sufficiently small, we have for both
+Algorithms 1 and 2, xtM - x~tM  = O(h2max).
+
+                                                       16
+Preprint
+
+A.4.1 CONVERGENCE OF ALGORITHM 1
+
+The convergence proof of this algorithm is similar to that in DPM-Solver-2 (Lu et al., 2022). We give
+it in this section for completeness.
+
+First, Taylor's expansion gives
+
+xsi  =   si      ti-1  - si (e-rihi        - 1)x(xti-1 , ti-1) + O(hi2),
+         x ti-1
+
+xti  =   ti      ti-1  - ti (e-hi   - 1)x(xti-1 , ti-1) - ti          -e-hi - hi + 1   x(1)(xti-1 , ti-1) + O(hi3).
+         x ti-1
+
+Let i := x~ti - xti , then ui - xsi   Ci-1 + CLhii-1 + Ch2i . Note that
+
+                 x(1)(xti-1 , ti-1)        -   1       x(xsi , si) - x(xti-1 , ti-1)    Chi.
+                                              rihi
+
+Since ri is bounded away from zero, and e-hi = 1 - hi + hi2/2 + O(h3i ), we know
+
+          (-e-hi       -     hi  +  1)x(1)(xti-1 , ti-1)  -  e-hi -   1   x(ui, si) - x(x~ti-1 , ti-1)
+                                                                2ri
+
+         CLhi(i-1 + ui - xsi ) + Chi3
+
+             1   e-hi - 1 - -e-hi - hi + 1                 x(xsi , si) - x(xti-1 , ti-1)
+          +
+             ri           2                   hi
+
+         CLhi(i-1 + ui - xsi ) + Chi3 + Ch2i x(xsi , si) - x(xti-1 , ti-1)
+
+         CLhii-1 + C(L + Mi)hi3,
+
+where Mi = 1 + supti-1tti x(1)(xt, t). Then, i could be estimated as follows.
+
+                                    i          ti   i-1   + C~hi(i-1      + hi2).
+                                              ti-1
+
+Thus, i = O(h2max) as long as hmax is sufficiently small.
+
+A.5 CONVERGENCE OF ALGORITHM 2
+
+Following the same line of argument of the convergence proof of Algorithm 1, we can prove the
+
+convergence of Algorithm 2. Let i := x~ti - xti . Taylor's expansion yields
+
+xti -      ti    xti-1    -  ti (e-hi      -  1)x(xti-1 ,  ti-1)   -  ti     -e-hi - hi + 1  x(1)(xti-1 , ti-1)   Chi3,
+          ti-1
+
+where C is a constant depends on x(2). Also note that
+
+             x(1)(xti-1 , ti-1)        -     1      x(xti-1 , ti-1) - x(xti-2 , ti-2)         Chi,
+                                           hi-1
+
+Since ri is bounded away from zero, and e-hi = 1 - hi + hi2/2 + O(hi3), we know
+
+     (-e-hi  -   hi    +  1)x(1)(xti-1 , ti-1)      -  e-hi -   1  x(x~ti-1 , ti-1) - x(x~ti-2 , ti-2)
+                                                          2ri
+
+     C Lhi (i-1  +     i-2)      +  C h3i  +  1   e-hi - 1 - -e-hi - hi + 1        x(xti-1 , ti-1) - x(xti-2 , ti-2)
+                                              ri       2                 hi
+
+ CLhi(i-1 + i-2) + Chi3 + Ch2i x(xti-1 , ti-1) - x(xti-2 , ti-2)
+
+ CLhi(i-1 + i-2) + CMihi3,
+
+where Mi = 1 + supti-1tti x(1)(xt, t). Then, i could be estimated as follows.
+
+     i     ti    i-1      + ti (1 - e-hi )Li-1            + ti     CMihi3 + CLhi (i-1 + i-2)        + Ch3i
+          ti-1
+
+           ti    i-1      + C~hi(i-1          + i-2    + hi2).
+          ti-1
+
+Thus, i = O(h2max) as long as hmax is sufficiently small and 0 + 1 = O(hm 2 ax), which can be
+verified by the Taylor's expansion.
+
+                                                          17
+Preprint
+
+B COMPARISON BETWEEN DPM-SOLVER AND DPM-SOLVER++
+
+In this section, we convert DPM-Solver++(2S) to the formulation w.r.t. the noise prediction model
+and compare it with the second-order DPM-Solver (Lu et al., 2022).
+
+At each step, the second-order DPM-Solver (DPM-Solver-2 (Lu et al., 2022)) has the following
+
+updating:                            si
+                                    ti-1
+                           ui    =        x~ti-1  - si (erihi  - 1)(x~ti-1 , ti-1)
+
+                           x~ti  =   ti   x~ti-1  - ti (ehi   - 1)(x~ti-1 , ti-1)                         (44)
+                                    ti-1
+
+                                       - ti (ehi - 1)     (ui, si) - (x~ti-1 , ti-1)
+                                          2ri
+
+while DPM-Solver++(2S) has the following updating:
+
+          ui    =   si   x~ti-1  - si (e-rihi     - 1)x(x~ti-1 , ti-1)
+                   ti-1
+                                                                                                          (45)
+                    ti                                         1                       1
+          x~ti  =  ti-1  x~ti-1  - ti (e-hi    - 1)  (1 - 2ri )x(x~ti-1 , ti-1) + 2ri x(ui, si)
+
+Because
+
+                              x(x, t)    =  x  -  t(x, t)     =   1     -  e-t (x, t)
+                                                   t                 x
+
+                                                                  t
+
+we can rewrite DPM-Solver++(2S) w.r.t. the noise prediction model (see Appendix B.1 for details):
+
+                   ui      =      si   x~ti-1  - si (erihi  - 1)(x~ti-1 , ti-1)
+                                 ti-1
+
+                   x~ti    =      ti   x~ti-1  - ti (ehi  - 1)(x~ti-1 , ti-1)                             (46)
+                                 ti-1
+
+                                 - ti (ehi - 1) e-rihi        (ui, si) - (x~ti-1 , ti-1)
+                                    2ri
+                                                     <1
+
+Comparing with Eq. 44, we can find that the only difference between DPM-Solver-2 and DPM-
+Solver++(2S) is that DPM-Solver++(2S) has an additional coefficient e-rihi < 1 at the second term
+
+(which is corresponding to approximating the first-order total derivative (1)). Specifically, we have
+
+                         (ui, si) - (x~ti-1 , ti-1) = (1)(x~ti-1 , ti-1) + O(hi)
+
+As DPM-Solver++(2S) multiplies a smaller coefficient into the O(hi) error term, the constant before
+the high-order error term of DPM-Solver++(2S) is smaller than that of DPM-Solver-2. As they
+both are equivalent to a second-order discretization of the diffusion ODE, a smaller constant before
+the error term can result in a smaller discretization error and reducing the numerical instabilities
+(especially for large guidance scales). Therefore, using the data prediction model is a key for
+stabilizing the sampling, and DPM-Solver++(2S) is more stable than DPM-Solver-2.
+
+B.1 DETAILED DERIVATION
+
+We can rewrite DPM-Solver++(2S) by:
+
+ui  =       si     x~ti-1  - si (e-rihi     - 1)x(x~ti-1 , ti-1)
+           ti-1
+
+    =       si     x~ti-1  -      (e si  -si +ti-1   - 1)x~ti-1   + si (e-si   - e-ti-1 )(x~ti-1 , ti-1)
+           ti-1
+                              ti-1
+
+    =       si     x~ti-1  - si (erihi    - 1)(x~ti-1 , ti-1)
+           ti-1
+
+                                                          18
+Preprint
+
+and
+
+          ti           - ti (e-hi                    1                                1
+x~ti  =  ti-1  x~ti-1               - 1)     (1 - 2ri )x(x~ti-1 , ti-1) + 2ri x(ui, si)
+
+      =   ti   x~ti-1  - ti (ehi    - 1)(x~ti-1 , ti-1) -         ti (e-hi    - 1)(x(ui, si) - x(x~ti-1 , ti-1))
+         ti-1                                                     2ri
+
+      =   ti   x~ti-1  - ti (ehi    - 1)(x~ti-1 , ti-1) +         ti (ehi     - 1)eti-1 (x(ui, si) - x(x~ti-1 , ti-1))
+         ti-1                                                     2ri
+
+and
+
+   eti-1    x(ui, si) - x(x~ti-1 , ti-1)
+= eti-1
+                1   ui  -    1    x~ti-1  -  e-si (ui, si)        +   e-ti-1 (x~ti-1 , ti-1)
+               si          ti-1
+
+= eti-1 -e-si (esi -ti-1 - 1)(x~ti-1 , ti-1) - e-si (ui, si) + e-ti-1 (x~ti-1 , ti-1)
+
+= eti-1 e-si (x~ti-1 , ti-1) - e-si (ui, si)
+= e-rihi (x~ti-1 , ti-1) - (ui, si)
+
+so we have
+
+x~ti  =   ti   x~ti-1  - ti (ehi    - 1)(x~ti-1 , ti-1) -         ti (ehi     - 1)e-rihi       (ui, si) - (x~ti-1 , ti-1)
+         ti-1                                                     2ri
+
+C IMPLEMENTATION DETAILS
+
+C.1 CONVERTING DISCRETE-TIME DPMS TO CONTINUOUS-TIME
+
+Discrete-time DPMs (Ho et al., 2020) train the noise prediction model  at N fixed time steps
+{tn}Nn=1                                                                              1000n
+          and  the  noise  prediction  model    is   parameterized       by  ~ (xn ,    N      )  for  n  =  1,    .  .  .  ,  N  ,  where
+
+each xn is corresponding to the value at time tn. In practice, these discrete-time DPMs usually
+                                                                  nT                                                                      T
+choose   uniform   time  steps    between  [0, T ],  thus  tn  =  N   ,  for  n  =  1, . . . , N .  The   smallest             time  is   N  .
+
+Moreover, for the widely-used DDPM (Ho et al., 2020), we usually choose a sequence {n}Nn=1
+which is defined by either linear schedule (Ho et al., 2020) or cosine schedule (Nichol & Dhariwal,
+
+2021). After obtained the n sequence, the noise schedule n is defined by
+
+                                                           n
+
+                                                n = (1 - n),                                                                         (47)
+
+                                                        i=1
+
+where each n      is corresponding to the continuous-time tn                  =  nT   ,  i.e.  tn      =  n.       To generalize
+                                                                                 N
+the discrete n to the continuous version, we use a linear interpolation for the function log n.
+
+Specifically, for each t  [tn, tn+1], we define
+
+                               log  t  :=  log  n    +  log   n+1    -   log  n  (t   -  tn).                                        (48)
+                                                              tn+1   -   tn
+
+Therefore,  we  can    obtain  a  continuous-time    noise     schedule  t    defined    for   all  t     [  T  ,  T  ],    and      the  std
+                                                                                                             N
+
+t = 1 - t2 and the logSNR t = log t - log t. Moreover, the logSNR t is strictly decreasing
+
+for t, thus the change-of-variable for  is still valid.
+
+In practice, we usually have T = 1 and N = 1000, thus the smallest time is 10-3. Therefore, we
+solve the diffusion ODEs from time t = 1 to time t = 10-3 to get our final sample. Such sampling
+
+can reduce the first-order discrete-time DDIM solver when using a uniform time step.
+
+C.2 ABLATING TIME STEPS
+
+Previous DEIS only tuned on low-resolutional data CIFAR-10, which may be not suitable for high-
+resolutional data such as ImageNet 256x256 and large guidance scales for guided sampling. For a
+
+                                                           19
+Preprint
+
+fair comparison with the baseline samplers, we firstly do ablation study for the time steps with the
+
+pretrained DPMs (Dhariwal & Nichol, 2021) on ImageNet 256x256 and vary the classifier guidance
+
+scale. In our experiments, we tune the time step schedule according to their power function choices.
+Specifically, let tM = 10-3 and t0 = 1, the time steps {ti}iM=0 satisfies
+
+                                         M -i 1  i1 
+                                 ti =    M t0 + M tM ,
+
+where  is a hyperparameter. Following Zhang & Chen (2022), we search  in 1, 2, 3 by DEIS, and
+the results are shown in Table 2. We find that for all guidance scales, the best setting is  = 1, i.e. the
+uniform t for time steps. We further compare uniform t and uniform  and find that the uniform t
+time step schedule is still the best choice. Therefore, in all of our experiments, we use the uniform t
+for evaluations.
+
+Table 2: Sample quality measured by FID  on ImageNet 256×256 (discrete-time model (Dhariwal & Nichol,
+2021)), varying the methods between DDIM (Song et al., 2021a) and different types of DEIS (Zhang & Chen,
+2022). The number of function evaluations (NFE) is fixed by 10.
+
+Method \ Guidance scale     8.0     7.0     6.0     5.0     4.0     3.0     2.0     1.0     0.0
+
+DDIM                     13.04   12.38   11.81   11.55   11.62   11.95   13.01   16.35   29.33
+DEIS-2,  = 1             19.12   14.83   12.39   10.94   10.13    9.76    9.74   11.01   20.34
+DEIS-2,  = 2             33.37   24.66   18.03   13.57   11.16   10.54   10.88   13.67   26.26
+DEIS-2,  = 3             55.69   44.01   33.04   24.50   18.66   16.35   16.87   21.91   38.41
+DEIS-3,  = 1             66.81   48.71   33.89   22.56   15.84   11.96   10.18   10.19   18.70
+DEIS-3,  = 2             34.51   25.42   18.52   13.68   11.20   10.46   10.75   13.36   25.59
+DEIS-3,  = 3             56.49   44.51   33.34   24.68   18.72   16.38   16.79   21.76   38.02
+
+C.3 EXPERIMENT SETTINGS
+
+We use uniform time step schedule for all experiments. Particularly, as DPM-Solver (Lu et al.,
+2022) is designed for uniform  (the intermediate time steps are a half of the step size w.r.t. ),
+we also convert the intermediate time steps to ensure all the time steps are uniform t. We find that
+such conversion can improve the sample quality of both the singlestep DPM-Solver the singlestep
+DPM-Solver++.
+
+We run NFE in 10, 15, 20, 25 for the high-order solvers and additional 50, 100, 250 for DDIM. For
+all experiments, we solver diffusion ODEs from t = 1 to t = 10-3 with the interpolation of noise
+schedule detailed in Appendix C.1. For DEIS, we use the "t-AB-k" methods for k = 1, 2, 3, which is
+the fastest method in their original paper, and we name them as DEIS-k, respectively.
+
+For the sampled image in Fig. 6, we use the prompt "A beautiful castle beside a waterfall in the
+woods, by Josef Thoma, matte painting, trending on artstation HQ".
+
+D EXPERIMENT DETAILS
+
+We list all the detailed experimental results in this section.
+
+                                         20
+Preprint
+
+Table 3: Sample quality measured by FID  on ImageNet 256×256 (discrete-time model (Dhariwal & Nichol,
+2021)), varying the number of function evaluations (NFE).
+
+Guidance Scale Thresholding Sampling Method \ NFE      10 15 20 25 50 100 250
+
+               DDIM (Song et al., 2021a)               13.04 11.27 10.21 9.87 9.82 9.52 9.37
+
+               PNDM (Liu et al., 2022b)                99.80 37.59 15.50 11.54 \ \ \
+
+               DPM-Solver-2 (Lu et al., 2022) 114.62 44.05 20.33 9.84 \ \ \
+
+               DPM-Solver-3 (Lu et al., 2022) 164.74 91.59 64.11 29.40 \ \ \
+
+          No   DEIS-1 (Zhang & Chen, 2022) 15.20 10.86 10.26 10.01 \ \ \
+
+8.0            DEIS-2 (Zhang & Chen, 2022) 19.12 11.37 10.08 9.75 \ \ \
+
+               DEIS-3 (Zhang & Chen, 2022) 66.86 24.48 12.98 10.87 \ \ \
+
+               DPM-Solver++(S) (ours)                  12.20 9.85 9.19 9.32 \ \ \
+               DPM-Solver++(M) (ours)                  14.44 9.46 9.10 9.11 \ \ \
+
+               DDIM (Song et al., 2021a)               10.58 9.53 9.12 8.94 8.58 8.49 8.48
+
+          Yes  DPM-Solver++(S) (ours)                  9.26 8.93 8.40 8.63 \ \ \
+
+               DPM-Solver++(M) (ours)                  9.56 8.64 8.50 8.39 \ \   \
+
+               DDIM (Song et al., 2021a)               11.62 9.67 8.96 8.58 8.22 8.06 7.99
+
+               PNDM (Liu et al., 2022b)                22.71 10.03 8.69 8.47 \ \ \
+
+               DPM-Solver-2 (Lu et al., 2022) 37.68 9.42 8.22 8.08 \ \ \
+
+               DPM-Solver-3 (Lu et al., 2022) 74.97 15.65 9.99 8.15 \ \ \
+
+          No   DEIS-1 (Zhang & Chen, 2022) 10.55 9.47 8.88 8.65 \ \ \
+
+4.0            DEIS-2 (Zhang & Chen, 2022) 10.13 9.09 8.68 8.45 \ \ \
+
+               DEIS-3 (Zhang & Chen, 2022) 15.84 9.25 8.63 8.43 \ \ \
+
+               DPM-Solver++(S) (ours)                  9.08 8.51 8.00 8.07 \ \ \
+               DPM-Solver++(M) (ours)                  8.98 8.26 8.06 8.06 \ \ \
+
+               DDIM (Song et al., 2021a)               10.45 8.95 8.51 8.25 7.91 7.82 7.87
+
+          Yes  DPM-Solver++(S) (ours)                  8.94 8.26 7.95 7.87 \ \ \
+
+               DPM-Solver++(M) (ours)                  8.91 8.21 7.99 7.96 \ \   \
+
+               DDIM (Song et al., 2021a)               13.01 9.60 9.02 8.45 7.72 7.60 7.44
+
+               PNDM (Liu et al., 2022b)                11.58 8.48 8.17 7.97 \ \ \
+
+               DPM-Solver-2 (Lu et al., 2022) 14.12 8.20 8.59 7.48 \ \ \
+
+               DPM-Solver-3 (Lu et al., 2022) 21.06 8.57 8.19 7.85 \ \ \
+
+          No   DEIS-1 (Zhang & Chen, 2022) 10.40 9.11 8.52 8.21 \ \ \
+
+2.0            DEIS-2 (Zhang & Chen, 2022) 9.74 8.80 8.28 8.06 \ \ \
+
+               DEIS-3 (Zhang & Chen, 2022) 10.18 8.63 8.20 7.98 \ \ \
+
+               DPM-Solver++(S) (ours)                  9.18 8.17 7.77 7.56 \ \ \
+               DPM-Solver++(M) (ours)                  9.19 8.47 8.17 8.07 \ \ \
+
+               DDIM (Song et al., 2021a)               11.19 9.20 8.42 8.05 7.65 7.59 7.63
+
+          Yes  DPM-Solver++(S) (ours)                  9.23 8.18 7.81 7.60 \ \ \
+
+               DPM-Solver++(M) (ours)                  9.28 8.56 8.28 8.18 \ \   \
+
+Table 4: Sample quality measured by MSE  on COCO2014 validation set (discrete-time latent model (Rombach
+et al., 2022)), varying the number of function evaluations (NFE). Guidance scale is 7.5, which is the recommended
+setting for stable-diffusion (Rombach et al., 2022).
+
+Guidance Scale Thresholding Sampling Method \ NFE      10 15 20 25 50 100 250
+
+               DDIM (Song et al., 2021a)               0.59 0.42 0.48 0.45 0.34 0.23 0.12
+
+               PNDM (Liu et al., 2022b)                0.66 0.43 0.50 0.46 0.32 \ \
+
+               DPM-Solver-2 (Lu et al., 2022) 0.66 0.47 0.40 0.34 0.20 \ \
+
+               DPM-Solver-3 (Lu et al., 2022) 0.59 0.48 0.43 0.37 0.23 \ \
+
+7.5       No   DEIS-1 (Zhang & Chen, 2022) 0.47 0.39 0.34 0.29 0.16 \ \
+
+               DEIS-2 (Zhang & Chen, 2022) 0.48 0.40 0.34 0.29 0.15 \ \
+
+               DEIS-3 (Zhang & Chen, 2022) 0.57 0.45 0.38 0.34 0.19 \ \
+
+               DPM-Solver++(S) (ours)                  0.48 0.41 0.36 0.32 0.19  \\
+               DPM-Solver++(M) (ours)                  0.49 0.40 0.34 0.29 0.16  \\
+
+               DDIM (Song et al., 2021a)               0.83 0.78 0.71 0.67 \ \ \
+
+               PNDM (Liu et al., 2022b)                0.99 0.87 0.79 0.75 \ \ \
+
+               DPM-Solver-2 (Lu et al., 2022) 1.13 1.08 0.96 0.86 \ \ \
+
+               DEIS-1 (Zhang & Chen, 2022) 0.84 0.72 0.64 0.58 \ \ \
+
+15.0      No   DEIS-2 (Zhang & Chen, 2022) 0.87 0.76 0.68 0.63 \ \ \
+
+               DEIS-3 (Zhang & Chen, 2022) 1.06 0.88 0.78 0.73 \ \ \
+
+               DPM-Solver++(S) (ours)                  0.88 0.75 0.68 0.61 \ \ \
+               DPM-Solver++(M) (ours)                  0.84 0.72 0.64 0.58 \ \ \
+
+                                                   21
+Preprint
+
+          DPM-Solver-2    DPM-Solver++(2S)       DPM-Solver++(2M)
+          (, singelstep)    (x, singlestep)  (x, multistep, thresholdin)
+
+Figure 5: Samples of different sampling methods for DPMs on ImageNet 256x256 with guidance scale 8.0.
+
+                          22
+Preprint
+
+                       DDIM (N = 15)             DDIM (N = 20)         DDIM (N = 50)
+                      (Song et al., 2021a)      (Song et al., 2021a)  (Song et al., 2021a)
+
+                      PNDM (N = 15)             PNDM (N = 20)         PNDM (N = 50)
+                      (Liu et al., 2022b)       (Liu et al., 2022b)   (Liu et al., 2022b)
+
+DDIM (N = 999,        DPM-Solver-2 (N = 15) DPM-Solver-2 (N = 20) DPM-Solver-2 (N = 50)
+     converged)
+                      (Lu et al., 2022)         (Lu et al., 2022)     (Lu et al., 2022)
+(Song et al., 2021a)
+
+                      DEIS-1 (N = 15)           DEIS-1 (N = 20)       DEIS-1 (N = 50)
+
+                      (Zhang & Chen, 2022) (Zhang & Chen, 2022) (Zhang & Chen, 2022)
+
+                      DPM-Solver++(2M)          DPM-Solver++(2M)      DPM-Solver++(2M)
+                            (N = 15)                  (N = 20)              (N = 50)
+                              (ours)                    (ours)                (ours)
+
+Figure 6: Samples using the pre-trained latent-space DPMs (Stable-Diffusion (Rombach et al., 2022)) with
+a classifier-free guidance scale 7.5 (the default setting), varying different samplers and different number of
+function evaluations N .
+
+                                            23
+Preprint
+
+NFE = 10           NFE = 20               NFE = 50           NFE = 100
+
+DPM-Solver++(2M)   DPM-Solver++(2M)       DPM-Solver++(2M)   DPM-Solver++(2M)
+        (ours)             (ours)                 (ours)             (ours)
+
+     DDPM               DDPM                   DDPM               DDPM
+(Ho et al., 2020)  (Ho et al., 2020)      (Ho et al., 2020)  (Ho et al., 2020)
+
+SDE-DPM-Solver++1 SDE-DPM-Solver++1 SDE-DPM-Solver++1 SDE-DPM-Solver++1
+
+          (ours)   (ours)                 (ours)             (ours)
+
+SDE-DPM-Solver++(2M) SDE-DPM-Solver++(2M) SDE-DPM-Solver++(2M) SDE-DPM-Solver++(2M)
+
+          (ours)   (ours)                 (ours)             (ours)
+
+Figure 7: Different solvers for DeepFloyd-IF (DeepFloyd, 2023) (pixel-space guided sampling). Our proposed
+SDE-DPM-Solver++(2M) can generate better samples than other samplers. The SDE-DPM-Solver++1 is
+equivalent to DDIM with a special , as detailed in Sec. 6.1.
+
+                                      24
+

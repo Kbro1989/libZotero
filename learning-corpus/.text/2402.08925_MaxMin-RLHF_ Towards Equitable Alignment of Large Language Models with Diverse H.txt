@@ -1,0 +1,1235 @@
+                                        MaxMin-RLHF: Alignment with Diverse Human Preferences
+
+                                        Souradip Chakraborty * 1 Jiahao Qiu * 2 Hui Yuan 2 Alec Koppel 3 Dinesh Manocha 1 Furong Huang 1
+                                                                                    Amrit Singh Bedi 4 Mengdi Wang 2
+
+arXiv:2402.08925v2 [cs.CL] 26 Dec 2024                          Abstract                                     emerged as a pivotal approach to alignment problems, specif-
+                                                                                                             ically aligning LLM (Wang et al., 2023; Ouyang et al.,
+                                              Reinforcement Learning from Human Feedback                     2022b; Stiennon et al., 2022a; Ouyang et al., 2022a). RLHF
+                                              (RLHF) aligns language models to human pref-                   starts with pre-training a generative (LLM) model and sub-
+                                              erences by employing a singular reward model                   sequently fine-tuning it through supervised learning on a
+                                              derived from preference data. However, the sin-                high-quality dataset on various downstream tasks. RLHF
+                                              gle reward model overlooks the rich diversity of               operates in three steps (a) supervised fine-tuning, (2) reward
+                                              human preferences inherent in data collected from              learning, and (3) RL fine-tuning. Step 2 learns a reward
+                                              multiple users. In this work, we first derive an               function that is expected to represent the preference feed-
+                                              impossibility result of alignment with single re-              back of the human population.
+                                              ward RLHF, thereby highlighting its insufficiency
+                                              in representing diverse human preferences. Next,               However, there has been minimal emphasis on accurately
+                                              we propose to learn a mixture of reward mod-                   representing the diversity of human preferences and the
+                                              els via an expectation-maximization algorithm                  broad spectrum of user populations. As highlighted by
+                                              and solve a MaxMin alignment objective inspired                Aroyo & Welty (2015); Aroyo et al. (2023a;b), "the notion
+                                              by the Egalitarian principle in social choice the-             of `one truth' in crowdsourcing responses is a myth" and we
+                                              ory to better honor diverse human preferences.                 need to account for the diversity in opinions and preferences.
+                                              We present comprehensive experimental results
+                                              on small-scale (GPT-2) and large-scale language                Despite the criticality, most of the latest RLHF approaches
+                                              (with Tulu2-7B)) and show the efficacy of the                  ignore the consideration of the diversity in human prefer-
+                                              proposed approach in the presence of diversity                 ence feedback by aligning the language model with a single
+                                              among human preferences. We remark that our                    reward (Wang et al., 2023; Christian, 2020; Stiennon et al.,
+                                              findings in this work are not only limited to lan-             2022a; Ouyang et al., 2022a). The assumption of a single
+                                              guage models but also extend to reinforcement                  ground truth reward is restrictive and can potentially subdue
+                                              learning in general.                                           the preferences or opinions of minority groups, leading to
+                                                                                                             societal biases (Figure 1). To mitigate this issue, some of the
+                                        1. Introduction                                                      recent research proposes to learn multiple reward functions,
+                                                                                                             which can then be aggregated in arbitrary manners (Bakker
+                                        The alignment problem, central to developing and fine-               et al., 2022). On the other hand, (Ovadya, 2023) adopts
+                                        tuning current large language models (LLMs), represents              a consensus-based method for aggregating human repre-
+                                        a crucial challenge in artificial intelligence, especially in        sentations by emphasizing specific principles (Bai et al.,
+                                        ensuring these models operate in harmony with human val-             2022b; Kovac et al., 2023), which might result in the under-
+                                        ues and preferences (Wang et al., 2023; Christian, 2020).            representation of marginalized groups (Rame´ et al., 2023).
+                                        Reinforcement learning from human feedback (RLHF) has                Another line of research focuses on the aspect of designing
+                                                                                                             multi-policy strategies by fine-tuning personalized language
+                                           *Equal contribution 1Department of Computer Science, Univer-      models towards individual rewards (Jang et al., 2023; Rame´
+                                        sity of Maryland, College Park, MD, USA. 2Department of Elec-        et al., 2023; Ji et al., 2023a).
+                                        trical and Computer Engineering, Princeton University, NJ, USA.
+                                        3JP Morgan Chase AI Research, New York, USA. 4Department of          As mentioned above, the recent literature has brought atten-
+                                        Computer Science,, University of Central Florida, FL, USA.. Cor-     tion to the challenge of aligning single utility RLHF with
+                                        respondence to: Souradip Chakraborty <schakra3@umd.edu>.             diverse preferences. However, a thorough understanding of
+                                                                                                             how the diversity within human sub-populations influences
+                                        Proceedings of the 41 st International Conference on Machine         the overall alignment objective remains elusive. Conse-
+                                        Learning, Vienna, Austria. PMLR 235, 2024. Copyright 2024 by         quently, this prompts us to pose the following question: Is a
+                                        the author(s).
+
+                                                                                                          1
+MaxMin Approach to Align with Diverse Human Preferences
+
+single reward RLHF pipeline sufficient to align with diverse       takes a sequence of tokens (called prompt) as input denoted
+human preferences?                                                 by x := {x1, x2, · · · , xN }, where each token xi  V. The
+                                                                   prompt x  X , where X is the set of prompts, is fed as input
+In this work, we present negative results for the above ques-      to the language model, and it generates output response
+tion in this work by demonstrating the impossibility of align-     y  (· | x).
+ment using single reward RLHF (Theorem 1). We introduce
+a notion of diversity between human subpopulations due             RLHF pipeline. We start by considering the RLHF pipeline
+to the differences in preference distributions and establish       in Ziegler et al. (2019), which has also been adopted in
+lower bounds on the alignment performance of single re-            subsequent works (Stiennon et al., 2022c; Bai et al., 2022a;
+ward RLHF. However, this impossibility result naturally            Ouyang et al., 2022b). It consists of three steps detailed as
+raises another important question:                                 follows:
+
+What strategies can we design (or what methods can we              Step 1: Supervised Fine-tuning (SFT): In this phase, a
+adopt) to align with diverse human preferences?                    generic pre-trained LM is fine-tuned with supervised learn-
+                                                                   ing on a high-quality dataset for the downstream task(s) of
+In response to this question, we draw inspiration from the         interest, such as dialogue, instruction following, summariza-
+Egalitarian rule (Sen, 2017) and aim to maximize the social        tion, etc., to obtain a model ref.
+utility objective for alignment. We summarize our contribu-
+tions as follows.                                                  Step 2: Reward Modelling: In the second phase, the SFT
+                                                                   model is queried with prompts x  X to produce pairs of
+(1) An impossibility result of alignment with single               responses (y1, y2)  (· | x) which are then presented
+reward-based RLHF. We first introduce the notation of              to human labelers for preference evaluation, and y1, y2
+diversity (Definition 1) and then derive lower bounds on the       denotes the preferred and dispreferred response, respectively.
+reward model suboptimality (Lemma 1) in terms of diversity         The preference distribution under the Bradley-Terry (BT)
+in human sub-population preference distributions. Finally,         preference model (Bradley & Terry, 1952) is written as
+we establish a lower bound (Theorem 1) on the alignment
+gap due to the diversity in the human preference feedback.         p(y1   y2  |  x) =  exp        exp (r(y1, x))     x))      ,
+True to our knowledge, our work is the first to report such a                               (r(y1, x)) + exp (r(y2,
+result in the RLHF literature.
+                                                                                                                              (1)
+(2) Max-Min RLHF alignment with diverse user prefer-
+ences. We propose to learn a mixture of preference distribu-       where r(y, x) is the latent reward model. With a static
+tions through the application of multiple reward functions
+using the Expectation-Maximization (EM) algorithm (Al-             dataset D = {x(i), y1(i), y2(i)}Ni=1 sampled from p, we can
+gorithm 2). Upon obtaining multiple reward functions spe-          learn a parameterized reward model r(y, x) via maximum
+cific to different human sub-populations, we introduce the
+MaxMin-RLHF algorithm as a strategy to align language              likelihood estimation. Framing the problem as a binary
+models with social utility objectives (Algorithm 1).
+                                                                   classification, we have the negative log-likelihood loss:
+(3) A comprehensive empirical study. We present a de-
+tailed empirical analysis of our proposed concepts on two          LR(r, D) = -E(x,y1,y2)D[log (r(y1, x)-r(y2, x))]
+language models: GPT-2 and Tulu-7B. Initially, we pro-                                                                                (2)
+vide empirical evidence highlighting the impossibilities of
+alignment with single reward RLHF, followed by demon-              where  is the logistic function.
+strating the feasibility and effectiveness of MaxMin-RLHF
+in achieving social utility objectives. Our approach out-          Step 3: RL Fine-Tuning: In the final step, the optimal
+performs existing methodologies, showcasing significant            policy r under the reward r is obtained by solving the
+performance improvements.                                          KL-regularized reward maximization problem given by
+
+                                                                   max  ExP  ,y(·  |  x)[r(y,  x)  -    DKL  [(·|x)||ref(·|x)]],
+
+                                                                     
+
+                                                                                                                              (3)
+
+                                                                   where,  > 0 controls the deviation from the base reference
+                                                                   policy ref.
+
+2. Preliminaries                                                   3. An Impossibility Result for Single Reward
+                                                                      RLHF with Diverse Preferences
+Let us start by defining a language model mathematically.
+We denote a vocabulary set as V and a language model by            In this section, we mathematically prove the impossibility
+a mapping  (parameterized by ). A language model                   of aligning language models with diverse human prefer-
+                                                                   ences with the single reward RLHF framework. We start
+
+                                                                2
+               MaxMin Approach to Align with Diverse Human Preferences
+
+Figure 1: This figure highlights the drawbacks of a single reward-based current state-of-the-art alignment framework called
+Reinforcement Learning from Human Feedback (RLHF) (Christian, 2020). In this figure, we demonstrate a setting where,
+due to the inherent presence of majority and minority user groups who provide human feedback, single reward-based RLHF
+alignment would align the language model towards the majority group while completely ignoring the minority use group
+preferences. We provide a theoretical justification in Section 3 and empirical evidence in Section 5.
+
+by discussing the motivation and mathematical definition of       = EhH[I(h prefers y_1 over y_2|x)],
+diversity in human preferences in Section 3.1, then connect
+the reward learning step of the RLHF pipeline with diver-         where p(y1  y2 | x) is the probability of preferring y1
+sity in Section 3.2, and then finally prove the impossibility
+of language model alignment in Section 3.3 by connecting          over y2 for any given pair (y1, y2) corresponding to prompt
+Step 3 of RLHF pipeline with human preference diversity.          x. In (4), the expectation is over a finite set of humans h 
+
+                                                                  H. We next introduce the concept of human subpopulations
+
+                                                                  as a hidden random variable, denoted as u with distribution
+
+                                                                  , to account for the inherent diversity within the population.
+
+3.1. Diversity in Human Preferences                               Specifically, u represents the human subpopulation defined
+
+The main shortcoming of state-of-the-art alignment ap-            over a finite discrete set U := {H1, H2, · · · , H|U|}, such
+proaches arises from the underlying assumption that human
+preferences are derived from a single latent reward model         that H =  |U |  Hu.  The  cardinality  of  the  set  U  represents
+r(y, x) (cf. (2)), which fails to account for the inherent                  u=1
+diversity among the human sub-populations (see Figure 2).
+One of the key reasons (discussed in Appendix B in ) for the      the number of sub-populations/groups present in the total
+diverse human preferences is the varied socio-demographic
+and socio-cultural backgrounds of human sub-populations           human population H.
+(Aroyo et al., 2023b;a). For example, population groups
+with diverse demographic markers such as race, ethnicity,         Therefore, similar to (4), we can define a human-
+age groups, genders, etc., have highly varied preferences as      subpopulation or group-specific preference distribution for
+highlighted in (Aroyo et al., 2023b;a; Denton et al., 2021a).     a given pair of responses (y1, y2) and prompt x as
+Such diversity inevitably leads to natural sub-groups of
+populations among humans. Modeling this diversity in pref-        pu (y1  y2 | x)                                              (5)
+erences for the fine-tuning of language models in RLHF is
+crucial, which, to the best of our knowledge, is currently        = EhHu [I(h prefers y_1 over y_2|x)],
+missing from the literature.
+                                                                  for all groups in U. Next, we define the preference diversity
+                                                                  among the human population in Definition 1 as follows.
+
+                                                                  Definition 1 (Diversity in Human Preferences). Con-
+
+                                                                  sider a human population H, composed of |U| sub-
+
+                                                                  population groups where H =            |U |  Hu,     and  a  sub-
+                                                                                                         u=1
+                                                                  population-specific preference pu as defined in (5), we
+
+Sub-population Preference Distributions: Let us consider          define the diversity of sub-population group Hi with
+the human population providing the preference feedback
+represented by H. We can write the preference distribution        respect to other group Hj as
+(Stiennon et al., 2022a; Ouyang et al., 2022a) as
+                                                                            Diversity (i, j) := TV(pi, pj),                    (6)
+
+p(y1  y2 | x)                                                     where TV denotes the total variation distance between
+
+                                     (4)
+
+                                                               3
+                                        MaxMin Approach to Align with Diverse Human Preferences
+
+             scores                                 scores             of each sub-population (say Hu) within the full population
+                                                                       H reflecting their contributions to the aggregate preference
+(a) Sentiment (Minority)                (b) Sentiment (Majority)       distribution p. Thus, from the expansion in (7), it is evi-
+                                                                       dent that the preference distribution under consideration is a
+                                                                       weighted sum of sub-population specific preference distribu-
+                                                                       tion, weighted by (u). We remark that distributions q and
+                                                                        are crucial to rigorously characterize the alignment perfor-
+                                                                       mance of different approaches, which is not considered in
+                                                                       the existing literature (Christian, 2020; Bai et al., 2022a).
+
+                                                                       3.2. Reward Mismatch Due to Diversity
+
+                                                                       From equations (1) and (2), we note that the existing RLHF
+                                                                       approach focuses on learning the ground-truth single reward
+                                                                       parameter  to represent the preference distribution p by
+                                                                       minimizing the cross-entropy loss (cf. (2)) given by
+
+              scores                                  scores           LR(r, D) = - E(x,y1,y2)D p(y1  y2 | x) log p()
+
+(c) Conciseness (Minority)              (d) Conciseness (Majority)
+
+Figure 2: (Diversity in Preferences.) This figure illus-                          + p(y1  y2 | x) log p() ,                     (8)
+trates the diversity in preferences among two distinct human
+groups using the IMDB movie review dataset (Maas et al.,               The assumption of single ground-truth reward (correspond-
+2011). We categorize these groups as `majority' and `minor-            ing to p) which is violated due to the existence of diverse
+ity.' (a) and (c) display minority sentiment and conciseness           sub-populations with separate preference distributions, as
+preferences. We note that the minority group strongly favors           discussed in Section 3.1. This would lead to an implicit ag-
+concise responses (as seen in the blue curve in (c)), while            gregation as shown in (7) and the equivalent MLE objective
+showing indifference towards sentiment (as indicated by                in (8) can be re-written as :
+overlapping curves in (a)). In contrast, (b) and (d) depict
+that the majority clearly prioritizes positive sentiment (as           LR(r, D) = -E(x,y1,y2)D Eu[pu (y1  y2 | x)] log p()
+evidenced by a significant gap between chosen and rejected
+trajectories in (b)), while displaying little concern for con-                    + Eu[pu (y1  y2 | x)] log p() .               (9)
+ciseness (as indicated by overlapping curves in (d)).
+                                                                       Now, expanding upon the cross-entropy objective, we note
+
+                                                                       (see Lemma 3 for details) that the objective in (9) essentially
+
+two preference distributions.                                          reduces to minimizing the Kullback-Leibler (KL) diver-
+
+                                                                       gence KL(  |U |  (u)pu(z)||p)  and   the  objective  is  mini-
+                                                                                  u=1
+
+By utilizing the definition of sub-population groups in U,             mized at p =     |U |  (u)pu.  This  implies  that  by   mini-
+we can express the preference in (4) as                                                 u=1
+
+                                                                       mizing the loss function in (9), when we try to learn a single
+
+                                                                        to recover p, an implicit averaging happens over the
+
+                                  |U |                                 preferences of human subpopulation groups they belong to,
+
+p(y1  y2 | x) =                         Ih(z) · q(h|u)  · (u)          which plays a critical role in the sub-optimality in reward
+                                                               (7)
+u=1 hHu                                                                learning summarized in Lemma 1.
+
+     |U |                                                              Lemma 1. Let  denotes the reward parameter, which
+                                                                       models p (cf. 1) and u models the human sub-
+= pu (z) · (u),                                                        population group Hu  U specific pu, it holds that
+
+    u=1
+
+where z := (y1  y2 | x) is a shorthand notation and                                - u               (1 - (u))   ,          (10)
+q(·) denotes the distribution over the humans H. Here,
+pu (zh) = hHu Ih(z) · q(h|u) is the sub-population spe-                                                 4D
+cific preference distribution (cf. (5)) and (·) represents the
+                                                                                  Reward mismatch
+marginal probability distribution of sub-population Hu and
+quantifies the probability of occurrence of sub-population             where            :=            Diverity(u, j) -
+
+Hu to provide feedback for pair z. We can think of (·) as              maxk=u Diverity(k, j) > 0, D denotes the upper
+a weighting function that quantifies the relative importance
+
+                                                                    4
+         MaxMin Approach to Align with Diverse Human Preferences
+
+bound on the feature representation (y, x) D                        Before Alignment                After Alignment
+for all (x, y), and diversity as defined in Definition 1.
+
+Proof Sketch. Here we describe the proof sketch of Lemma            Sentiment score                 Sentiment score
+1 with a detailed proof provided in Appendix D. We begin
+with the definition of sub-optimality in the learned reward         Conciseness score               Conciseness score
+for a subpopulation group u as ru := ^MLE - u where
+^MLE which is the approximation to the true parameter .             Impossibility of Alignment with Single Reward RLHF
+However, we know in the limit of infinite data under ap-
+propriate regulatory conditions, ^MLE converges to , and            Figure 3: (Empirical Evidence of Impossibility). This
+hence we focus on the sub-optimality gap due to diversity as        figure validates our theoretical results in Theorem 1 and pro-
+u - . Using the Lipschitzness of the preference proba-              vides empirical evidence of the impossibility of alignment
+bility distribution under the Bradley-Tery preference model         in single reward RLHF on preference dataset presented in
+(derived in Lemma 2 in Appendix) we lower-bound the sub-            Figure 2. Here, the task is to align the LLM to generate
+optimality gap and finally expanding upon the definition of         positive sentiment responses which are concise. We note
+p as shown in (7), we get the final result.                         that the aligned language model can generate highly positive
+                                                                    sentiment sentences but completely ignores the requirement
+Remark. Lemma 1 indicates that the current RLHF-based               of conciseness. This is happening because the humans who
+reward learning paradigm (Christian, 2020; Bai et al., 2022a;       prefer conciseness are in the minority as compared to hu-
+Rafailov et al., 2023) will suffer sub-optimality due to diver-     mans who prefer a positive sentiment score as described in
+sity amongst the humans, which is highly likely in practice         Figure 2.
+(Aroyo et al., 2023b). Lemma 1 implies that the degree to
+which the learned reward parameter diverges from optimal-
+ity for a given subgroup is influenced by two key factors:
+the distinctiveness of that subgroup's preferences compared
+to all the other subgroups, and the relative weight assigned
+to the subgroup in the overall preference model.
+
+3.3. An Impossibility Results of Alignment
+
+To mathematically characterize the impossibility of aligning        Theorem 1 (An Impossibility Result). Let  denotes
+the language model with diverse sub-population groups,              the reward parameter, which models p (cf. 1), u
+let us reconsider the RL fine-tuning optimization problem,          denotes the human sub-population-group Hu  U
+which is given by (step 3 in RLHF)                                  specific reward function to model pu, and alignment
+                                                                    gap is as defined in (12). Then, it holds that
+max  Fr  (  ),                              (11)
+
+  
+
+where we define Fr () := ExP Ey(· | x)[r(y, x)]-                    Align-Gap                    ·  (1 - (u))           (13)
+                                                                                           642L          D2 ,
+DKL[(· | x)||ref(· | x)] . Let us define RLHF :=
+argmax Fr () where RLHF is the optimal aligned pol-                 where              :=  Diversity(u, j) -
+icy with single reward RLHF. On the other hand, we de-
+fine a human sub-population specific optimal policy as              maxk= u Diversity(k, j) > 0,  denotes the
+u := argmax Fru (), where u is the optimal aligned
+policy with individual subpopulation group Hu. We define            representation for the human sub-population group
+the alignment gap of RLHF model RLHF to a specific user
+group Hu by                                                         u, D denotes the upper bound on the feature repre-
+
+   Align-Gap(RLHF) := Fru (u) - Fru (RLHF). (12)                    sentation (y, x) D for all (x, y),  denotes
+                                                                    the minimum eigenvalue of the feature matrix,  is
+We note that the alignment gap defined in (12) measures the
+discrepancy between the reward returns by the single reward         the regularization parameter of RLHF framework and
+RLHF model RLHF and the optimal model u tailored for
+Hu subpopulation evaluated under true reward function ru.           diversity as defined in Definition 1.
+Next, we present our impossibility result in Theorem 1
+                                                                    A detailed proof of Theorem 1 is provided in Appendix
+                                                                    E. We briefly describe the proof sketch of Theorem 1 as
+                                                                    follows.
+
+                                                                 5
+                                  MaxMin Approach to Align with Diverse Human Preferences
+
+Proof Sketch. We begin by considering the KL-regularized              Algorithm 1 MaxMin RLHF
+
+alignment objective (cf. (3)). Utilizing the strong concavity          1: Input: Preference dataset D, initial reward parametriza-
+                                                                           tion for each subpopulation u as ru0 , initial policy pa-
+of the objective under the KL regularization and the ana-                  rameter 0.
+
+lytical mapping from reward functions to optimal policies              2: Reward Learning with EM: Utilize Algorithm 2 for
+                                                                           learning rewards with EM to learn ru for all user sub-
+(as used in DPO (Rafailov et al., 2023)), we first derive a                population u
+
+lower bound on the alignment gap as Align-Gap(RLHF)                    3: Max-Min Policy Iteration:
+                                                                       4: for t = 0 to T - 1 do
+    1    2  r  - ru 2.  Under     the  linear parametrization  in      5: Choosing Minimum Utility Subpopulation:
+2L                                                                     6: umin  arg minHuU Fru (t)
+                                                                       7: Perform the PPO Update:
+reward and utilizing the boundedness on the representation             8: Update policy  towards maximizing the objective:
+                                                                       9: i+1  PPO-update(Fru (t) - DKL[t||ref])
+space, we can lower-bound the alignment gap with the re-              10: end for
+                                                                      11: Output: Policy T aligned with socially fair preference
+ward sub-optimality and eventually the diversity coefficient.
+                                                                           dataset
+Remark. Theorem 1 shows that high subpopulation diver-
+sity inevitably leads to a greater alignment gap. Here,               Algorithm 2 Learning Rewards with EM Algorithm
+depends on the diversity among user groups, highlighting
+that when the diversity between a specific user group u               1: Input: Preference data D, |U| clusters of users among
+and others is significantly higher compared to inter-group
+diversity, it suggests that u is a minority. Consequently,            all humans in H =          |U |  Hu,  pretrained  {ru }u|U=|1,
+aligning to this particular user-group with single-reward                                        u=1
+RLHF becomes particularly challenging. Moreover, as the
+representation of the user-group reduces i.e (u)  0, the              loss function loss, convergence criteria
+alignment gap further increases making it harder to align to
+this user-group. In summary, if a subgroup exhibits distinc-          2: while not reach the convergence criteria do
+tive preferences or constitutes a minority with a smaller rep-
+resentation, the resulting model from single reward RLHF              3: for h  H do
+setting cannot accurately reflect the sub-population's spe-
+cific preferences. We provide empirical evidence of the               4: E-step (hard cluster assignment): assign h to the
+impossibility of alignment in Figure 5.
+                                                                      u-th cluster s.t.
+
+4. MaxMin-RLHF: One Possibility                                       u = arg max                                w(u, x, y1, y2)
+
+                                                                                    u1,···,|U |  (x,y1 ,y2 ,h)D
+
+From the statement of Theorem 1, it is clear that it is not           where w(·)      =               exp(ru (y1,x))
+possible to align diverse human preferences with a single                                exp(ru (y1,x))+exp(ru (y2,x))
+reward RLHF. We start by noting that even if we can bypass
+the sub-optimality in reward learning (cf. Lemma 1) by                5: end for
+learning multiple reward functions ^u for all Hu, it doesn't
+resolve the eventually aim of language model alignment.               6: M-step: Update each u, u = 1, · · · , |U | by mini-
+This is because our goal is to develop a single model 
+that honors diverse user preferences without demonstrating            mizing the negative log-likelihood loss (2) on the
+bias towards specific groups such as minorities. To achieve
+that, we take motivation from the Egalitarian rule in social          assigned users' data
+choice theory (Sen, 2017), which states that society should
+focus on maximizing the minimum utility of all individuals.           7: end while
+Hence, we write our proposed alignment objective which
+maximizes the social utility as                                       in Algorithm 1. But often, in practice, they are hardly avail-
+                                                                      able. To address this challenge, we consider an expectation-
+       F      arg  max  min  Fru  ()   -  DKL[||ref],  (14)           maximization algorithm to learn a mixture of reward models
+                                                                      summarized in Algorithm 2 which learns the ru 's and the
+                        uU                                            |U| clusters.
+
+where, Fru () := ExP,y(· | x)[ru (y, x)] (cf. (3))                    We summarize the EM algorithm for reward learning in
+represents the alignment objective for the uth sub-                   Algorithm 2.
+
+population or group among set of humans.                              5. Experimental Results
+
+MaxMin RLHF. If we have access to individual human                    In this section, we present a comprehensive empirical eval-
+sub-population rewards, we can go directly to solve the op-           uation of the alignment impossibilities and our proposed
+timization problem in (14) with the algorithm summarized              solutions for language models, structured into two distinct
+                                                                      subsections: Small Scale experiments (Sec. 5.1) for initial
+
+                                                                   6
+MaxMin Approach to Align with Diverse Human Preferences
+
+                                                                  To illustrate the majority and minority group dynamics, we
+                                                                  control the proportion of the user groups in the preference
+                                                                  data (Group 1: 80% and Group 2 - 20%). For the exper-
+                                                                  iments in this subsection, we use GPT-2 (Radford et al.,
+                                                                  2019) as the base model.
+
+Figure 4: (Alignment with MaxMin RLHF). This figure               Impossibility Results. To demonstrate our impossibility
+shows the performance of our proposed MaxMin RLHF al-             results as stated in Theorem 1, we perform the three steps of
+gorithm for the preference dataset described in Figure 2. The     RLHF (described in (Christian, 2020; Ouyang et al., 2022b))
+task is to align a language model to generate positive sen-       as prevalent currently with a single utility reward function
+timent responses that are concise (of shorter token length)       on the combined preference dataset. For SFT, we fine-tune
+in nature. We note that MaxMin-RLHF aligned language              GPT-2 until convergence on reviews from the train split of
+model can generate highly positive sentiment sentences and        the IMDB dataset and use this GPT-2 backbone for both
+satisfy the conciseness criteria. This shows alignment with       the reward model and PPO training. The generations are
+both the majority and minority preferences.                       evaluated against the ground truth rewards r1 for positive
+                                                                  sentiment (majority group) and r2 for conciseness (minor-
+proof of concept, and Large Scale experiments (Sec. 5.2)          ity group). It is evident from Figure 3 that the generated
+for broader validation. We first demonstrate the practical        responses are significantly biased toward the majority user
+challenges of alignment (cf. Theorem 1), followed by show-        group's preference who preference positive sentiment (note
+casing the efficacy of our MaxMin-RLHF strategy. This             high sentiment score (green curve, high score is better) after
+approach illustrates that, with a focus on social welfare         alignment) while the preferences (concise responses) of the
+objectives, alignment across diverse human preferences is         minority user group were neglected (note high conciseness
+attainable.                                                       score (red curve, lower score is better) after alignment),
+                                                                  resulting in more verbose generations than desired.
+5.1. Small Scale Experiments (with GPT-2): Sentiment
+     and Conciseness Alignment                                    Proposed MaxMin RLHF. Our proposed algorithm can ef-
+                                                                  ficiently align to both group preferences as shown in Figure
+Dataset. For the experiment in this section on controlled         4 thereby generating responses that are of positive sentiment
+sentiment generation, we categorized the humans into two          and concise and thus cater to both the majority and minor-
+groups: majority (Group 1) and minority (Group 2). In             ity user groups mitigating the social disparity. We further
+these sub-groups, Group 1 prefers responses with positive         collectively present the average performance of MaxMin
+sentiment, and Group 2 prefers brevity (conciseness) in           RLHF with the single reward RLHF and baseline model in
+responses. We use the IMDb dataset as a basis for our in-         Figure 5.
+puts (Maas et al., 2011), the goal for the optimal policy
+is to produce responses y that exhibit positive sentiment         Before  After                                                          Before  After
+(catering to Group 1) while remaining concise (catering to
+Group 2). We generated two sets of preference pairs for           Avg. sentimentSingleMax-Min                                                     Single  Max-Min
+a controlled evaluation for each user group. For Group                                                                 Avg. concisenessRewardRLHFReward    RLHF
+1, we utilized a pre-trained sentiment classifier to ensure                RLHF     (ours)                                                        RLHF     (ours)
+p(positive | x, y1) > p(positive | x, y2) and similarly for
+Group 2 we preferred shorter responses over longer ones.          Base                                                                   Base
+                                                                  LLM                                                                    LLM
+
+                                                                  (a) Sentiment Alignment                                                (b) Conciseness Alignment
+
+                                                                  Figure 5: This figure shows the average performance in
+                                                                  terms of sentiments of the generated output and the concise-
+                                                                  ness alignment.We note that MaxMin RLHF is able to better
+                                                                  cater to both the alignment criteria as compared to single
+                                                                  reward RLHF as expected.
+
+                                                               7
+              MaxMin Approach to Align with Diverse Human Preferences
+
+Ratio  Total  Majority  Minority                                   results in Figure 6, we note that after the fourth iteration,
+                                                                   all users are clustered correctly, meaning the mixture pref-
+ 1:1   0.686   0.668     0.704                                     erence model successfully converges we successfully learn
+ 2:1   0.608   0.728     0.488                                     diverse groups of users with diverse preferences.
+ 6:1   0.588   0.724     0.452
+10:1   0.568   0.716      0.42                                     MaxMin RLHF Alignment. We further test the perfor-
+                                                                   mance of our MaxMin-RLHF alignment method and com-
+Table 1: This table presents the test accuracy of the single       pare it with the single reward RLHF models trained on
+reward model training on the preference dataset and shows
+its failure to align with the minority. The first column de-               Method  P3A    P3B    Average
+notes the user group ratio in the dataset, the second column
+shows the total accuracy, the third column shows the accu-                 MaxMin  57.78  55.56   56.67
+racy of the majority group, and the fourth column shows the                   1:1  55.85  52.62   54.24
+accuracy of the minority group.                                               2:1  55.56  48.89   52.23
+                                                                              6:1  58.06  46.67   52.37
+                                                                             10:1  56.00  45.00   50.50
+
+5.2. Large Scale Experments (with Tulu2-7B)                        Table 2: Pairwise win rate (%) on P3 dataset using GPT-4.
+
+Datasets and Experimental Setup. We use the same                   biased datasets. Our baselines include ratios of 1, 2, 6, and
+dataset as Jang et al. (2023) and 10k data points from GPT4-       10, the same setting as discussed for Table 1. Following
+Alpaca (Peng et al., 2023) are used as the instruction dataset     Jang et al. (2023), we use the same 50 instances from Koala
+to generate rollouts, collect pairwise feedback data, and PPO      evaluation(Geng et al., 2023) and test the model's ability to
+training. We utilize GPT-4 to simulate human annotators            generate answers in different groups of users' preferences.
+with preference prompts described in Table 4 in Appendix           We run pairwise evaluations by GPT-4 using AlpacaFarm
+F. We divide the datasets into groups of human users. Each         codebase(Dubois et al., 2023) and use the win rate to the
+group has 40 users, which are split into 30 users in training      base Tulu2-7B model as the metric. Our results in Table
+data and 10 users in testing data. For the experiments in          2 and Table 3 show that MaxMin alignment keeps a high
+this subsection, we use Tulu2-7B (Ivison et al., 2023) as the      win rate while the models trained by PPO with a single
+base model. For each dataset, P1, P2, and P3, we mix the           reward model on biased datasets will have a relatively poor
+training user groups to build the simulation dataset. We have      performance on the minority data representing minority user
+60 users in training data which are mixed from two different       groups.
+groups with diverse preferences. The original distribution is
+that users are evenly distributed in two clusters. Then, we        6. Conclusions
+use the EM algorithm to train |U|= 2 reward models until
+we converge. Update u, u = 1, · · · , |U| by minimizing the        In this work, we critically examine the limitations of the
+negative log-likelihood loss (2). Then, trained model is used      single-reward RLHF framework, particularly its insuffi-
+to assign clusters to users in testing data.                       ciency in addressing the diversity of human preferences,
+                                                                   leading to an impossibility result for alignment with diverse
+5.2.1. MAIN RESULTS                                                preferences. To achieve a socially fair alignment in diverse
+                                                                   human preference settings, we introduce a novel approach
+Impossibility of Single Reward Model. When the user                called MaxMin-RLHF, which learns a max-min policy over
+groups are biased (divided into majority and minority groups       a distribution of reward functions to achieve a more equi-
+based on the preference dataset), the single reward model          table model alignment. Our experiments demonstrate the
+fails to capture the preferences of minority user groups.
+We test on preference dataset P1A/P1B representing two             Method  P1A     P1B    Method  P2A     P2B
+user groups and adjust the ratio of the number of users from
+group P1A and group P1B. Table 1 summarizes the accuracy           MaxMin  57.50   60.00  MaxMin  54.50   56.00
+for the majority group and minority group, as well as the             1:1  56.00   51.97     1:1  53.73   54.00
+accuracy on the total data. Here, low accuracy means that             2:1  57.78   44.00     2:1  55.55   51.72
+the alignment with the minority user group will be poor after         6:1  54.81   48.00     6:1  52.14   49.40
+the PPO step since the reward model itself is not accurate.          10:1  55.11   45.08    10:1  53.96   45.98
+
+Reward Learning with EM (Algorithm 2). Following the               Table 3: Pairwise winrate (%) on P1-P2 using GPT-4.
+procedures in the experiment setup, we get similar and good
+results on all three datasets, as shown in Figure 6. From the
+
+                                                                8
+MaxMin Approach to Align with Diverse Human Preferences
+
+effectiveness of MaxMin-RLHF in producing socially fairer          Bai, Y., Jones, A., Ndousse, K., Askell, A., Chen, A., Das-
+outcomes, highlighting the need for more inclusive strate-            Sarma, N., Drain, D., Fort, S., Ganguli, D., Henighan, T.,
+gies in RLHF methodologies.                                           et al. Training a helpful and harmless assistant with rein-
+                                                                      forcement learning from human feedback. arXiv preprint
+Impact Statement                                                      arXiv:2204.05862, 2022a.
+
+The primary objective of this work is to highlight the limita-     Bai, Y., Kadavath, S., Kundu, S., Askell, A., Kernion, J.,
+tions of the existing alignment techniques in representing           Jones, A., Chen, A., Goldie, A., Mirhoseini, A., McKin-
+diverse opinions and preferences. Our research is one of the          non, C., Chen, C., Olsson, C., Olah, C., Hernandez, D.,
+first to formally highlight the above limitation with mathe-          Drain, D., Ganguli, D., Li, D., Tran-Johnson, E., Perez,
+matical and empirical demonstrations. Finally, our research           E., Kerr, J., Mueller, J., Ladish, J., Landau, J., Ndousse,
+demonstrates a first step towards equitable alignment with            K., Lukosuite, K., Lovitt, L., Sellitto, M., Elhage, N.,
+diverse preferences. The findings of our work would encour-           Schiefer, N., Mercado, N., DasSarma, N., Lasenby, R.,
+age and foster further research in the domain of alignment            Larson, R., Ringer, S., Johnston, S., Kravec, S., Showk,
+under diversity, ensuring the current AI models is not biased         S. E., Fort, S., Lanham, T., Telleen-Lawton, T., Conerly,
+towards specific minority groups.                                    T., Henighan, T., Hume, T., Bowman, S. R., Hatfield-
+                                                                      Dodds, Z., Mann, B., Amodei, D., Joseph, N., McCan-
+Acknowledgements                                                      dlish, S., Brown, T., and Kaplan, J. Constitutional ai:
+                                                                      Harmlessness from ai feedback, 2022b.
+Chakraborty and Huang are supported by DARPA Trans-
+fer from Imprecise and Abstract Models to Autonomous               Bakker, M. A., Chadwick, M. J., Sheahan, H. R., Tessler,
+Technologies (TIAMAT) 80321, National Science Foun-                   M. H., Campbell-Gillingham, L., Balaguer, J., McAleese,
+dation NSF-IIS-2147276 FAI, DOD-ONR-Office of Naval                   N., Glaese, A., Aslanides, J., Botvinick, M. M., and
+Research under award number N00014-22-1-2335, DOD-                    Summerfield, C. Fine-tuning language models to find
+AFOSR-Air Force Office of Scientific Research under award             agreement among humans with diverse preferences, 2022.
+number FA9550-23-1-0048, DOD-DARPA-Defense Ad-
+vanced Research Projects Agency Guaranteeing AI Robust-            Bradley, R. A. and Terry, M. E. Rank analysis of incom-
+ness against Deception (GARD) HR00112020007, Adobe,                   plete block designs: I. the method of paired comparisons.
+Capital One and JP Morgan faculty fellowships. Manocha               Biometrika, 39(3/4):324­345, 1952.
+and Bedi are supported by Army Cooperative Agreement
+W911NF2120076. Mengdi Wang acknowledges the support                Casper, S., Davies, X., Shi, C., Gilbert, T. K., Scheurer, J.,
+by NSF IIS-2107304, NSF CPS-2312093, ONR 1006977                      Rando, J., Freedman, R., Korbak, T., Lindner, D., Freire,
+and Genmab. We also thank Rui Yang and Han Zhao for                   P., et al. Open problems and fundamental limitations
+pointing out a bug in the proof of Lemma 1 in the previous            of reinforcement learning from human feedback. arXiv
+version.                                                              preprint arXiv:2307.15217, 2023.
+
+References                                                         Chakraborty, S., Bedi, A., Koppel, A., Wang, H., Manocha,
+                                                                      D., Wang, M., and Huang, F. Parl: A unified framework
+Aroyo, L. and Welty, C. Truth is a lie: Crowd truth and the           for policy alignment in reinforcement learning. In The
+   seven myths of human annotation. AI Magazine, 36(1):              Twelfth International Conference on Learning Represen-
+  15­24, Mar. 2015. doi: 10.1609/aimag.v36i1.2564. URL                tations (ICLR), 2024.
+   https://ojs.aaai.org/aimagazine/index.
+   php/aimagazine/article/view/2564.                               Chen, Z., Deng, Y., Yuan, H., Ji, K., and Gu, Q. Self-play
+                                                                      fine-tuning converts weak language models to strong lan-
+Aroyo, L., Diaz, M., Homan, C., Prabhakaran, V., Taylor,              guage models. arXiv preprint arXiv:2401.01335, 2024.
+   A., and Wang, D. The reasonable effectiveness of diverse
+   evaluation data, 2023a.                                         Cho, W. S., Zhang, P., Zhang, Y., Li, X., Galley, M.,
+                                                                      Brockett, C., Wang, M., and Gao, J. Towards co-
+Aroyo, L., Taylor, A. S., Diaz, M., Homan, C. M., Parrish,            herent and cohesive long-form text generation. arXiv
+   A., Serapio-Garcia, G., Prabhakaran, V., and Wang, D.              preprint arXiv:1811.00511, 2018. URL https://
+   Dices dataset: Diversity in conversational ai evaluation           ar5iv.org/abs/1811.00511.
+   for safety, 2023b.
+                                                                   Christian, B. The alignment problem: Machine learning
+                                                                      and human values. WW Norton & Company, 2020.
+
+                                                                   Denton, E., D´iaz, M., Kivlichan, I., Prabhakaran, V., and
+                                                                      Rosen, R. Whose ground truth? accounting for individual
+
+                                                                9
+MaxMin Approach to Align with Diverse Human Preferences
+
+   and collective identities underlying dataset annotation,         Meeting of the Association for Computational Linguis-
+   2021a.                                                            tics: Human Language Technologies, pp. 142­150, Port-
+                                                                     land, Oregon, USA, June 2011. Association for Com-
+Denton, E., D´iaz, M., Kivlichan, I., Prabhakaran, V., and           putational Linguistics. URL http://www.aclweb.
+   Rosen, R. Whose ground truth? accounting for individual           org/anthology/P11-1015.
+   and collective identities underlying dataset annotation,
+   2021b.                                                         Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright,
+                                                                     C. L., Mishkin, P., Zhang, C., Agarwal, S., Slama, K.,
+Dubois, Y., Li, X., Taori, R., Zhang, T., Gulrajani, I., Ba,         Ray, A., Schulman, J., Hilton, J., Kelton, F., Miller, L.,
+  J., Guestrin, C., Liang, P., and Hashimoto, T. B. Alpaca-          Simens, M., Askell, A., Welinder, P., Christiano, P., Leike,
+   farm: A simulation framework for methods that learn              J., and Lowe, R. Training language models to follow
+   from human feedback. arXiv preprint arXiv:2305.14387,             instructions with human feedback, 2022a.
+   2023.
+                                                                  Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright,
+Geng, X., Gudibande, A., Liu, H., Wallace, E., Abbeel, P.,           C. L., Mishkin, P., Zhang, C., Agarwal, S., Slama, K.,
+   Levine, S., and Song, D. Koala: A dialogue model for              Ray, A., Schulman, J., Hilton, J., Kelton, F., Miller, L.,
+   academic research. Blog post, April, 1, 2023.                     Simens, M., Askell, A., Welinder, P., Christiano, P., Leike,
+                                                                    J., and Lowe, R. Training language models to follow
+Ivison, H., Wang, Y., Pyatkin, V., Lambert, N., Peters, M.,          instructions with human feedback, 2022b.
+   Dasigi, P., Jang, J., Wadden, D., Smith, N. A., Beltagy,
+   I., et al. Camels in a changing climate: Enhancing lm          Ovadya, A. 'generative ci' through collective response
+   adaptation with tulu 2. arXiv preprint arXiv:2311.10702,          systems, 2023.
+   2023.
+
+Jang, J., Kim, S., Lin, B. Y., Wang, Y., Hessel, J., Zettle-      Peng, B., Li, C., He, P., Galley, M., and Gao, J. Instruc-
+   moyer, L., Hajishirzi, H., Choi, Y., and Ammanabrolu, P.          tion tuning with gpt-4. arXiv preprint arXiv:2304.03277,
+   Personalized soups: Personalized large language model             2023.
+   alignment via post-hoc parameter merging. arXiv preprint
+   arXiv:2310.11564, 2023.                                        Radford, A., Wu, J., Child, R., Luan, D., Amodei,
+                                                                     D., and Sutskever, I. Language models are unsu-
+Ji, J., Liu, M., Dai, J., Pan, X., Zhang, C., Bian, C., Zhang,       pervised multitask learners. 2019. URL https:
+   C., Sun, R., Wang, Y., and Yang, Y. Beavertails: Towards         //api.semanticscholar.org/CorpusID:
+   improved safety alignment of llm via a human-preference          160025533.
+   dataset, 2023a.
+                                                                  Rafailov, R., Sharma, A., Mitchell, E., Ermon, S., Manning,
+Ji, X., Wang, H., Chen, M., Zhao, T., and Wang, M.                   C. D., and Finn, C. Direct preference optimization: Your
+   Provable benefits of policy learning from human pref-             language model is secretly a reward model, 2023.
+   erences in contextual bandit problems. arXiv preprint
+   arXiv:2307.12975, 2023b. URL https://ar5iv.                    Rame´, A., Couairon, G., Shukor, M., Dancette, C., Gaya,
+   org/abs/2307.12975.                                              J.-B., Soulier, L., and Cord, M. Rewarded soups: towards
+                                                                     pareto-optimal alignment by interpolating weights fine-
+Kaufmann, T., Weng, P., Bengs, V., and Hu¨llermeier, E. A            tuned on diverse rewards, 2023.
+   survey of reinforcement learning from human feedback,
+   2023.                                                          Sandri, M., Leonardelli, E., Tonelli, S., and Jezek, E. Why
+                                                                     don't you do it right? analysing annotators' disagree-
+Kovac, G., Sawayama, M., Portelas, R., Colas, C., Dominey,           ment in subjective tasks. In Vlachos, A. and Augen-
+   P. F., and Oudeyer, P.-Y. Large language models as super-         stein, I. (eds.), Proceedings of the 17th Conference of
+   positions of cultural perspectives, 2023.                         the European Chapter of the Association for Computa-
+                                                                     tional Linguistics, pp. 2428­2441, Dubrovnik, Croatia,
+Li, Z., Yang, Z., and Wang, M. Reinforcement learning                May 2023. Association for Computational Linguistics.
+  with human feedback: Learning dynamic choices via                  doi: 10.18653/v1/2023.eacl-main.178. URL https:
+   pessimism. arXiv preprint arXiv:2305.18438, 2023. URL            //aclanthology.org/2023.eacl-main.178.
+   https://ar5iv.org/abs/2305.18438.
+
+Maas, A. L., Daly, R. E., Pham, P. T., Huang, D., Ng,             Santurkar, S., Durmus, E., Ladhak, F., Lee, C., Liang, P.,
+  A. Y., and Potts, C. Learning word vectors for sen-                and Hashimoto, T. Whose opinions do language models
+   timent analysis. In Proceedings of the 49th Annual                reflect? arXiv preprint arXiv:2303.17548, 2023.
+
+                                                              10
+MaxMin Approach to Align with Diverse Human Preferences
+
+Sap, M., Swayamdipta, S., Vianna, L., Zhou, X., Choi,              Ziegler, D. M., Stiennon, N., Wu, J., Brown, T. B., Radford,
+  Y., and Smith, N. A. Annotators with attitudes: How                A., Amodei, D., Christiano, P., and Irving, G. Fine-tuning
+   annotator beliefs and identities bias toxic language de-           language models from human preferences, 2020.
+   tection. In Carpuat, M., de Marneffe, M.-C., and
+   Meza Ruiz, I. V. (eds.), Proceedings of the 2022 Con-
+   ference of the North American Chapter of the Association
+   for Computational Linguistics: Human Language Tech-
+   nologies, pp. 5884­5906, Seattle, United States, July
+   2022. Association for Computational Linguistics. doi:
+  10.18653/v1/2022.naacl-main.431. URL https://
+   aclanthology.org/2022.naacl-main.431.
+
+Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and
+   Klimov, O. Proximal policy optimization algorithms.
+   arXiv preprint arXiv:1707.06347, 2017.
+
+Sen, A. Collective Choice and Social Welfare. Har-
+  vard University Press, Cambridge, MA and London,
+   England, 2017. ISBN 9780674974616. doi: doi:10.
+  4159/9780674974616. URL https://doi.org/10.
+  4159/9780674974616.
+
+Stiennon, N., Ouyang, L., Wu, J., Ziegler, D. M., Lowe,
+   R., Voss, C., Radford, A., Amodei, D., and Christiano, P.
+   Learning to summarize from human feedback, 2022a.
+
+Stiennon, N., Ouyang, L., Wu, J., Ziegler, D. M., Lowe,
+   R., Voss, C., Radford, A., Amodei, D., and Christiano, P.
+   Learning to summarize from human feedback, 2022b.
+
+Stiennon, N., Ouyang, L., Wu, J., Ziegler, D. M., Lowe,
+   R., Voss, C., Radford, A., Amodei, D., and Christiano, P.
+   Learning to summarize from human feedback, 2022c.
+
+Vogels, E. A. The state of online harassment. Pew Research
+  Center, 13:625, 2021.
+
+Wang, Y., Zhong, W., Li, L., Mi, F., Zeng, X., Huang,
+  W., Shang, L., Jiang, X., and Liu, Q. Aligning large
+   language models with human: A survey. arXiv preprint
+   arXiv:2307.12966, 2023.
+
+Zhang, Z., Su, Y., Yuan, H., Wu, Y., Balasubramanian, R.,
+  Wu, Q., Wang, H., and Wang, M. Unified off-policy
+   learning to rank: a reinforcement learning perspective.
+   arXiv preprint arXiv:2306.07528, 2023. URL https:
+  //ar5iv.org/abs/2306.07528.
+
+Zhu, B., Jiao, J., and Jordan, M. I. Principled reinforcement
+   learning with human feedback from pairwise or k-wise
+   comparisons, 2023.
+
+Ziegler, D. M., Stiennon, N., Wu, J., Brown, T. B., Radford,
+  A., Amodei, D., Christiano, P., and Irving, G. Fine-tuning
+   language models from human preferences. arXiv preprint
+   arXiv:1909.08593, 2019.
+
+                                                               11
+                        MaxMin Approach to Align with Diverse Human Preferences
+
+Contents
+
+1 Introduction                                                                   1
+
+2 Preliminaries                                                                  2
+
+3 An Impossibility Result for Single Reward RLHF with Diverse Preferences        2
+
+3.1 Diversity in Human Preferences . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 3
+
+3.2 Reward Mismatch Due to Diversity . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 4
+
+3.3 An Impossibility Results of Alignment . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 5
+
+4 MaxMin-RLHF: One Possibility                                                   6
+
+5 Experimental Results                                                           6
+
+5.1 Small Scale Experiments (with GPT-2): Sentiment and Conciseness Alignment . . . . . . . . . . . . . . 7
+
+5.2 Large Scale Experments (with Tulu2-7B) . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+
+5.2.1 Main Results . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 8
+
+6 Conclusions                                                                    8
+
+A Notations                                                                      13
+
+B A detailed Context of Related Works                                            13
+
+C Preliminary Results                                                            13
+
+D Proof of Lemma 1                                                               16
+
+E Proof of Theorem 1                                                             18
+
+F Additional Details of the Experiments                                          19
+
+G Additional Experiments in Robotics Navigation Tasks                            19
+
+                                         12
+                        MaxMin Approach to Align with Diverse Human Preferences
+
+A. Notations
+
+We define the various notations in this table first.
+
+          Notations                                          Description
+               x                                               prompt
+              X
+               y                                           set of prompts
+             ref                               output text generated by the LLM
+                     direct supervised fine-tuning model, takes x as input and generates y as output
+           (y1, y2)
+               h                                 output pair generated by LLM
+              D                                                 human
+              
+                                      dataset which has the data of the form (x, y1, y2)
+              H                                      reward model parameter
+                                                    language model parameter
+                                                     set of human population
+
+B. A detailed Context of Related Works
+
+Reinforcement Learning from Human Feedback. RL methods, such as policy gradient, applied to train language models
+for long-form generation (Cho et al., 2018). The current RLHF approaches (Stiennon et al., 2022b; Ziegler et al., 2020; Zhu
+et al., 2023) involve training a reward model based on human preference feedback and then fine-tuning the language model
+using proximal policy optimization (PPO) (Schulman et al., 2017). The PPO algorithm helps to learn a model that produces
+responses that maximize the reward (Ouyang et al., 2022b; Bai et al., 2022a). Besides PPO, DPO (Direct Preference
+Optimization, Rafailov et al. (2023)) directly trains the large language model using human preferences without training the
+reward model. A self-play-based approach such as SPIN (Chen et al., 2024) is similar to DPO but has an iterative framework.
+However, most of the existing alignment approaches only consider the average preference by human annotators and ignore
+the inherent diversity among human preferences (Casper et al., 2023; Kaufmann et al., 2023). A number of theoretical
+studies have analyzed the efficiency and benefits for reinforcement learning using preference data (Ji et al., 2023b; Zhang
+et al., 2023; Li et al., 2023). (Chakraborty et al., 2024) proposed a bilevel reinforcement learning framework for policy
+alignment. Recently (Santurkar et al., 2023) created a dataset for evaluating the alignment of language models with 60 US
+demographic groups over a wide range of topics and found substantial misalignment between a selanguage models and
+those groups. It emphasizes the criticality of considering diversity while performing alignment.
+
+Diversity in Human Preferences. Here, we briefly review the literature highlighting the reasons for diversity in the context
+of LLMs. Diverse human preferences stem significantly from various factors related to social and cultural backgrounds
+(Aroyo et al., 2023b;a; Denton et al., 2021a). The key factors contributing to this diversity include (i) socio-demographic
+backgrounds, including race, ethnicity, age, and gender shape preferences. Gender differences, for example, influence
+sensitivity to online content, with women facing more online harassment (Vogels, 2021). (ii) Personal bias and context
+subjectivity, which affects the human preferences for controversial topics in interpreting language and divisive themes
+(Denton et al., 2021b; Sandri et al., 2023)). (iii) Imperfect preferences, which arises due to variations in expertise, training,
+or quality control leading to diverse preferences, with certain content inaccurately considered offensive by some groups
+(Sandri et al., 2023). (iii) Linguistic ambiguity & missing context, could lead to diversity because of words or phrases with
+multiple possible interpretations and without clear context (Sandri et al., 2023; Denton et al., 2021b; Sap et al., 2022).
+These factors collectively underscore the complexity of aligning LLM outputs with the diverse preferences of human users,
+demonstrating the importance of recognizing and addressing the multifaceted nature of user feedback.
+
+C. Preliminary Results
+
+We present the following preliminary results in the form of Lemma 2 and Lemma 3.
+
+Lemma 2.  The parametrized preference probability distribution p(y1   y2 | x) =              exp(r (y1 ,x))      under
+                                                                                  exp(r (y1 ,x))+exp(r (y2 ,x))
+
+                                                      13
+                                   MaxMin Approach to Align with Diverse Human Preferences
+
+the Bradley -Terry model (Bradley & Terry, 1952) is Lipschitz with respect to parameter . This implies that
+
+                                                 |p(z) - p (z)| Lp - ,                                                         (15)
+
+where z := (y1  y2 | x), Lp = 4D, and D denotes the upper bound on the feature representation (y, x) D
+for all (x, y).
+
+Proof. Let us start from the definition of p(y1  y2 | x) given by
+
+p(y1                  y2  |  x)  =             exp(r(y1, x))              =                       1                            (16)
+                                    exp(r(y1, x)) + exp(r(y2, x))                                                        .
+
+                                                                             1 + exp(-(r(y1, x) - (r(y2, x))
+
+From the definition of the Bradley-Terry preference model from equation (1) with the linear parametrization of the reward
+function as r(y, x) = , (y, x), we can write the equality in (16) as
+
+                                                                                1
+                             p(y1  y2 | x) = 1 + exp(-(, (y1, x) - , (y2, x))))
+
+                                                                    1
+                                                 = 1 + exp(-, (y1, y2, x)) ,                                                   (17)
+
+where we define (y1, y2, x) := (y1, x) - (y2, x) for the ease of notation. Next, differentiating both sides in (17)
+with respect to , we obtain
+
+p(y1           y2  |  x)  =  -(y1,  y2,  x)   ·  (1   exp(-, (y1, y2, x))
+                                                     + exp(-, (y1, y2, x)))2
+
+                          = -(y1, y2, x)                        1                                    1
+                                                 1 + exp(-, (y1, y2, x)) - (1 + exp(-, (y1, y2, x)))2                       .  (18)
+
+Taking the norm on both sides and applying Cauchy-Schwartz inequality, we get
+
+p(y1  y2 | x)  (y1, y2, x)                                          1                                   1
+                                                     1 + exp(-, (y1, y2, x)) + (1 + exp(-, (y1, y2, x)))2
+
+                              2(y1, y2, x).                                                                                    (19)
+
+From the definition of (y1, y2, x) and the boundedness of the feature representations, we note that (y1, y2, x)=
+(y1, x) - (y2, x) 2D. Hence, we obtain the final bound
+
+                                                 p(y1  y2 | x)  4D.                                                            (20)
+
+Hence proved.
+
+Lemma 3. The cross-entropy loss minimization for reward learning in step 2 in the RLHF pipeline (cf. (2)) leads
+
+to implicit weightage minimization among the user groups. Specifically, the loss function minimizes the distance to
+
+distribution p (z) =         |U |  (u)pu(z),  where    is  the  implicit  distribution  among  user  groups.
+                             u=1
+
+Proof of Lemma 3. From the equality in (7), we note that we can write p(y1  y2 | x) = Eu[pu (y1  y2 | x)]. With this
+notation, the loss function for reward learning in (8) can be written as
+
+LR(r, D) = -E(x,y1,y2)D Eu[pu (y1  y2 | x)] log p() + Eu[pu (y1  y2 | x)] log p() ,                                            (21)
+
+where the equation incorporates the individual user group's optimal pu (we denote the corresponding individual optimal
+reward parameter by u ) in the likelihood objective. As a first step, let us decompose (21) as
+
+LR(r, D)
+
+                                                                14
+                         MaxMin Approach to Align with Diverse Human Preferences
+
+             |U |                                              |U |
+
+=E(x,y1,y2)        [pu (y1  y2|x)(u)] log p() - [pu (y1  y2|x)(u) log pu(y1  y2|x)]
+
+             u=1                                            u=1
+
+                   |U |                                             |U |
+
+             + [pu (y1  y2|x)(u)] log p() - [pu(y1  y2|x)(u) log pu(y1  y2|x)]
+
+             u=1                                               u=1
+
+                   |U |                                                         |U |
+
+             + pu (y1  y2|x)(u) log pu (y1  y2|x) + pu(y1  y2|x)(u) log pu(y1  y2|x) , (22)
+
+                   u=1                                                       u=1
+
+where, we add and subtract u|U=|1[pu (y1  y2|x)(u) log pu(y1  y2|x)] and u|U=|1[pu (y1  y2|x)(u) log pu (y1 
+y2|x)] to get the final expression. After rearranging the terms in (22), we get
+
+                                     |U |
+
+LR(r, D) = - E(x,y1,y2)D                   [pu (y1  y2|x)(u)] log p() - log pu (y1  y2|x)                                                  (23)
+
+                               u=1
+
+                                    |U |
+
+                               + [pu (y1  y2|x)(u)] log p() - log pu (y1  y2|x)
+
+                                   u=1
+
+                                                |U |
+
+                                           + pu(y1  y2|x)(u) log pu (y1  y2|x)
+
+                                               u=1
+
+                                                |U |
+
+                                           + pu (y1  y2|x)(u) log pu (y1  y2|x)
+
+                                               u=1
+
+                               |U |                                  p(y1             y2|x)                                p(y1     y2|x)
+                                                                     pu(y1            y2|x)                                pu(y1    y2|x)
+= -Ex,y1,y2                   (u)          pu (y1    y2|x)  ·  log                           +    pu (y1    y2|x)  ·  log
+
+                         u=1
+
+             |U |                                                            |U |
+
+             + pu (y1  y2|x)(u) log pu (y1  y2|x) + pu(y1  y2|x)(u) log pu (y1  y2|x) .
+
+             u=1                                                             u=1
+
+Next, by utilizing the definition of KL-divergence and entropy to get the final expression as follows
+
+                                                              |U |
+
+                         LR(r, D) = E(x,y1,y2)D                      (u)KL(pu||p) + (u)H(pu) .                                             (24)
+
+                                                            u=1
+
+From the above objective in (24), we note that the objective is minimized for  when                         |U |  (u)KL(pu ||p)     =  0.  To
+                                                                                                            u=1
+
+proceed further, let us focus on the term  |U |    (u)KL(pu||p)           from  equation     (24)  as
+                                           u=1
+
+             |U |                          |U |                              pu(z)
+                                                                             p(z)
+                   (u)KL(pu||p) = (u)                   pu (z)       log
+
+             u=1                           u=1       z
+
+                                           |U |                                       |U |
+
+                                           = (u) pu(z) log pu (z) - (u) pu(z) log p(z)
+
+                                           u=1       z                                u=1          z
+
+                                           |U |                                             |U |
+
+                                           = - (u)H(pu) - log p(z) (u)pu (z) .                                                             (25)
+
+                                           u=1                            z              u=1
+
+                                                                                                  =p (z)
+
+From the definition of KL d in (7), it holds that
+
+                         |U |                           |U |
+
+                               (u)KL(pu ||p) = - (u)H(pu ) - p(z) log p(z).                                                                (26)
+
+                         u=1                            u=1                           z
+
+                                                               15
+                       MaxMin Approach to Align with Diverse Human Preferences
+
+Next, by adding and subtracting the term z p(z) log p(z) in the right hand side of (26), we get
+
+|U |                   |U |
+
+      (u)KL(pu||p) = - (u)H(pu) - p(z) log p(z) + p(z) log p(z) - p(z) log p(z) (27)
+
+u=1                    u=1                        z                        z                        z
+
+                                                |U |
+
+                       = -H(p) - (u)H(pu) + KL(p||p).
+
+                                               u=1
+
+Now, replacing this expression in the original implicit minimization objective in (24), we note that the minimization will be
+
+achieved when p (z) =  |U |  (u)pu (z)  for  all  z.  Hence,  the  reward  learning  objective  is  implicitly  learning  a  weighted
+                       u=1
+
+combination, which would lead to a significant gap in individual utilities, as discussed in the subsequent section.
+
+D. Proof of Lemma 1
+
+Proof. Let us reconsider the reward learning loss LR(r, D) whose empirical version is minimized to obtain parameter
+^MLE which is the approximation to the true parameter
+
+                              := arg min -E                        p (z) log p(z) .
+                                                  
+                                                              z
+
+As discussed in Sec. 3.2, due to the presence of diverse human user groups, a u which, is user group specific, will also
+exist. Our goal is to characterize the gap between ^MLE and u defined as
+
+                                                     ru := ^MLE - u ,                                                        (28)
+
+where the optimal u for the user group u is given by
+
+                             u          :=   arg  min  -E          pu (z) log p(z) .                                         (29)
+
+                                                              z
+
+Let us consider the idealistic setting of infinite data under which we know that MLE would converge to optimal  (Zhu
+et al., 2023). Hence, to proceed further, let us add subtract  in the right-hand side of (28), we get
+
+                                             ur = ^MLE -  + - u.                                                             (30)
+
+                                                       =0
+
+To derive the lower bound on the reward suboptimality ur , we begin with the definition of the total variation distance as
+
+                                                       1
+                             TV (pu , p ) = 2 |pu (z) - p (z)|.                                                              (31)
+
+                                                              z
+
+From the Lipschitzness of the preference probability as derived in Lemme 2, we can write
+
+                                        TV (pu , p )  4Du - ,                                                                (32)
+
+where the multiplication of 2 comes from the fact that there are two terms in the summation in the right side of (31) (cf. Sec.
+3.2). From the lower bound in (31) and the expression in (30), we obtain
+
+                                             ur         1          (pu , p ).                                                (33)
+                                                           TV
+
+                                                       4D
+
+Next, to obtain a lower bound on the term TV (pu , p ), we begin with the definition of the total variation distance
+T V (pu , pj ) as
+
+                                            1
+                       T V (pu , pj ) = 2 |pu (z) - pj (z)|
+
+                                                           z
+
+                                                           16
+                           MaxMin Approach to Align with Diverse Human Preferences
+
+                                              1
+                                      =               |pu (z) - p (z) + p (z) - pj (z)|
+                                         2
+                                                   z
+
+                                              1                                1
+                                                      |pu (z) - p (z)|+ 2                 |p (z) - pj (z)|
+                                         2
+                                                   z                                  z
+
+                                      = T V (pu , p ) + T V (pj , p ).                                                                     (34)
+
+In (34), the first equality holds from the definition of TV norm distance, the second equality holds because we add subtract
+p (z) inside the norm, we used triangle inequality for the third inequality, and then again utilize the definition of TV
+distance to write the final equality. After rearranging the terms in (34), we can write
+
+                                 T V (pu , p )  T V (pu , pj ) - T V (pj , p ).                                                            (35)
+
+From the definition of p (z) =  |U |  n(k)pk       (z)  and  from  the  property      of  TV  distance     and  Jensen's  inequality,  we  know
+                                k=1
+
+that T V (pj , p )   |U |  (k)T  V    (pk  ,  pj  ).  This   would  imply      that   -T V (pj , p )            -  |U |   (k)T  V  (pk  ,  pj  ),
+                     k=1                                                                                           k=1
+
+which we utilize in the right hand side of (35) to obtain
+
+                                                                                  |U |                                                     (36)
+
+                     T V (pu , p )  T V (pu , pj ) - (k)T V (pk , pj )
+
+                                                                                 k=1
+
+                                       = (1 - (u))T V (pu , pj ) - (k)T V (pk , pj ),
+
+                                                                                                    k=u
+
+which demonstrates the final expression of our lower bound on the term T V (pu , p ), which holds in general. Considering
+the second term in the right-hand side of (36), we can write
+
+                                      (k)T V (pk , pj )  T V (p , kmax(j) pj )                     (k),                                    (37)
+
+                                k= u                                                          k=u
+
+where T V (pkmax(j) , pj ) := maxk=u T V (pk , pj ) for a given j. From the definition of weights , we know that
+   k= u (k) = (1 - (u)), hence we can write
+
+                                     (k)T V (pk , pj )  (1 - (u))T V (p , kmax(j) pj ).                                                    (38)
+
+                                k= u
+
+Utilizing the upper bound of (38) into the right hand side of (36), we obtain
+
+                     T V (pu , p )  (1 - (u)) T V (pu , pj ) - T V (pkmax(j) , pj ) .                                                      (39)
+
+In the above expression, we note from the right-hand side that the lower bound in (39) holds for all u and j. This implies
+that the right-hand side in (39) will be either positive or negative for (u, j) pairs. But an interesting point to note here is
+that if the right-hand side is lower bounded away from zero, even for one (u, j) pair, that is an impossibility result, for
+the corresponding u which is the minority user. To proceed, as a first step, we find the most diverse user-group (i, j  U)
+defined as (i, j) be the pair of users with the maximum total variation distance, given by
+
+                                              (i,  j)   =  arg  max    T  V  (pi  ,  pj   ).                                               (40)
+
+                                                                i,jU
+
+We next define the minority user group u as the group with the largest total variation distance from the remaining user
+groups k  U, k = j, where we quantify this by computing the maximum distance to any other user-groups in the set U.
+
+Assuming there exists an
+
+                                u = arg max           max    TV(pi  ,  pk  ),  max    TV(pj   ,  pk  )  .                                  (41)
+
+                                                      k= j                      k= i
+
+Thus in this process, we select that user-group which is at maximum distance from the set U and denote as the minority
+user-group u. Assuming uniqueness in the minority group definition i.e we assume that there exists an unique user-group
+
+                                                                17
+                                  MaxMin Approach to Align with Diverse Human Preferences
+
+which is at a maximum distance to the group j, we have that T V (pu , pj ) > T V (p , kmax(j) pj ) for j = j. Using the
+equality on the right hand side of (33), we obtain
+
+                                                   -  u            (1  - (u))                                                            (42)
+                                                                                 ,
+
+                                                                       4D
+
+where  := T V (pu , pj ) - maxk=u T V (pk , pj ) > 0 (for j = j). Hence proved.
+
+E. Proof of Theorem 1
+
+Proof. We can define the alignment gap of RLHF model RLHF to a specific user group u as
+
+                                      Align-Gap(RLHF) := Fru (u) - Fru (RLHF).                                                           (43)
+
+We note that in this specific RLHF setting under the KL-based regularization, the objective -Fr () satisfies strong
+convexity w.r.t  with strong convexity parameter µ = 1, hence it holds that
+
+                                      Align-Gap(RLHF)                  1      -  u 2 .                                                   (44)
+                                                                       2
+
+Now  utilizing  that  log((y/x))  is  Lipschitz  continuous  with  parameter  L     =  1  ,  under  the  condition  that  there  exists  some
+                                                                                       c
+
+c > 0 such that (y|x)  c for all x, y, we get
+
+                                      Align-Gap(RLHF)            1 log        -     log u2.                                              (45)
+                                                                2L
+
+From the results in (Rafailov et al., 2023), we can derive an analytical mapping from reward functions to optimal policies
+for the KL-constrained reward maximization objective as denied in (11) as :
+
+                                                   1                             1
+                                      r(y | x) = Z(x) ref(y | x) exp               r(y, x)                                               (46)
+                                                                                 
+
+where r is the optimal policy under the reward r and Z(x) is the partition function given as Z(x) = y ref(y |
+
+x) exp  1  r(y,  x)   .  Note that such an equivalence is specific to the RLHF problem under the Bradley Terry preference
+        
+
+model as shown in (Rafailov et al., 2023). Next, replacing equation (46) in the equation (45), we get
+
+                                      Align-Gap(RLHF)              1          -     ru 2                                                 (47)
+                                                                2L2 r
+
+                                                             =     1  2  ,          -  u 2.
+                                                                2L
+
+As stated in (17), under the linearly parametrized reward function, we have r(y, x) = , (y, x), where the pa-
+rameter   Rd and similarly (y, x)  Rd. Let (x, y)  Rn and we denote the feature matrix   Rn×d as
+ T = (y1, x1) (y2, x2) · · · (yn, xn) , replacing in (47), we get the final expression. Next, expanding the
+
+norm on the right hand side, we obtain
+
+                                  Align-Gap(RLHF)       1          (   -  u )T   T  (        -  u).                                      (48)
+                                                     2L  2
+
+Next we lower-bound the matrix norm of T   Rd×d with the minimum eigen value  as
+
+                                      Align-Gap(RLHF)                     2      -  u2,                                                  (49)
+                                                                   4L 
+
+                                                                18
+            MaxMin Approach to Align with Diverse Human Preferences
+
+where we obtain the lower bound in terms of the reward suboptimality. From the statement of Lemma 1, we can lower
+bound the right hand side in (49) as follows
+
+            Align-Gap(RLHF)                           (1 - (u))                    ,                                (50)
+                                               4L  2     16D2
+
+where  := T V (pu , pj ) - maxk=u T V (pk , pj ) > 0. Hence proved.
+
+F. Additional Details of the Experiments
+
+In this section, we provide additional details of the experiments in Section 5.
+                                                         Table 4: Dataset Summary
+
+User Group                                                  Preference Prompt
+
+    P1A         Generate/Choose a response that can be easily understood by an elementary school student.
+    P1B         Generate/Choose a response that only a PhD Student in that specific field could understand.
+    P2A
+    P2B              Generate/Choose a response that is concise and to the point, without being verbose.
+    P3A     Generate/Choose a response that is very informative, without missing any background information.
+    P3B
+                Generate/Choose a response that is friendly, witty, funny, and humorous, like a close friend.
+                              Generate/Choose a response (that answers) in an unfriendly manner.
+
+(a) Testing Distribution on Dataset P1A/P1B                                        (b) Accuracy on Dataset P1A/P1B
+
+            Figure 6: Results on Dataset P1A/P1B.
+
+G. Additional Experiments in Robotics Navigation Tasks
+
+In this section, we show that the proposed ideas are well extendable to reinforcement learning in general. We show the
+performance of MaxMin alignment with single reward RLHF on simple gridworld navigation in Figure 7.
+
+                                             19
+                MaxMin Approach to Align with Diverse Human Preferences
+
+(a) Grid world  (b) Single Reward RLHF 1 (c) Single Reward RLHF 2 (d) MaxMin RLHF (ours)
+
+Figure 7: (a) This figure shows a GridWorld navigation scenario where say a government supported vehicle which needs to
+distribute goods among the two groups denoted by green and orange boxes. In the above figure, (b) shows the trajectory
+when only green user preferences are considered to decide the vehicle path. (c) shows the trajectory when only green user
+preferences are considered to decide the vehicle path. (d) shows the result for our proposed formulation, where our goal is to
+maximize the social utility, which makes sure to develop a robust solution to satisfy all user preferences.
+
+                20
+

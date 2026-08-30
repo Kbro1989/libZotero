@@ -1,0 +1,764 @@
+                                        Up or Down? Adaptive Rounding for Post-Training Quantization
+
+                                        Markus Nagel * 1 Rana Ali Amjad * 1 Mart van Baalen 1 Christos Louizos 1 Tijmen Blankevoort 1
+
+                                                                Abstract                               cations, and even dedicated low-power hardware.
+
+arXiv:2004.10568v2 [cs.LG] 30 Jun 2020        When quantizing neural networks, assigning each          One effective way to optimize neural networks for infer-
+                                              floating-point weight to its nearest fixed-point         ence is neural network quantization (Krishnamoorthi, 2018;
+                                              value is the predominant approach. We find that,         Guo, 2018). In quantization, neural network weights and
+                                              perhaps surprisingly, this is not the best we can        activations are kept in a low-bit representation for both
+                                              do. In this paper, we propose AdaRound, a bet-           memory transfer and calculations in order to reduce power
+                                              ter weight-rounding mechanism for post-training          consumption and inference time. The process of quantizing
+                                              quantization that adapts to the data and the task        a network generally introduces noise, which results in a loss
+                                              loss. AdaRound is fast, does not require fine-           of performance. Various prior works adapt the quantization
+                                              tuning of the network, and only uses a small             procedure to minimize the loss in performance while going
+                                              amount of unlabelled data. We start by theo-             as low as possible in the number of bits used.
+                                              retically analyzing the rounding problem for a
+                                              pre-trained neural network. By approximating the         As Nagel et al. (2019) explained, the practicality of neu-
+                                              task loss with a Taylor series expansion, the round-     ral network quantization methods is important to take
+                                              ing task is posed as a quadratic unconstrained bi-       into consideration. Although many methods exist that do
+                                              nary optimization problem. We simplify this to a         quantization-aware training (Jacob et al., 2018; Louizos
+                                              layer-wise local loss and propose to optimize this       et al., 2019) and get excellent results, these methods require
+                                              loss with a soft relaxation. AdaRound not only           a user to spend significant time on re-training models and
+                                              outperforms rounding-to-nearest by a significant         hyperparameter tuning.
+                                              margin but also establishes a new state-of-the-art
+                                              for post-training quantization on several networks       On the other hand, much attention has recently been dedi-
+                                              and tasks. Without fine-tuning, we can quantize          cated to post-training quantization methods (Nagel et al.,
+                                              the weights of Resnet18 and Resnet50 to 4 bits           2019; Cai et al., 2020; Choukroun et al., 2019; Banner et al.,
+                                              while staying within an accuracy loss of 1%.             2019), which can be more easily applied in practice. These
+                                                                                                       types of methods allow for network quantization to happen
+                                        1. Introduction                                                on-the-fly when deploying models, without the user of the
+                                                                                                       model spending time and energy on quantization. Our work
+                                        Deep neural networks are being used in many real-world         focuses on this type of network quantization.
+                                        applications as the standard technique for solving tasks in
+                                        computer vision, machine translation, voice recognition,       Rounding-to-nearest is the predominant approach for all
+                                        ranking, and many other domains. Owing to this success
+                                        and widespread applicability, making these neural networks     neural network weight quantization work that came out thus
+                                        efficient has become an important research topic. Improved
+                                        efficiency translates into reduced cloud-infrastructure costs  far. This means that the weight vector w is rounded to the
+                                        and makes it possible to run these networks on heteroge-
+                                        neous devices such as smartphones, internet-of-things appli-   nearest representable quantization grid value in a fixed-point
+
+                                           *Equal contribution 1Qualcomm AI Research, an initia-       grid by
+                                        tive of Qualcomm Technologies, Inc.. Correspondence to:
+                                        Markus Nagel <markusn@qti.qualcomm.com>, Rana Ali Am-                   w = s · clip  w  , n, p ,               (1)
+                                        jad <ramjad@qti.qualcomm.com>, Tijmen Blankevoort <tij-
+                                        men@qti.qualcomm.com>.                                                                s
+
+                                        Proceedings of the 37 th International Conference on Machine   where s denotes the quantization scale parameter and, n and
+                                        Learning, Vienna, Austria, PMLR 119, 2020. Copyright 2020 by   p denote the negative and positive integer thresholds for
+                                        the author(s).                                                 clipping. We could round any weight down by replacing ·
+                                                                                                       with · , or up using · . But, rounding-to-nearest seems
+                                                                                                       the most sensible, as it minimizes the difference per-weight
+                                                                                                       in the weight matrix. Perhaps surprisingly, we show that
+                                                                                                       for post-training quantization, rounding-to-nearest is not
+                                                                                                       optimal.
+
+                                                                                                       Our contributions in this work are threefold:
+                        Adaptive Rounding for Post-Training Quantization
+
+   · We establish a theoretical framework to analyze the          All the gradient and Hessian terms in this paper are of task
+      effect of rounding in a way that considers the charac-      loss L with respect to the specified variables. Ignoring
+      teristics of both the input data as well as the task loss.  the higher order terms in the Taylor series expansion is a
+      Using this framework, we formulate rounding as a per-       good approximation as long as w is not too large. As-
+      layer Quadratic Unconstrained Binary Optimization           suming the network is trained to convergence, we can also
+      (QUBO) problem.                                             ignore the gradient term as it will be close to 0. There-
+                                                                  fore, H(w) defines the interactions between different per-
+   · We propose AdaRound, a novel method that finds a             turbed weights in terms of their joint impact on the task loss
+      good solution to this per-layer formulation via a con-      L (x, y, w + w). The following toy example illustrates
+      tinuous relaxation. AdaRound requires only a small          how rounding-to-nearest may not be optimal.
+      amount of unlabelled data, is computationally efficient,
+      and applicable to any neural network architecture with      Example 1. Assume wT = [w1 w2] and
+      convolutional or fully-connected layers.
+                                                                  H(w) =   1   0.5  ,  (7)
+   · In a comprehensive study, we show that AdaRound de-                  0.5   1
+      fines a new state-of-the-art for post-training quantiza-
+      tion on several networks and tasks, including Resnet18,     then the increase in task loss due to the perturbation is
+      Resnet50, MobilenetV2, InceptionV3 and DeeplabV3.           (approximately) proportional to
+
+Notation We use x and y to denote the input and the target           wT · H(w) · w = w12 + w22 + w1w2. (8)
+variable, respectively. E [·] denotes the expectation operator.
+All the expectations in this work are w.r.t. x and y. Wi(,j)      For the terms corresponding to the diagonal entries w12
+denotes weight matrix (or tensor as clear from the context),      and w22, only the magnitude of the perturbations matters.
+with the bracketed superscript and the subscript denoting         Hence rounding-to-nearest is optimal when we only con-
+the layer and the element indices, respectively. We also use      sider these diagonal terms in this example. However, for
+w( ) to denote flattened version of W( ). All vectors are         the terms corresponding to the w1w2, the sign of the
+considered to be column vectors and represented by small          perturbation matters, where opposite signs of the two pertur-
+bold letters, e.g., z, while matrices (or tensors) are denoted    bations improve the loss. To minimize the overall impact of
+by capital bold letters, e.g., Z. Functions are denoted by        quantization on the task loss, we need to trade-off between
+f (·), except the task loss, which is denoted by L. Constants     the contribution of the diagonal terms and the off-diagonal
+are denoted by small upright letters, e.g., s.                    terms. Rounding-to-nearest ignores the off-diagonal contri-
+                                                                  butions, making it often sub-optimal.
+
+2. Motivation                                                     The previous analysis is valid for the quantization of any
+                                                                  parametric system. We show that this effect also holds for
+To gain an intuitive understanding for why rounding-to-           neural networks. To illustrate this, we generate 100 stochas-
+nearest may not be optimal, let's look at what happens when       tic rounding (Gupta et al., 2015) choices for the first layer
+we perturb the weights of a pretrained model. Consider a          of Resnet18 and evaluate the performance of the network
+neural network parametrized by the (flattened) weights w.         with only the first layer quantized. The results are presented
+Let w denote a small perturbation and L(x, y, w) denote           in Table 1. Among 100 runs, we find that 48 stochasti-
+the task loss that we want to minimize. Then                      cally sampled rounding choices lead to a better performance
+                                                                  than rounding-to-nearest. This implies that many round-
+E [L (x, y, w + w) - L (x, y, w)]          (2)                    ing solutions exist that are better than rounding-to-nearest.
+                                                                  Furthermore, the best among these 100 stochastic samples
+(a)  wT        · wL (x, y, w)                                     provides more than 10% improvement in the accuracy of the
+                                                                  network. We also see that accidentally rounding all values
+E                                                                 up, or all down, has an catastrophic effect. This implies that
+                                                                  we can gain a lot by carefully rounding weights when doing
+     +         1 wT  · w2 L (x, y, w) · w  (3)                    post-training quantization. The rest of this paper is aimed
+               2                                                  at devising a well-founded and computationally efficient
+                                                                  rounding mechanism.
+= wT · g(w) + 1 wT · H(w) · w,             (4)
+                     2                                            3. Method
+
+where (a) uses the second order Taylor series expansion.          In this section, we propose AdaRound, a new rounding pro-
+g(w) and H(w) denote the expected gradient and Hessian            cedure for post-training quantization that is theoretically
+
+of the task loss L w.r.t. w, i.e.,
+
+     g(w) = E [wL (x, y, w)]               (5)
+
+     H(w) = E 2wL(x, y, w) .               (6)
+                                  Adaptive Rounding for Post-Training Quantization
+
+       Rounding scheme                 Acc(%)
+
+       Nearest                           52.29
+       Ceil                                0.10
+       Floor                               0.10
+
+       Stochastic                 52.06±5.52
+       Stochastic (best)                 63.06
+
+Table 1. Comparison of ImageNet validation accuracy among dif-     Figure 1. Correlation between the cost in (13) vs ImageNet valida-
+ferent rounding schemes for 4-bit quantization of the first layer  tion accuracy (%) of 100 stochastic rounding vectors w for 4-bit
+of Resnet18. We report the mean and the standard deviation of      quantization of only the first layer of Resnet18.
+100 stochastic (Gupta et al., 2015) rounding choices (Stochastic)
+as well as the best validation performance among these samples
+(Stochastic (best)).
+
+well-founded and shows significant performance improve-            turn, implies that we assume a block diagonal H(w), where
+ment in practice. We start by analyzing the loss due to            each non-zero block corresponds to one layer. We thus end
+quantization theoretically. We then formulate an efficient         up with the following per-layer optimization problem
+per-layer algorithm to optimize it.
+
+3.1. Task loss based rounding                                                  g(w( ))T w( ) + 1 w( )T H(w( ))w( )
+                                                                                                     2
+When quantizing a pretrained NN, our aim is to minimize            arg min  E                                       .
+
+the performance loss incurred due to quantization. Assum-            w( )
+ing per-layer weight quantization1, the quantized weight
+wi( ) is                                                                                                   (12)
+
+       wi( )  wi( ),f loor, wi( ),ceil ,         (9)               As illustrated in Example 1, we require the second order
+
+where                                                              term to exploit the joint interactions among the weight per-
+                                                                   turbations. (12) is a QUBO problem since wi( ) are binary
+                                  wi( )                            variables (Kochenberger et al., 2014). For a converged pre-
+                                  s( )
+                                                                   trained model, the contribution of the gradient term for
+
+                                                                   optimization in (13) can be safely ignored. This results in
+
+       wi( ),floor = s( ) · clip         , n, p  (10)                       arg min E w( )T H(w( ))w( ) .  (13)
+
+                                                                            w( )
+
+and wi( ),ceil is similarly defined by replacing · with ·          To verify that (13) serves as a good proxy for optimizing
+and wi( ) = w( ) - wi( ) denotes the perturbation due to           task loss due to quantization, we plot the cost in (13) vs val-
+quantization. In this work we assume s( ) to be fixed prior        idation accuracy for 100 stochastic rounding vectors when
+to optimizing the rounding procedure. Finally, whenever we         quantizing only the first layer of Resnet18. Fig. 1 shows a
+optimize a cost function over the wi( ), the wi( ) can only        clear correlation between the two quantities. This justifies
+take two values specified in (9).                                  our approximation for optimization, even for 4 bit quantiza-
+                                                                   tion. Optimizing (13) show significant performance gains,
+Finding the optimal rounding procedure can be formulated           however its application is limited by two problems:
+as the following binary optimization problem
+                                                                   1. H(w( )) suffers from both computational as well mem-
+    arg min E [L (x, y, w + w) - L (x, y, w)] (11)                    ory complexity issues even for moderately sized layers.
+
+          w                                                        2. (13) is an NP-hard optimization problem. The com-
+                                                                      plexity of solving it scales rapidly with the dimen-
+Evaluating the cost in (11) requires a forward pass of the            sion of w( ), again prohibiting the application of (13)
+input data samples for each new w during optimization.                to even moderately sized layers (Kochenberger et al.,
+To avoid the computational overhead of repeated forward               2014).
+passes throught the data, we utilize the second order Taylor
+series approximation. Additionally, we ignore the interac-         In section 3.2 and section 3.3 we tackle the first and the
+tions among weights belonging to different layers. This, in        second problem, respectively.
+
+    1Note that our work is equally applicable for per-channel
+weight quantization.
+                                 Adaptive Rounding for Post-Training Quantization
+
+3.2. From Taylor expansion to local loss                                 et al. (2017), and various neural network quantization pa-
+                                                                         pers (albeit for tasks other than weight rounding), e.g., Wang
+To understand the cause of the complexity associated with                et al. (2018); Stock et al. (2020); Choukroun et al. (2019).
+H(w( )), let us look at its' elements. For two weights in the            However, unlike these works, we arrive at this objective in a
+same fully connected layer we have                                       principled way and conclude that optimizing the MSE, as
+                                                                         specified in (20), is the best we can do when assuming no
+          2L              L           · xj(  -1)                         knowledge of the rest of the network past the layer that we
+Wi(,j)Wm( ),o = Wm( ),o  zi( )                      (14)                 are optimizing. In the supplementary material we perform
+                                                    (15)                 an analogous analysis for convolutional layers.
+                =     2L      ·  xj(  -1)xo(  -1),
+                   z(i )z(m)                                             The optimization problem in (20) can be tackled by either
+                                                                         precomputing E x( -1)x( -1)T , as done in (19), and then
+where z( ) = W( )x( -1) are the preactivations for layer
+  and x( -1) denotes the input to layer . Writing this in                performing the optimization over Wk( ,): , or by performing
+                                                                         a single layer forward pass for each potential Wk( ,): during
+matrix formulation (for flattened w( )), we have (Botev                  the optimization procedure.
+
+et al., 2017)                                                            In section 5, we empirically verify that the constant diagonal
+                                                                         approximation of 2z( ) L does not negatively influence the
+H(w( )) = E x( -1)x( -1)T  z2( ) L ,                (16)                 performance.
+
+where  denotes Kronecker product of two matrices and                     3.3. AdaRound
+2z( ) L is the Hessian of the task loss w.r.t. z( ). It is clear
+from (16) that the complexity issues are mainly caused by                Solving (20) does not suffer from complexity issues associ-
+2z( ) L that requires backpropagation of second derivatives              ated with H(w( )). However, it is still an NP-hard discrete
+through the subsequent layers of the network. To tackle this,            optimization problem. Finding good (sub-optimal) solu-
+                                                                         tion with reasonable computational complexity can be a
+we make the assumption that the Hessian of the task loss                 challenge for larger number of optimization variables. To
+w.r.t. the preactivations, i.e., 2z( ) L is a diagonal matrix,           tackle this we relax (20) to the following continuous opti-
+denoted by diag 2z( ) Li,i . This leads to                               mization problem based on soft quantization variables (the
+                                                                         superscripts are the same as (20))
+  H(w( )) = E x( -1)x( -1)T  diag(2z( ) Li,i) . (17)
+
+Note that the approximation of H(w( )) expressed in (17) is                                            2
+not diagonal. Plugging (17) into our equation for finding
+the rounding vector that optimizes the loss (13), we obtain                     arg min Wx - Wx + freg (V) , (21)
+                                                                                                       F
+                                                                                      V
+
+                                                                         where  ·  2  denotes  the  Frobenius  norm  and  W  are  the
+                                                                                   F
+
+arg min   E 2z( ) Lk,k · Wk( ,): x( -1)x( -1)T Wk( ,): T                 soft-quantized weights that we optimize over
+                                                                   (18)
+ Wk( ,):                                                                           W = s · clip     W  + h (V) , n, p . (22)
+
+                                                                                                    s
+
+(=a) arg min    Wk( ,): E x( -1)x( -1)T Wk( ,): T   (19)                 In the case of a convolutional layer the Wx matrix multipli-
+                                                                         cation is replaced by a convolution. Vi,j is the continuous
+       Wk( ,):                                                           variable that we optimize over and h (Vi,j) can be any dif-
+                                                                         ferentiable function that takes values between 0 and 1, i.e.,
+= arg min E Wk( ,): x( -1) 2 ,                      (20)                 h (Vi,j)  [0, 1]. The additional term freg (V) is a dif-
+      Wk( ,):                                                            ferentiable regularizer that is introduced to encourage the
+                                                                         optimization variables h (Vi,j) to converge towards either
+where the optimization problem in (13) now decomposes                    0 or 1, i.e., at convergence h (Vi,j)  {0, 1}.
+
+into independent sub-problems in (18). Each sub-problem                  We employ a rectified sigmoid as h (Vi,j), proposed in
+deals with a single row Wk( ,): and (a) is the outcome of                (Louizos et al., 2018). The rectified sigmoid is defined as
+making a further assumption that z2( ) Li,i = ci is a con-
+stant independent of the input data samples. It is worthwhile                  h (Vi,j) = clip( (Vi,j) ( - ) + , 0, 1), (23)
+
+to note that optimizing (20) requires no knowledge of the                where (·) is the sigmoid function and,  and  are stretch
+                                                                         parameters, fixed to 1.1 and -0.1, respectively. The rec-
+subsequent layers and the task loss. In (20), we are simply              tified sigmoid has non-vanishing gradients as h (Vi,j) ap-
+                                                                         proaches 0 or 1, which helps the learning process when we
+minimizing the Mean Squared Error (MSE) introduced in
+the preactivations z( ) due to quantization. This is the same
+
+layer-wise objective that was optimized in several neural
+
+network compression papers, e.g., Zhang et al. (2016); He
+        Adaptive Rounding for Post-Training Quantization
+
+Figure 2. Effect of annealing b on regularization term (24).        Figure 3. Comparison of h (Vi,j) before (x-axis, corresponding to
+                                                                    floating point weights) vs after (y-axis) optimizing (21). We see
+encourage h (Vi,j) to move to the extremities. For regular-         that all h (Vi,j) have converged to 0 or 1. Top left and lower right
+ization we use                                                      quadrants indicate the weights that have different rounding using
+                                                                    (21) vs rounding-to-nearest.
+   freg (V) = 1 - |2h (Vi,j) - 1|,                            (24)
+                                                                    4. Background and related work
+   i,j
+                                                                    In the 1990s, with the resurgence of the field of neural
+where we anneal the parameter . This allows most of the             networks, several works designed hardware and optimiza-
+h (Vi,j) to adapt freely in the initial phase (higher ) to          tion methods for running low-bit neural networks on-device.
+improve the MSE and encourages it to converge to 0 or 1             Hammerstrom (1990) created hardware for 8 and 16-bit
+in the later phase of the optimization (lower ), to arrive at       training of networks, Holi & Hwang (1993) did an empiri-
+the binary solution that we are interested in. The effect of        cal analysis on simple neural networks to show that 8 bits
+annealing  is illustrated in Fig. 2. Fig. 3 shows how this          are sufficient in most scenarios, and Hoehfeld & Fahlman
+combination of rectified sigmoid and freg leads to many             (1992) developed a stochastic rounding scheme to push
+weights learning a rounding that is different from rounding         neural networks below 8 bits.
+to the nearest, to improve the performance, while ultimately
+converging close to 0 or 1.                                         More recently, much attention has gone to quantizing neural
+                                                                    networks for efficient inference. This is often done by sim-
+This method of optimizing (21) is a specific instance of            ulating quantization during training, as described in Jacob
+the general family of Hopfield methods used for binary              et al. (2018) and Gupta et al. (2015), and using a straight-
+constrained optimization problems. These types of methods           through estimator to approximate the gradients. Many meth-
+are commonly used as an efficient approximation algorithm           ods have since then extended these training frameworks.
+for large scale combinatorial problems (Hopfield & Tank,            Choi et al. (2018) learns the activations to obey a certain
+1985; Smith et al.).                                                quantization range, while Esser et al. (2020); Jain et al.
+                                                                    (2019) learn the quantization min and max ranges during
+To quantize the whole model, we optimize (21) layer-by-             training so that they do not have to be set manually. Louizos
+layer sequentially. However, this does not account for the          et al. (2019) also learn the grid and formulate a probabilistic
+quantization error introduced due to the previous layers. In        version of the quantization training procedure. Uhlich et al.
+order to avoid the accumulation of quantization error for           (2020) learn both the quantization grid, and the bit-width per
+deeper networks as well as to account for the activation            layer, resulting in automatic bit-width selection during train-
+function, we use the following asymmetric reconstruction            ing. Works like Kim et al. (2019); Mishra & Marr (2017)
+formulation                                                         exploit student-teacher training to improve quantized model
+                                                                    performance during training. Although quantization-aware
+        2                                                           training is potent and often gives good results, the process
+                                                                    is often tedious and time-consuming. Our work seeks to get
+arg min fa (Wx) - fa Wx^ + freg (V) , (25)                          high accuracy models without this hassle.
+        F
+V                                                                   Several easy-to-use methods for quantization of networks
+                                                                    without quantization-aware training have been proposed as
+where x^ is the layer's input with all preceding layers quan-       of recent. These methods are often referred to as post-
+tized and fa is the activation function. A similar formulation      training quantization methods. Krishnamoorthi (2018)
+of the loss has been used previously in (Zhang et al., 2016;        show several results of network quantization without fine-
+He et al., 2017), albeit for different purposes. (25) defines
+our final objective that we can optimize via stochastic gradi-
+ent descent. We call this algorithm AdaRound, as it adapts
+to the statistics of the input data as well as to (an approxi-
+mation of) the task loss. In section 5 we elaborate on the
+influence of our design choices as well as the asymmetric
+reconstruction loss on the performance.
+Adaptive Rounding for Post-Training Quantization
+
+tuning. Works like Banner et al. (2019); Choukroun et al.       Rounding                      First layer    All layers
+(2019) optimize the quantization ranges for clipping to find
+a better loss trade-off per-layer. Zhao et al. (2019) improve   Nearest                            52.29          23.99
+quantization performance by splitting channels into more        H(w) task loss (cf. (13))   68.62±0.17              N/A
+channels, increasing computation but achieving lower bit-       Local MSE loss (cf. (20))   69.39±0.04
+widths in the process. Lin et al. (2016); Dong et al. (2019)    Cont. relaxation (cf (21))  69.58±0.03     65.83±0.14
+set different bit-widths for different layers, through the in-                                             66.56±0.12
+formation of the per-layer SQNR or the Hessian. Nagel et al.
+(2019); Cai et al. (2020) even do away with the requirement     Table 2. Impact of various approximations and assumptions made
+of needing any data to optimize a model for quantization,       in section 3 on the ImageNet validation accuracy (%) for Resnet18.
+making their procedures virtually parameter and data-free.      N/A implies that the corresponding experiment was computation-
+These methods are all solving the same quantization prob-       ally infeasible.
+lem as in this paper, and some like Zhao et al. (2019) and
+Dong et al. (2019) could even be used in conjunction with       5.1. Ablation study
+AdaRound. We compare to the methods that improve weight
+quantization for 4/8 and 4/32 bit-widths without end-to-end     From task loss to local loss We make various approxi-
+fine-tuning, Banner et al. (2019); Choukroun et al. (2019);     mations and assumptions in section 3.1 and section 3.2 to
+Nagel et al. (2019), but leave out comparisons to the mixed-    simplify our optimization problem. In Table 2, we look at
+precision methods Cai et al. (2020); Dong et al. (2019) since   their impact systematically. First, we note that optimizing
+they improve networks on a different axis.                      based on the Hessian of the task loss (cf. (13)) provides
+                                                                a significant performance boost compared to rounding-to-
+5. Experiments                                                  nearest. This verifies that the Taylor expansion based round-
+                                                                ing serves as a much better alternative for the task loss when
+To evaluate the performance of AdaRound, we conduct             compared to rounding-to-nearest. Similarly, we show that,
+experiments on various computer vision tasks and models.        although moving from the optimization of Taylor expansion
+In section 5.1 we study the impact of the approximations and    of the task loss to the local MSE loss (cf. (20)) requires
+design choices made in section 3. In section 5.2 we compare     strong assumptions, it does not degrade the performance.
+AdaRound to other post-training quantization methods.           Unlike the Taylor series expansion, the local MSE loss
+                                                                makes it feasible to optimize all layers in the network. We
+Experimental setup For all experiments we absorb batch          use the cross-entropy method (Rubinstein, 1999) to solve
+normalization in the weights of the adjacent layers. We         the QUBO problems in (13) and (20), where we initialize
+use symmetric 4-bit weight quantization with a per-layer        the sampling distribution for the binary random variables
+scale parameter s( ) which is determined prior to the appli-    wi as in (Gupta et al., 2015)2. Finally, the continuous relax-
+cation of AdaRound. We set s so that it minimizes the MSE       ation for the local MSE optimization problem (cf. (21)) not
+||W - W||F2 , where W are the quantized weights obtained        only reduces the optimization time from several hours to a
+through rounding-to-nearest. In some ablation studies, we       few minutes but also slightly improves our performance.
+report results when quantizing only the first layer. This
+will be explicitly mentioned as "First layer". In all other     Design choices for AdaRound As discussed earlier, our
+cases, we have the weights of the whole network quantized
+using 4 bits. Unless otherwise stated, all activations are in   approach to solve (21) closely resembles a Hopfield method.
+FP32. Most experiments are conducted using Resnet18 (He
+et al., 2016) from torchvision. The baseline performance        These methods optimize h (Vi,j) =   Vi,j   with a ver-
+of this model with full precision weights and activations                                             T
+is 69.68%. In our experiments, we report the mean and
+standard deviation of the (top1) accuracy on the ImageNet       sion of gradient descent with respect to Vi,j, and annealing
+validation set, calculated using 5 runs with different initial
+seeds. To optimize AdaRound we use 1024 unlabeled im-           the temperature T (Hopfield & Tank, 1985; Smith et al.).
+ages from the ImageNet (Russakovsky et al., 2015) training
+set, Adam (Kingma & Ba, 2015) optimizer with default            This annealing acts as an implicit regularization that al-
+hyper-parameters for 10k iterations and a batch-size of 32,
+unless otherwise stated. We use Pytorch (Paszke et al., 2019)   lows h (Vi,j) to optimize for the MSE loss initially uncon-
+for all our experiments. It is worthwhile to note that the
+application of AdaRound to Resnet18 takes only 10 minutes       strained, while encouraging h (Vi,j) to converge towards
+on a single Nvidia GTX 1080 Ti.
+                                                                0 or 1 in the later phase of optimization. In Table 3 we
+
+                                                                show that even after an extensive hyper-parameter search
+
+                                                                for the annealing schedule of T , using the sigmoid function
+
+                                                                with our explicit regularization term (24) outperforms the
+
+                                                                classical method. Using explicit regularization also makes
+
+                                                                the optimization more stable, leading to lower variance as
+
+                                                                shown in Table 3. Furthermore, we see that the use of the
+
+                                                                rectified sigmoid also provides a consistent small improve-
+
+                                                                    2In the supplementary material we compare the performance
+                                                                of different QUBO solvers on our problem.
+                            Adaptive Rounding for Post-Training Quantization
+
+Rounding                 First layer    All layers                          Optimization                   Acc (%)
+
+Sigmoid + T annealing  69.31±0.21     65.22±0.67                            Nearest                           23.99
+Sigmoid + freg         69.58±0.03     66.25±0.15                            STE                        66.63±0.06
+Rect. sigmoid + freg   69.58±0.03     66.56±0.12                            AdaRound                   68.60±0.09
+
+Table 3. Impact of different design choices for optimizing (21), on   Table 5. Comparison between optimizing (25) using STE (without
+the ImageNet validation accuracy (%) for Resnet18.                    explicit regularization freg) vs AdaRound. We report ImageNet
+                                                                      validation accuracy (%) for Resnet18.
+
+Optimization                    Acc (%)                               Grid           Nearest AdaRound
+
+Layer wise                  66.56±0.12                                Min-Max              0.23         61.96±0.04
+Asymmetric                  68.37±0.07                                                    23.99         68.60±0.09
+Asymmetric + ReLU           68.60±0.09                                W-W      2          42.89         68.62±0.08
+                                                                               F
+                                                                                  2
+Table 4. The influence on the ImageNet validation accuracy (%)        Wx - Wx     F
+for Resnet18, by incorporating asymmetric reconstruction MSE
+loss and activation function in the rounding optimization objective.  Table 6. Comparison between various quantization grids in combi-
+                                                                      nation with rounding-to-nearest and AdaRound. We report Ima-
+                                                                      geNet validation accuracy (%) for Resnet18.
+
+ment in accuracy for different models.                                rounding-to-nearest, independent of the choice of the quan-
+
+Table 4 shows the gain of using the asymmetric reconstruc-            tization grid. Both MSE based approaches are superior to
+tion MSE (cf. section 3.3). We see that this provides a
+noticeable accuracy improvement when compared to (21).                the Min-Max method for determining the grid. Since there
+Similarly, accounting for the activation function in the opti-
+mization problem provides a small gain.                               is no clear winner between the two MSE formulations for
+                                                                                                                     2
+                                                                      AdaRound, we continue the use of  W-W          F  formula-
+
+                                                                      tion for all other experiments.
+
+Optimization using STE Another option we considered                   Optimization robustness to data We also investigate
+is to optimize W directly by using the straight-through es-           how little data is necessary to allow AdaRound to achieve
+timator (STE) (Bengio et al., 2013). This is inspired by              good performance and investigate if this could be done
+quantization-aware training (Jacob et al., 2018), which opti-         with data from different datasets. The results can be seen
+mizes a full network with this procedure. We use the STE              in Fig. 4. We see that the performance of AdaRound is
+to minimize the MSE loss in (21). This method technically             robust to the number of images required for optimization.
+allows more flexible movement of the quantized weights                Even with as little as 256 images, the method optimizes
+W, as they are no longer restricted to just rounding up or            the model to within 2% of the original FP32 accuracy. We
+down. In Table 5 we compare the STE optimization with                 also see that when using unlabelled images that are from
+AdaRound. We can see that AdaRound clearly outperforms                a similar domain but do not belong to the original training
+STE-based optimization. We believe this is due to the biased          data, AdaRound achieves competitive performance. Here,
+gradients of the STE, which hinder the optimization in this           we observe a less than 0.2% degradation on average. It is
+restricted setting.                                                   worthwhile to note that both Pascal VOC and MS COCO
+                                                                      only contain a small subset of the classes from Imagenet,
+Influence of quantization grid We studied how the                     implying that the optimization data for AdaRound does not
+                                                                      need to be fully representative of the original training set.
+choice of weight quantization grid affects the performance
+
+gain that AdaRound brings vs rounding-to-nearest. We
+
+looked at three different options for determining the scale           5.2. Literature comparison
+
+parameter s; using minimum and maximum values of                      Comparison to bias correction Several recent papers
+                                                                      have addressed a specific symptom of the problem we de-
+the weight tensor W, minimizing the MSE  W-W        2                 scribe with rounding-to-nearest (Banner et al., 2019; Finkel-
+                                                    F                 stein et al., 2019; Nagel et al., 2019). These works observe
+                                                                      that quantizing weights often changes the expected value
+introduced in the weights, and minimizing the MSE                     of the output of the layer, i.e., E [Wx] = E[Wx]. In order
+                                                                      to counteract this, these papers adjust the bias terms for
+Wx - Wx  2  introduced  in  the  preactivations.    W                 the preactivations by adding E [Wx] - E[Wx]. This "bias
+         F                                                            correction" can be viewed as another approach to minimize
+
+denotes the quantized weight tensor obtained through
+
+rounding-to-nearest for a given s. Note, we do not opti-
+
+mize step size and AdaRound jointly as it is non-trivial to
+
+combine the two tasks: any change in the step size would
+
+result in a different QUBO problem. The results in Table
+
+6 clearly show that AdaRound significantly improves over
+                                              Adaptive Rounding for Post-Training Quantization
+
+Optimization                                  #bits W/A       Resnet18                  Resnet50     InceptionV3      MobilenetV2
+
+Full precision                                     32/32          69.68                     76.07            77.40             71.72
+DFQ (Nagel et al., 2019)                              8/8           69.7                          -                -            71.2
+
+Nearest                                              4/32         23.99                     35.60             1.67              8.09
+OMSE+opt(Choukroun et al., 2019)                   4/32           67.12                     74.67            73.66                   -
+OCS (Zhao et al., 2019)                              4/32                                     66.2                                   -
+AdaRound                                             4/32               -            75.23±0.04                 4.8
+                                                           68.71±0.06                                75.76±0.09       69.78±0.05
+DFQ (our impl.)                                       4/8                                   52.84
+Bias corr (Banner et al., 2019)                      4/8          38.98                       74.8                 -           46.57
+AdaRound w/ act quant                                 4/8           67.4                                      59.5                   -
+                                                           68.55±0.01                75.01±0.05      75.72±0.09
+                                                                                                                      69.25±0.06
+
+Table 7. Comparison among different post-training quantization strategies in the literature. We report results for various models in terms
+of ImageNet validation accuracy (%). *Uses per-channel quantization. Using CLE (Nagel et al., 2019) as preprocessing.
+
+                                                                                     Rounding              Acc(%)
+
+                                                                                     Nearest                 23.99
+                                                                                     Bias correction         38.87
+                                                                                     AdaRound         68.60±0.09
+
+                                                                                     Table 8. Comparison between AdaRound and empirical bias cor-
+                                                                                     rection, which also counteracts a symptom of the quantization error
+                                                                                     introduced by rounding to nearest. We report ImageNet validation
+                                                                                     accuracy (%) for Resnet18.
+
+Figure 4. The effect on ImageNet validation accuracy when using                      and do not quantize the first and the last layer. Similarly,
+different number of images belonging to different datasets for                       on the more challenging networks, InceptionV3 and Mo-
+AdaRound optimization.                                                               bilenetV2, AdaRound stays within 2% of the original accu-
+                                                                                     racy and outperforms any competing method.
+
+the same MSE loss as AdaRound (20), but by adjusting the                             To be able to compare to methods that also do activation
+bias terms as                                                                        quantization, we report results of AdaRound with all ac-
+                                                                                     tivation tensors quantized to 8 bits. For this scenario, we
+E [Wx] - E[Wx] = arg min E                                                        2  quantized the activations to 8 bits and set the scaling factor
+                                                                                     for the activation quantizers based on the minimum and
+                                           b  Wx - Wx + b .                          maximum activations observed. We notice that activation
+                                                                                     quantization, in most cases, does not significantly harm the
+                                                                                  F  validation accuracy. AdaRound again outperforms the com-
+                                                                                     peting methods such as DFQ (Nagel et al., 2019) and bias
+                                                                     (26)            correction (Banner et al., 2019).
+
+Our method solves this same problem, but in a better way.                            Semantic segmentation To demonstrate the wider appli-
+In Table 8 we compare empirical bias correction from Nagel                           cability of AdaRound, we apply it to DeeplabV3+ (Chen
+et al. (2019) to AdaRound, under the exact same experi-                              et al., 2018) evaluated on Pascal VOC (Everingham et al.,
+mental setup, on ResNet18. While bias correction improves                            2015). Since the input images here are significantly big-
+performance over vanilla quantization without bias correc-                           ger, we only use 512 images to optimize AdaRound. All
+tion, we see that for 4 bits it only achieves 38.87% accuracy,                       other aspects of the experimental setup stay the same. To
+where AdaRound recovers accuracy to 68.60%.                                          the best of our knowledge, there are no other post-training
+                                                                                     quantization methods doing 4-bit quantization for semantic
+ImageNet In Table 7, we compare AdaRound to several                                  segmentation. DFQ works well for 8 bits, however perfor-
+recent post-training quantization methods. We use the same                           mance drastically drops when going down to 4-bit weight
+experimental setup as described earlier, with the exception                          quantization. AdaRound still performs well for 4 bits and
+of optimizing AdaRound with 2048 images for 20k iter-                                has only a 2% performance decrease for 4-bit weights and
+ations. For both Resnet18 and Resnet50, AdaRound is
+within 1% of the FP32 accuracy for 4-bit weight quantiza-
+tion and outperforms all competing methods, even though
+some rely on the more favorable per-channel quantization
+                          Adaptive Rounding for Post-Training Quantization
+
+Optimization              #bits W/A          mIOU                   semantic image segmentation. The European Conference
+                                                                    on Computer Vision (ECCV), 2018.
+Full precision                 32/32          72.94
+DFQ (Nagel et al., 2019)          8/8         72.33              Choi, J., Wang, Z., Venkataramani, S., Chuang, P. I., Srini-
+Nearest                           4/8                              vasan, V., and Gopalakrishnan, K. PACT: parameterized
+DFQ (our impl.)                   4/8           6.09                clipping activation for quantized neural networks. arXiv
+                                              14.45                 preprint arxiv:805.06085, 2018.
+AdaRound                         4/32
+AdaRound w/ act quant             4/8  70.89±0.33                Choukroun, Y., Kravchik, E., and Kisilev, P. Low-bit quan-
+                                       70.86±0.37                   tization of neural networks for efficient inference. Inter-
+                                                                    national Conference on Computer Vision (ICCV), 2019.
+Table 9. Comparison among different post-training quantization
+strategies, in terms of Mean Intersection Over Union (mIOU) for  Dong, Z., Yao, Z., Gholami, A., Mahoney, M. W., and
+DeeplabV3+ (MobileNetV2 backend) on Pascal VOC.                     Keutzer, K. HAWQ: hessian aware quantization of neural
+                                                                    networks with mixed-precision. International Conference
+8-bit activations quantization.                                     on Computer Vision (ICCV), 2019.
+
+6. Conclusion                                                    Esser, S. K., McKinstry, J. L., Bablani, D., Appuswamy,
+                                                                    R., and Modha, D. S. Learned step size quantization.
+In this paper we proposed AdaRound, a new rounding                 International Conference on Learning Representations
+method for post-training quantization of neural network            (ICLR), 2020.
+weights. AdaRound improves significantly over rounding-
+to-nearest, which has poor performance for lower bit widths.     Everingham, M., Eslami, S., Van Gool, L., Williams, C.,
+We framed and analyzed the rounding problem theoreti-              Winn, J., and Zisserman, A. The pascal visual object
+cally and by making appropriate approximations we arrive            classes challenge: A retrospective. International Journal
+at a practical method. AdaRound is computationally fast,            of Computer Vision, 111(1):98­136, 1 2015.
+uses only a small number of unlabeled data examples, does
+not need end-to-end fine-tuning, and can be applied to any       Finkelstein, A., Almog, U., and Grobman, M. Fighting quan-
+neural network that has convolutional or fully-connected            tization bias with bias. arXiv preprint arxiv:1906.03193,
+layers without any restriction. AdaRound establishes a new          2019.
+state-of-the-art for post-training weight quantization with
+significant gains. It can push networks like Resnet18 and        Guo, Y. A survey on methods and theories of quantized neu-
+Resnet50 to 4-bit weights while keeping the accuracy drop           ral networks. arXiv preprint: arxiv:1808.04752, 2018.
+within 1%.
+                                                                 Gupta, S., Agrawal, A., Gopalakrishnan, K., and Narayanan,
+References                                                          P. Deep learning with limited numerical precision. Inter-
+                                                                    national Conference on Machine Learning, ICML, 2015.
+Banner, R., Nahshan, Y., and Soudry, D. Post training
+   4-bit quantization of convolutional networks for rapid-       Hammerstrom, D. A vlsi architecture for high-performance,
+   deployment. Neural Information Processing Systems                low-cost, on-chip learning. International Joint Confer-
+  (NeuRIPS), 2019.                                                  ence on Neural Networks (IJCNN), 1990.
+
+Bengio, Y., Le´onard, N., and Courville, A. Estimating or        He, K., Zhang, X., Ren, S., and Sun, J. Deep residual
+   propagating gradients through stochastic neurons for con-        learning for image recognition. Conference on Computer
+   ditional computation. arXiv preprint arXiv:1308.3432,           Vision and Pattern Recognition, CVPR, 2016.
+   2013.
+                                                                 He, Y., Zhang, X., and Sun, J. Channel pruning for accelerat-
+Botev, A., Ritter, H., and Barber, D. Practical gauss-newton        ing very deep neural networks. International Conference
+   optimisation for deep learning. International Conference         on Computer Vision (ICCV), 2017.
+   on Machine Learning (ICML), 2017.
+                                                                 Hoehfeld, M. and Fahlman, S. E. Learning with limited nu-
+Cai, Y., Yao, Z., Dong, Z., Gholami, A., Mahoney, M. W.,            merical precision using the cascade-correlation algorithm.
+   and Keutzer, K. Zeroq: A novel zero shot quantization           IEEE Transactions on Neural Networks, 3(4):602­611,
+   framework. arXiv preprint arXiv:2001.00281, 2020.               1992.
+
+Chen, L.-C., Zhu, Y., Papandreou, G., Schroff, F., and Adam,     Holi, J. L. and Hwang, J. N. Finite precision error analysis of
+   H. Encoder-decoder with atrous separable convolution for         neural network hardware implementations. IEEE Trans.
+                                                                   Comput., 42(3):281290, 1993.
+Adaptive Rounding for Post-Training Quantization
+
+Hopfield, J. J. and Tank, D. W. "neural" computation of de-      L., Bai, J., and Chintala, S. Pytorch: An imperative
+   cisions in optimization problems. Biological Cybernetics,     style, high-performance deep learning library. In Neural
+   52(3):141­152, 1985.                                         Information Processing Systems (NeuRIPS). 2019.
+
+Jacob, B., Kligys, S., Chen, B., Zhu, M., Tang, M., Howard,   Rubinstein, R. The cross-entropy method for combinatorial
+  A., Adam, H., and Kalenichenko, D. Quantization                and continuous optimization. Methodology And Comput-
+   and training of neural networks for efficient integer-        ing In Applied Probability, 1(2):127­190, Sep 1999.
+   arithmetic-only inference. Conference on Computer Vi-
+   sion and Pattern Recognition (CVPR), 2018.                 Russakovsky, O., Deng, J., Su, H., Krause, J., Satheesh, S.,
+                                                                 Ma, S., Huang, Z., Karpathy, A., Khosla, A., Bernstein,
+Jain, S. R., Gural, A., Wu, M., and Dick, C. Trained uni-        M., Berg, A. C., and Fei-Fei, L. ImageNet Large Scale
+   form quantization for accurate and efficient neural net-     Visual Recognition Challenge. International Journal of
+  work inference on fixed-point hardware. arxiv preprint        Computer Vision (IJCV), 115(3):211­252, 2015.
+   arxiv:1903.08066, 2019.
+                                                              Smith, K. A., Palaniswami, M., and Krishnamoorthy, M.
+Kim, J., Bhalgat, Y., Lee, J., Patel, C., and Kwak, N. QKD:      Neural techniques for combinatorial optimization with
+   quantization-aware knowledge distillation. arxiv preprint     applications. IEEE Trans. Neural Networks, 9(6):1301­
+   arxiv:1911.12491, 2019.                                      1318.
+
+Kingma, D. P. and Ba, J. Adam: A method for stochas-          Stock, P., Joulin, A., Gribonval, R., Graham, B., and Jgou,
+   tic optimization. International Conference for Learning       H. And the bit goes down: Revisiting the quantization of
+  Representations (ICLR), 2015.                                  neural networks. In International Conference on Learn-
+                                                                 ing Representations, 2020.
+Kochenberger, G., Hao, J.-K., Glover, F., Lewis, M., Lu¨,
+   Z., Wang, H., and Wang, Y. The unconstrained binary        Uhlich, S., Mauch, L., Yoshiyama, K., Cardinaux, F., Garc´ia,
+   quadratic programming problem: a survey. Journal of          J. A., Tiedemann, S., Kemp, T., and Nakamura, A. Mixed
+  Combinatorial Optimization, 28(1):58­81, Jul 2014.             precision dnns: All you need is a good parametrization.
+                                                                International Conference on Learning Representations
+Krishnamoorthi, R. Quantizing deep convolutional networks       (ICLR), 2020.
+   for efficient inference: A whitepaper. arXiv preprint
+   arXiv:1806.08342, 2018.                                    Wang, P., Hu, Q., Zhang, Y., Zhang, C., Liu, Y., and Cheng,
+                                                                J. Two-step quantization for low-bit neural networks.
+Lin, D. D., Talathi, S. S., and Annapureddy, V. S. Fixed        Conference on Computer Vision and Pattern Recognition
+   point quantization of deep convolutional networks. In        (CVPR), pp. 4376­4384, 2018.
+  International Conference on Machine Learning, 2016.
+                                                              Zhang, X., Zou, J., He, K., and Sun, J. Accelerating very
+Louizos, C., Welling, M., and Kingma, D. P. Learning sparse      deep convolutional networks for classification and detec-
+   neural networks through l0 regularization. International      tion. IEEE Trans. Pattern Anal. Mach. Intell., 38(10):
+  Conference on Learning Representations (ICLR), 2018.          1943­1955, 2016.
+
+Louizos, C., Reisser, M., Blankevoort, T., Gavves, E., and    Zhao, R., Hu, Y., Dotzel, J., Sa, C. D., and Zhang, Z. Im-
+  Welling, M. Relaxed quantization for discretized neu-          proving neural network quantization without retraining
+   ral networks. In International Conference on Learning         using outlier channel splitting. International Conference
+  Representations (ICLR), 2019.                                  on Machine Learning, ICML, 2019.
+
+Mishra, A. K. and Marr, D. Apprentice: Using knowledge
+   distillation techniques to improve low-precision network
+   accuracy. arXiv preprint arxiv:1711.05852, 2017.
+
+Nagel, M., van Baalen, M., Blankevoort, T., and Welling, M.
+   Data-free quantization through weight equalization and
+   bias correction. International Conference on Computer
+  Vision (ICCV), 2019.
+
+Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J.,
+   Chanan, G., Killeen, T., Lin, Z., Gimelshein, N., Antiga,
+   L., Desmaison, A., Kopf, A., Yang, E., DeVito, Z., Rai-
+   son, M., Tejani, A., Chilamkurthy, S., Steiner, B., Fang,
+Up or Down? Adaptive Rounding for Post-Training Quantization
+
+A. Comparison among QUBO solvers
+
+We compared optimizing task loss Hessian using the cross-entropy method vs QUBO solver from the publicly available
+package qbsolv3. We chose this qbsolv QUBO solver for comparison due to its ease of use for our needs as well its free
+availability for any researcher to reproduce our work. Table 10 presents the comparison between the two solvers. We
+see that cross-entropy method significantly outperforms the qbsolv QUBO solver. Furthermore the qbsolv QUBO solver
+has worse performance than rounding-to-nearest. We believe this is mainly due to the reason that the API does not allow
+us to provide a smart initialization (as we do for cross-entropy method). The performance of random rounding choices
+is significantly worse, on average, when compared to the rounding choices in the neighbourhood of rounding-to-nearest.
+Hence this initialization can provide a significant advantage in finding a better local minimum in this large problem space.
+We did not conduct an extensive search for better QUBO solvers as our own implementation of the cross-entropy method
+provided very good results with very little tweaking and allowed us to exploit GPU and memory resources more efficiently.
+Furthermore the choice of QUBO solver does not impact our final method AdaRound while clearly showing the gains that
+we can exploit via optimized rounding.
+
+                       Rounding                                         First layer
+
+                       Nearest                                               52.29
+                       Cross-entropy Method                           68.62±0.17
+                       QUBO solver (qbsolv)                           41.98±3.04
+
+Table 10. Comparison between the cross-entropy method vs qbsolv QUBO solver. Only the first layer of Resnet18 is quantized to 4-bits
+and the results are reported in terms of ImageNet validation accuracy.
+
+B. From Taylor expansion to local loss (conv. layer)
+
+For a convolutional layer, defined as z( ) = W( )  x( -1), we have
+
+                       L                                  zi(,j),c1o                L                                       (27)
+                                   =                                            ·                                           (28)
+                       W( )                              W( )                    z(i,j),co1
+                                                    i,j
+                              h1 ,w1 ,ci1 ,c1o                  h1,w1,c1i ,co1
+
+                                                 =         L          · xi(+-h11),j+w1,c1i ,
+                                                          z(i,j),c1o
+                                                    i,j
+
+where h1 and w1 denote the spatial dimensions, c1i denotes input channel dimension and co1 denotes output channel dimension.
+Additionally, we have assumed appropriate zero padding of x( -1). Differentiating (28) once again (possibly w.r.t. a different
+weight in the same layer), we get
+
+2L                                       =            x(i+-h11),j+w1,c1i xk( +-h12),m+w2,c2i  ·         2L               .  (29)
+                                                                                                 z(i,j),c1o zk( ,)m,c2o
+W W ( )                ()                   i,j  k,m
+                       h2 ,w2 ,ci2 ,co2
+       h1,w1,c1i ,co1
+
+In order to transform the Hessian QUBO optimization problem to a local loss based per-layer optimization problem, we
+assume that z2( ) L is a diagonal matrix that is independent of the data samples (x, y), i.e.,
+
+                       2L                       = cc1o , if i = k, j = m, c1o = co2                                         (30)
+
+    z(i,j),co1 z(k,)m,c2o                           0, otherwise.
+
+3https://docs.ocean.dwavesys.com/projects/qbsolv/
+                                 Adaptive Rounding for Post-Training Quantization
+
+This assumption reduces (29) to
+
+                 2L                                =        i,j  xi(+-h11),j+w1,c1i xi(+-h12),j+w2,c2i ,  if c1o = co2        (31)
+                                                      cco1                                                otherwise.
+
+      W W ( )                    ()                   0,
+                                 h2 ,w2 ,ci2 ,c2o
+             h1 ,w1 ,ci1 ,co1
+
+Under the assumptions in (30) there are no interactions between weights in the same layer that affect two different output
+filters (co1 = co2). We then reformulate the Hessian QUBO optimization
+
+E w( ),T H(w( ))w( )                                                                                                          (32)
+                                                                                                                              (33)
+                                                                                                                              (34)
+
+(a)                                                Wh( 1),w1,ci1,co Wh( 2),w2,c2i ,co xi(+-h11),j+w1,c1i xi(+-h12),j+w2,ci2 
+
+= E  cco
+
+        co       h1,w1,ci1 h2,w2,ci2 i,j
+
+                                                                 2
+                      
+
+=  E        cco                  Wh( ,)w,ci,co x(i+-h1,j)+w,ci   
+                                                                 
+
+        co       i,j h,w,ci
+
+=E          cco W:(,:),:,co  x( -1) 2 ,                                                                                       (35)
+
+        co                                         F
+
+where (a) follows from the assumption in (30). Hence the Hessian optimization problem, under the assumptions in (30), is
+the same as MSE optimization for the output feature map. Furthermore, it breaks down to an optimization problem for each
+individual output channel separately (each element in the summation in (35) is independent of the other elements in the
+summation for optimization purposes as they involve disjoint sets of variables).
+
+   arg min       E w( ),T H(w( ))w( )                 = arg min E                                     2                       (36)
+                                                                                                                              (37)
+     w( )                                                   W( )       W( )  x( -1)
+
+                                                      = arg min E                                     F        co.
+
+                                                          W:(,:),:,co   W:(,:),:,co  x( -1) 2
+
+                                                                                                            F
+

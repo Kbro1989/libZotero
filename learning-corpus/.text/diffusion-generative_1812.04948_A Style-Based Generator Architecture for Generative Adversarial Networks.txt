@@ -1,0 +1,115 @@
+A Style-Based Generator Architecture for Generative Adversarial Networks
+
+Tero Karras NVIDIA
+tkarras@nvidia.com
+
+Samuli Laine NVIDIA
+slaine@nvidia.com
+
+Timo Aila NVIDIA
+taila@nvidia.com
+
+arXiv:1812.04948v3 [cs.NE] 29 Mar 2019
+
+Abstract
+We propose an alternative generator architecture for generative adversarial networks, borrowing from style transfer literature. The new architecture leads to an automatically learned, unsupervised separation of high-level attributes (e.g., pose and identity when trained on human faces) and stochastic variation in the generated images (e.g., freckles, hair), and it enables intuitive, scale-specific control of the synthesis. The new generator improves the state-of-the-art in terms of traditional distribution quality metrics, leads to demonstrably better interpolation properties, and also better disentangles the latent factors of variation. To quantify interpolation quality and disentanglement, we propose two new, automated methods that are applicable to any generator architecture. Finally, we introduce a new, highly varied and high-quality dataset of human faces.
+1. Introduction
+The resolution and quality of images produced by generative methods -- especially generative adversarial networks (GAN) [22] -- have seen rapid improvement recently [30, 45, 5]. Yet the generators continue to operate as black boxes, and despite recent efforts [3], the understanding of various aspects of the image synthesis process, e.g., the origin of stochastic features, is still lacking. The properties of the latent space are also poorly understood, and the commonly demonstrated latent space interpolations [13, 52, 37] provide no quantitative way to compare different generators against each other.
+Motivated by style transfer literature [27], we re-design the generator architecture in a way that exposes novel ways to control the image synthesis process. Our generator starts from a learned constant input and adjusts the "style" of the image at each convolution layer based on the latent code, therefore directly controlling the strength of image features at different scales. Combined with noise injected directly into the network, this architectural change leads to automatic, unsupervised separation of high-level attributes
+
+(e.g., pose, identity) from stochastic variation (e.g., freckles, hair) in the generated images, and enables intuitive scale-specific mixing and interpolation operations. We do not modify the discriminator or the loss function in any way, and our work is thus orthogonal to the ongoing discussion about GAN loss functions, regularization, and hyperparameters [24, 45, 5, 40, 44, 36].
+Our generator embeds the input latent code into an intermediate latent space, which has a profound effect on how the factors of variation are represented in the network. The input latent space must follow the probability density of the training data, and we argue that this leads to some degree of unavoidable entanglement. Our intermediate latent space is free from that restriction and is therefore allowed to be disentangled. As previous methods for estimating the degree of latent space disentanglement are not directly applicable in our case, we propose two new automated metrics -- perceptual path length and linear separability -- for quantifying these aspects of the generator. Using these metrics, we show that compared to a traditional generator architecture, our generator admits a more linear, less entangled representation of different factors of variation.
+Finally, we present a new dataset of human faces (Flickr-Faces-HQ, FFHQ) that offers much higher quality and covers considerably wider variation than existing high-resolution datasets (Appendix A). We have made this dataset publicly available, along with our source code and pre-trained networks.1 The accompanying video can be found under the same link.
+2. Style-based generator
+Traditionally the latent code is provided to the generator through an input layer, i.e., the first layer of a feedforward network (Figure 1a). We depart from this design by omitting the input layer altogether and starting from a learned constant instead (Figure 1b, right). Given a latent code z in the input latent space Z, a non-linear mapping network f : Z  W first produces w  W (Figure 1b, left). For simplicity, we set the dimensionality of both
+1https://github.com/NVlabs/stylegan
+
+1
+
+Latent
+Normalize
+Fully-connected PixelNorm Conv 3×3 PixelNorm 4×4
+Upsample Conv 3×3 PixelNorm Conv 3×3 PixelNorm
+8×8
+
+Latent
+Normalize Mapping network
+FC FC FC FC FC FC FC FC
+
+Synthesis network Noise
+
+Const 4×4×512
+
+A style AdaIN
+
+B
+
+Conv 3×3
+
+A
+
+style AdaIN
+
+4×4
+
+B
+
+Upsample
+
+Conv 3×3
+
+A style AdaIN
+
+B
+
+Conv 3×3 A style AdaIN 8×8 B
+
+(a) Traditional
+
+(b) Style-based generator
+
+Figure 1. While a traditional generator [30] feeds the latent code though the input layer only, we first map the input to an intermediate latent space W, which then controls the generator through adaptive instance normalization (AdaIN) at each convolution layer. Gaussian noise is added after each convolution, before evaluating the nonlinearity. Here "A" stands for a learned affine transform, and "B" applies learned per-channel scaling factors to the noise input. The mapping network f consists of 8 layers and the synthesis network g consists of 18 layers -- two for each resolution (42 - 10242). The output of the last layer is converted to RGB using a separate 1 × 1 convolution, similar to Karras et al. [30]. Our generator has a total of 26.2M trainable parameters, compared to 23.1M in the traditional generator.
+
+spaces to 512, and the mapping f is implemented using an 8-layer MLP, a decision we will analyze in Section 4.1. Learned affine transformations then specialize w to styles y = (ys, yb) that control adaptive instance normalization (AdaIN) [27, 17, 21, 16] operations after each convolution layer of the synthesis network g. The AdaIN operation is defined as
+
+AdaIN(xi,
+
+y)
+
+=
+
+ys,i
+
+xi
+
+- µ(xi) (xi)
+
++
+
+yb,i,
+
+(1)
+
+where each feature map xi is normalized separately, and then scaled and biased using the corresponding scalar components from style y. Thus the dimensionality of y is twice the number of feature maps on that layer.
+Comparing our approach to style transfer, we compute the spatially invariant style y from vector w instead of an example image. We choose to reuse the word "style" for y because similar network architectures are already used for feedforward style transfer [27], unsupervised image-toimage translation [28], and domain mixtures [23]. Compared to more general feature transforms [38, 57], AdaIN is particularly well suited for our purposes due to its efficiency and compact representation.
+
+Method
+A Baseline Progressive GAN [30] B + Tuning (incl. bilinear up/down) C + Add mapping and styles D + Remove traditional input E + Add noise inputs F + Mixing regularization
+
+CelebA-HQ
+7.79 6.11 5.34 5.07 5.06 5.17
+
+FFHQ
+8.04 5.25 4.85 4.88 4.42 4.40
+
+Table 1. Fre´chet inception distance (FID) for various generator designs (lower is better). In this paper we calculate the FIDs using 50,000 images drawn randomly from the training set, and report the lowest distance encountered over the course of training.
+
+Finally, we provide our generator with a direct means to generate stochastic detail by introducing explicit noise inputs. These are single-channel images consisting of uncorrelated Gaussian noise, and we feed a dedicated noise image to each layer of the synthesis network. The noise image is broadcasted to all feature maps using learned perfeature scaling factors and then added to the output of the corresponding convolution, as illustrated in Figure 1b. The implications of adding the noise inputs are discussed in Sections 3.2 and 3.3.
+2.1. Quality of generated images
+Before studying the properties of our generator, we demonstrate experimentally that the redesign does not compromise image quality but, in fact, improves it considerably. Table 1 gives Fre´chet inception distances (FID) [25] for various generator architectures in CELEBA-HQ [30] and our new FFHQ dataset (Appendix A). Results for other datasets are given in Appendix E. Our baseline configuration (A) is the Progressive GAN setup of Karras et al. [30], from which we inherit the networks and all hyperparameters except where stated otherwise. We first switch to an improved baseline (B) by using bilinear up/downsampling operations [64], longer training, and tuned hyperparameters. A detailed description of training setups and hyperparameters is included in Appendix C. We then improve this new baseline further by adding the mapping network and AdaIN operations (C), and make a surprising observation that the network no longer benefits from feeding the latent code into the first convolution layer. We therefore simplify the architecture by removing the traditional input layer and starting the image synthesis from a learned 4 × 4 × 512 constant tensor (D). We find it quite remarkable that the synthesis network is able to produce meaningful results even though it receives input only through the styles that control the AdaIN operations.
+Finally, we introduce the noise inputs (E) that improve the results further, as well as novel mixing regularization (F) that decorrelates neighboring styles and enables more finegrained control over the generated imagery (Section 3.1).
+We evaluate our methods using two different loss functions: for CELEBA-HQ we rely on WGAN-GP [24],
+
+2
+
+

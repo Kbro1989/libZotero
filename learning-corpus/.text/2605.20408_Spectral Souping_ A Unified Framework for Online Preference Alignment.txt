@@ -1,0 +1,1647 @@
+arXiv:2605.20408v1 [cs.LG] 19 May 2026                                                                                                                                                                   2026-05-19
+
+                                        Spectral Souping: A Unified Framework for
+                                        Online Preference Alignment
+
+                                        Yinlam Chow1, Guy Tennenholtz2, Ted Yun1, James Harrison1, Arthur Gretton1, Andre Barreto1 and Bo Dai1
+                                        1Google DeepMind, 2Google Research
+
+                                        Reinforcement Learning from Human Feedback (RLHF) effectively aligns Large Language Models (LLMs)
+                                        with aggregate human preferences but often fails to address the diverse and conflicting needs of
+                                        individual users. To overcome this issue, we introduce Spectral Souping, a unified framework for efficient,
+                                        online preference alignment. Our core contribution is the discovery of a universal spectral representation
+                                        within LLMs, which is proven to be highly amenable to model merging. This theoretical insight enables a
+                                        two-phase methodology: we first learn a basis of specialized policies offline, each focused on a distinct,
+                                        fine-grained preference dimension. An online adaptation algorithm then efficiently "soups" these policies
+                                        at inference time, either by merging their outputs or parameters, enabling rapid model adaptation
+                                        without the need for costly online retraining w.r.t. tailored preference rewards. Experiments on online
+                                        preference alignment benchmarks demonstrate that our method achieves significant performance
+                                        improvements over existing state-of-the-art approaches, presenting a scalable and computationally
+                                        efficient solution for dynamically adapting LLMs to individual user preferences.
+
+                                        Keywords: personalization, preference alignment, model souping, LLM online adaptation, RLHF
+
+                                        1. Introduction
+
+                                        Recent advancements in LLMs have demonstrated remarkable success in aligning with human prefer-
+                                        ences through techniques like RLHF (Ouyang et al., 2022) and Direct Preference Optimization (DPO)
+                                        (Rafailov et al., 2023). However, these methods, which rely on a unified reward from aggregated
+                                        feedback, face significant limitations. The core issue is that a one-size-fits-all approach fails to ac-
+                                        count for the diverse and often conflicting needs of individual users, which stem from differences in
+                                        backgrounds and contexts. This gap between generalized and specialized preferences highlights a
+                                        critical challenge of aligning LLMs with individual preferences without incurring the substantial data
+                                        collection and computational costs associated with fine-tuning a separate model for each user.
+
+                                            Our work introduces Spectral Souping, a novel framework for online personalized preference
+                                        alignment of LLMs that overcomes these limitations. Unlike traditional methods, which require
+                                        separate and costly fine-tuning, our method can handle the diverse and varying user preferences in
+                                        an efficient way. Our core contribution lies in the discovery of a (universal) spectral representation in
+                                        the context of the language Markov Decision Process (MDP), where the LLM policy maximizes the
+                                        user's preference-driven reward. This observation shows that the logits of various personalized LLM
+                                        policies do not exist in an arbitrary space but rather in a structured latent space defined by the MDP's
+                                        spectral features, implying these logits can be represented as a linear combination of a small number
+                                        of basis logit functions--each corresponds to a policy that aligns with a distinct preference dimension.
+
+                                            This theoretical insight underpins our two-phase LLM-adaptation methodology. An offline phase
+                                        trains the aforementioned basis of specialized policies. The online phase then dynamically combines
+                                        these basis policies at inference time to generate responses tailored to user preferences, thereby
+                                        obviating the need for costly per-user fine-tuning. The resulting framework is highly scalable and
+                                        can achieve state-of-the-art performance on online preference alignment benchmarks. Critically,
+
+                                        Corresponding author(s): yinlamchow@google.com
+              Spectral Souping: A Unified Framework for Online Preference Alignment
+
+our discovery of a unified spectral representation enables the derivation of provable sub-optimality
+bounds for this policy merging approach--a significant advancement over prior techniques, which
+were largely heuristic and lacked such formal guarantees. In particular, we show that our spectral
+souping method achieves performance arbitrarily close to that of a fully fine-tuned "tailored" policy,
+thus complementing its empirical efficacy with a rigorous theoretical foundation.
+
+    The rest of this paper is organized as follows. Section 2 provides background on the language MDP,
+RLHF, and the online preference alignment problem. Section 3 details our theoretical discovery of the
+spectral representation and its properties related to LLM preference alignment. Section 4 presents our
+two-phase methodology, including the offline training of specialized policies and the online souping
+algorithm. Section 5 describes our experimental setup and presents our results, demonstrating the
+efficacy of spectral souping. Finally, Section 6 delineates related work on LLM adaptation, and Section
+7 concludes our work and discusses future directions.
+
+2. Preliminaries
+
+We first provide the basic MDP terminologies of language modeling and define the problem formulation
+of online preference alignment.
+
+2.1. The Language MDP and RLHF w.r.t. an Individual Preference
+
+The context of generating a sequence of tokens auto-regressively with an LLM can be modeled as an
+MDP, where the state () at timestep  is the sequence of tokens generated so far,  = (0, 1, . . . , -1),
+action () at timestep  is the next token to be generated, chosen from a finite vocabulary A, The state
+transition is deterministic, i.e., given state  and action , the next state is simply their concatenation:
++1 = concat(, ), and the policy (( |)) is a conditional LLM that we aim to optimize. It gives
+the probability of generating token  given the preceding sequence . The goal is to find an optimal
+policy  that solves the following maximum entropy (soft) RL problem:
+
+                            -1
+                           
+
+              max               (, ) -   ((·|) ref (·|)) ,                                             (1)
+
+              
+
+                           =0
+
+where (, ) is a reward function that scores the quality of generating token  after sequence .
+
+This can be based on human preference feedback or other quality metrics, ref is a reference LLM,
+                             (  |  )
+and  (ref) =   A (|) log   ref (| )   is       the  Kullback-Leibler  (KL) divergence that  penalizes  the
+
+policy  for deviating too far from the reference model ref, where the temperature parameter  > 0
+
+controls the strength of this regularization.
+
+    Given the deterministic transitions  = (, ), and the fact that the transition terminates at the
+
+final time step , the unique fixed-point solution to this maximum entropy RL problem defines the
+optimal policy  in terms of the optimal Q-value function, (, ), that satisfies the soft Bellman
+backup and the optimal value function,  (), that serves as normalization (Nachum et al., 2017):
+
+                  (  |  )  =  ref (|)          exp  (, ) -  ()            , ,                          (2)
+
+                                                                      ,
+
+                                                    
+
+              (, ) = (, ) +  (),                                                                       (3)
+
+                                                      (, )
+
+                   () =  log ref (|) exp(                             ),                               (4)
+
+                                                      
+
+where the bellman backup in (3) corresponds to deterministic transitions. This shows that the logits
+of the optimal policy are obtained by adding the optimal Q-values to the logits of the reference policy.
+
+                                                                                                       2
+                       Spectral Souping: A Unified Framework for Online Preference Alignment
+
+2.2. Online Preference Alignment as a Multi-objective MDP
+
+Adapting LLMs to satisfy diverse and often conflicting user preferences presents a complex multi-
+
+objective optimization challenge. Unlike in standard RLHF, where the LLM's generation process
+
+is treated as a MDP with a single reward, in online preference alignment, in order to represent a
+
+distinct set of user preferences, like conciseness or factual accuracy, one considers a multi-objective
+
+MDP that involves a preference reward vector, r(, ) = (1(, ), . . . ,  (, ))  , where each of
+
+the  components corresponds to a preference dimension. Suppose for any arbitrary new users,
+
+her preference can be modeled as a linear combination of these multifaceted preference attributes,
+
+i.e., w =       ,      w.r.t.  the  user-specific   preference    vector  w  =  (1, . . . , )          that  lies  in  a
+            =1
+
+-dimensional simplex set, characterizing the underlying user-specific importance placed on the
+
+corresponding base rewards. Then a typical approach for learning a tailored LLM is via RLHF
+
+(Das et al., 2024; Kirk et al., 2023b), i.e., max         -1         w (,   )  -    ((·|) ref (·|))          , which
+                                                         =0
+optimizes a policy w from the feedback signal of a specific reward model w. However, in general this
+
+preference vector w is not revealed to the agent prior to online interactions. Estimating this vector
+
+when concurrently training a corresponding tailored policy via RLHF can be challenging (e.g., beyond
+
+policy optimization one may require advanced exploration strategies to uncover such user preferences
+
+during RL), especially when this procedure is only run for a limited number of steps (e.g., during
+
+online adaptation). Alternatively, training a contextual agent for every possible preference vector w
+
+can also be computationally expensive and impractical for most real-world applications.
+
+3. A Spectral Representation for Online Preference Alignment
+
+This section investigates the parameterization of the optimal value function within the class of
+
+Language MDPs introduced in Section 2.1. Given the reference LLM representation ()  ,
+
+where  the  reference  policy  can  be  expressed   as   ref (|)  =  exp(  ()ref  ())  /          exp(()ref ())
+
+                                                                                          
+
+with the corresponding action token embedding ref()  , our primary goal is to identify the
+
+conditions such that this reference LLM feature can also be a spectral representation that permits a
+
+linear parameterization of the optimal Q-function defined in Equation (3). To facilitate our analysis
+
+of the spectral representation for the optimal Q-function, we introduce two technical assumptions
+
+that provide a practical framework for our analysis:
+
+Assumption 1 (Linear Reward Representation). Given sufficiently expressive features  derived from
+the reference LLM, any reward function of the language MDP can be linearly represented by these features:
+
+                        ( ,    )    =    ( ( ,  ))       for some weight vector r.                                 (5)
+
+                                                     r,
+
+Assumption 2 (-step Decodability). The language MDP induced by the reference LLM is -step decodable
+for some integer  > 0, whose trajectory distribution depends only on its most recent -step history, i.e., the
+distribution of -step trajectory  is conditioned only on sub-sequence -+1: = (-+1, -+1, . . . , ).
+
+    The linear reward assumption is justified by the powerful representational capacity of the reference
+LLM. While the true reward dynamics may be arbitrarily complex, the LLM-generated features ()
+are rich enough to represent the underlying semantics, allowing the reward itself to be modeled as a
+simple linear function. The -step decodability assumption is motivated by the architecture of the
+transformer-based reference policy. These models operate on a fixed-length context window, meaning
+their outputs are conditioned only on the most recent  tokens. Leveraging these conditions that align
+our model with the realistic computational constraints of the LLM, we first have our main technical
+result characterizing the optimal Q-function of any reward function that satisfies Assumption 1.
+
+                                                                                                                       3
+                                 Spectral Souping: A Unified Framework for Online Preference Alignment
+
+Lemma 1. For any language MDP, that satisfies Assumption 1 and Assumption 2, its optimal Q function
+from Equation 3 can be linearly parameterized with the reference LLM logit feature , i.e., there exists a
+vector ,,ref   that depends on temperature , reward , and reference LLM ref such that
+
+                                                   (  ,  )  =   ( ( ,  ))              ,  ,    .                                      (6)
+
+                                                                            ,,ref
+
+Lemma 1 reveals a non-trivial, crucial property of the language MDP: the reference LLM's logit
+
+feature, , acts as a universal spectral representation. This representation allows the optimal Q-
+
+function for any preference-driven reward to be linearly parameterized. Consequently, for a set
+
+of  distinct preference attributes {1(, ), . . . ,  (, )}, their corresponding optimal Q-functions
+
+{1 (,  ),   .  .  .  ,  (,  ) }  can  all  be  expressed       as   (,   )       =   ( ( ,  )),     where   each              is  a  vector
+
+                                                                      
+
+in the spectral space. This insight directly motivates our Spectral Soup policy architecture. The
+
+model employs a shared LLM feature extractor that produces , while integrating multiple lightweight
+
+adapters    at  the  output   logit   layer,  each    specialized    to  learn      a  basis  Q-function    .   A  souped  policy,   ~ ,  is
+
+                                                                                                             
+
+then constructed by linearly combining these Q-functions with a mixture vector  = (1, . . . , )  :
+
+                                                                   
+
+                                                                                                              
+
+                              ~ (|)  ref (|) · exp                            (  ,  )/      ,       | |      .                        (7)
+
+                                                                            
+
+                                                               =1                                 
+
+Here,  > 0 acts as a temperature parameter, normalizing the logit mixture's magnitude, and is
+constrained to maintain temperature consistency with the optimal policies. Mathematically, when
+the number of basis functions approximates the spectral dimension (  ), parameterizing the
+personalized policy via the mixture vector    is equivalent to learning a single spectral feature
+vector   . However, our approach of mixing Q-functions offers two advantages. First, the basis of
+Q-functions is interpretable, as each  corresponds to a tangible preference attribute. The underlying
+
+                                                                        
+
+spectral representation, in contrast, is often not. This allows us to select a small, relevant subset of
+basis functions (  ) that spans most preference-alignment needs, reducing the learning problem's
+dimensionality in practice. Second, this framework is flexible; one can easily modify the basis by
+adding or removing specialized Q-functions to accommodate new preference attributes. Altering the
+spectral representation, however, is difficult as it is an intrinsic property of the reference LLM.
+
+The central goal is to derive a performance sub-optimality bound for the computationally-efficient
+
+spectral soup policy. To establish this bound, for any given user preference vector w we first define
+
+the optimal target. Recall that a user's preference w defines a personalized reward, w (, ) =
+
+     (,              ).  The  optimal  policy,  w ,      that  maximizes         the   KL-regularized     return   for  this  reward  has
+=1
+the following closed-form solution: w (|)  ref (|) · exp w (, )/ , where w is the optimal
+
+personalized Q-function. The corresponding optimal value function, which represents the maximum
+
+performance utility that can be achieved, is w () =  · log ref (·|) exp w (, )/ . Our approach
+approximates this optimal policy with the spectral soup policy ~ in Equation (7), whose logit-mixture
+weights  is a solution of the following constrained optimization problem:
+
+                                  -1                                                                               
+                                                          | |  (~ (·|) ref (·|)) 0 = 
+      (  )  :=    max    ~           w (, ) -                                                             s.t.          | |          . (8)
+w,
+                                 =0                                                                                             
+
+                                                                                                                   
+
+This problem maximizes the same preference reward w as in RLHF, balanced by a KL penalty whose
+regularization strength adapts to the magnitude of the policy mixture. Such a key constraint ensures
+the resulting policy's temperature remains within a reasonable range, which is also a necessary
+condition for our performance guarantees to hold. The following theorem presents our main technical
+result, establishing the formal guarantees for this approximation.
+
+                                                                                                                                          4
+                                  Spectral Souping: A Unified Framework for Online Preference Alignment
+
+Theorem 1 (Sub-optimality Performance Bounds). Under Assumptions 1 and 2, the spectral soup policy
+~ in Equation (7), whose weights  solves Equation (8), achieves the following guarantees.
+
+    1. KL Divergence Bound: The divergence from the true optimal policy w is bounded by:
+
+KL (w (·|)                              1                                                                                           
+                                                                                                           
+                    ~ (·|))                       w ( (, )) 2 + ref ( (, )) 2                          ·          ,w ,ref  -         , ,ref      . (9)
+
+                                                                                                                                              2
+
+    2. Performance Sub-optimality Bound: The gap between the optimal value w () and the value
+achieved by the spectral soup policy, w, (), is bounded as:
+
+                                                   -1                                                            | |
+                                                                                                   
+0            (  )  -        (   )                     ( (, )) 2|0 =                     ·               -           
+                      w,
+         w                                                                                                         | |
+
+                                                  =0                                                                         2                   (10)
+
+                   +  2                    max{0, -}                 +  ref        [((, )) 2]      ·    ,w ,ref  -                         .
+                               ()                                                                                               , ,ref
+                                                               
+
+                                                                                                                                        2
+
+Here,  is an auxiliary policy that minimizes the weighted difference of cumulative rewards, i.e.,  
+
+arg min  [          -1  (   (     ,    ))              |      |  (w  -    )  ]  ,  and   ()    :=  log( ()+ ()-1)-log( () · ()),
+                   =0                                       
+                                                     
+
+where   ()      and    ()          are  the       respective         upper      and     lower  bounds  of  the   policy    ratio   (|)/ref (|).
+
+                         
+
+This technical result marks a significant advancement for policy "souping" methods, which have
+
+largely remained empirically-validated heuristics. Our work establishes one of the first formal sub-
+
+optimality bounds for such a technique, providing a rigorous theoretical foundation to complement its
+
+practical efficacy. Theorem 1 provides this guarantee by first bounding the policy approximation error
+
+(measured by the KL divergence) between our spectral soup policy and the personalized optimal policy
+
+with the logit approximation error, ,w,ref - ( /)                                                  ,,ref 2,  which       captures  how        well  the
+
+                                                                                                 
+
+personalized logit-vector can be represented by a linear combination of the basis vectors (normalized
+
+by the magnitude of the logit-mixture weights). Furthermore, it decomposes the performance gap
+
+into three intuitive error sources: (i) this same logit approximation error; (ii) a reward approximation
+
+error,             (  -  |      |/      |      |  )    2,  capturing      the      mismatch    between     the   user's  true   preference    weights
+                                             
+                              
+
+{}=1 (which is a simplex vector) and the normalized magnitudes of the learned soup weights
+{}=1; and (iii) a penalty for negative logit-mixture weights. This decomposition reveals a critical
+
+insight: if the set of basis logit-vectors is rich enough to span the spectral representation space of all
+
+possible personalized logits, the policy approximation error vanishes entirely. However, the theorem
+
+also highlights a limitation, as the overall performance bound is not tight; it does not go to zero even
+
+when this primary error term is eliminated, due to the remaining reward approximation and penalty
+
+terms. This provides a clear direction for future work on tightening these theoretical guarantees.
+
+Remark 1 (Discovery of Spectral Representation). Our core objective is to find a suitable spectral
+
+representation  that satisfies the above theoretical assumptions, and is amenable to our policy souping
+
+methodology. A first approach is to learn the representation  using an Expectation-Maximization (EM)
+
+style algorithm to satisfy Assumption 1. This process alternates between two main steps until convergence:
+
+(i) With a fixed set of basis reward vectors , we first optimize the representation  by minimizing the
+reconstruction error of a weighted reward mixture: min  (,)D  -   · (, ) 2. This
+step seeks a representation that allows the  basis vectors to efficiently span the space of personalized
+
+rewards; (ii) With a fixed representation , we update the basis vectors to best reconstruct each individual
+reward function by solving: min1,...,   (,)D ( - (, ) )2 . Second, as a practical alter-
+native motivated by our value approximation results in Theorem 1, we propose discovering the spectral
+
+representation within a powerful, reference LLM to minimize approximation errors for the mixture of
+
+                                                                                                                                                    5
+                                   Spectral Souping: A Unified Framework for Online Preference Alignment
+
+Q-functions. Instead of learning this representation from scratch, we leverage the rich semantic features
+
+within the model's intermediate transformer layers (the auto-regressive features). Departing from previous
+
+analysis that focuses only the final pre-logit layer, our implementation applies low-rank adapters (LoRA)
+
+(Wang      et   al.,    2023)  to  all  intermediate        layers       when  learning   the    specialized     Q-functions          {1 ,        .  .  .  ,       }.
+
+                                                                                                                                                                 
+
+This strategy reframes the problem from representation learning to representation discovery; the algorithm
+
+automatically searches for and amplifies features from the most suitable layers by updating their LoRA
+
+modules during fine-tuning, allowing the model to identify an optimal spectral representation for each
+
+specialized Q-function. Furthermore, the -weight-mixture approach can be extended to the LoRA modules
+
+in each of the  intermediate layers. This exponentially expands the number of basis Q-functions from 
+
+to , creating a powerful mechanism that can significantly reduce the value approximation error.
+
+4. The Spectral Souping Algorithm for Online Preference Alignment
+
+Motivated by the theoretical guarantees in Theorem 1, we propose a spectral souping algorithm
+
+designed for the rapid and efficient preference alignment of LLMs. The algorithm operates in two
+
+phases: an offline training stage followed by an online adaptation stage. In the first phase, we train a
+
+set  of       specialized      policies,  {1 ,  .  .  .  ,   },  where       each  policy  is  independently           optimized         for         a  single
+
+                                                              
+
+reward attribute . In the second phase, the logit-mixture vector  of the spectral soup policy ~ in
+
+Equation (7) is learned online to combine the specialized policies, tailoring the model's behavior to
+
+a specific user's preferences. This structured composition enables zero-shot generalization to new
+
+users by learning only the low-dimensional mixture vector  at inference time, rather than training a
+
+bespoke policy for each user's underlying preference vector w.
+
+     The      initial   phase   involves       learning     a    set     of    base  policies    {     }  =1.  Within     the      language                MDP
+
+                                                                                                     
+
+framework            (Section   2.1),     each  specialized           policy   is  given   by     (|)            ref (|) exp( (, )/),
+
+                                                                                                   
+
+implying its output logits can be expressed as logit (, ) = logitref (, ) +  (, ). Following
+
+spectral representation theory, the Q-function  (, ) can be optimally parameterized using a
+
+LoRA module applied to the output logit layer of the reference policy ref. A practical challenge
+
+is the lack of granular, token-level rewards. We address this by learning from  offline datasets,
+
+{B}=1, where each dataset contains trajectories annotated with binary labels (e.g., "good" vs.
+"bad") for a specific preference attribute. This reframes the task of learning each specialized
+
+policy's parameters, , as a well-studied offline preference alignment problem. Let  () :=
+
+ -1        (    ,    )  =   -1   (,        )   -                 (    )  be  the   cumulative    reward        over       trajectory     ,           derived
+=0                         =0                         =1
+
+according to Equation (3). One method, developed from Cui et al. (2025), explicitly learns the
+
+Q-function,  (, ), by minimizing a composite objective. This objective combines a binary loss,
+i.e., Binary = -B [ () log ( ()) + (1 -  ()) log(1 - ( ()))], to match trajectory labels
+with a Gumbel loss (Garg et al., 2023), i.e., Gumbel = (,)B exp(  (, )/) -  (, )/ - 1 ,
+where  (, ) =  (, ) -  (), to ensure soft Bellman consistency. While direct, this approach
+is computationally expensive because it requires training an auxiliary value model, . An alter-
+native method, inspired by Rafailov et al. (2024), operates on preference pairs (, ) derived from
+
+B, where trajectory  is preferred over trajectory . It optimizes the policy by minimizing the
+
+Bradley-Terry logistic loss: L (; B) = -(,)B [log ( () -  ())]. The key advantage of
+
+this formulation is that the difference in cumulative rewards simplifies to a sum of log-policy ratios,
+
+i.e.,  () -  () =                         log      (, |,)/ref (, |,)                 -           log       (  ,  |  ,  )  /ref  (  ,  |  ,  )  ,  thereby
+
+                                                                                                         
+
+obviating the need for an explicit value function. Although this determines the reward function
+
+only up to a state-dependent potential, this ambiguity does not affect the optimal policy. For its
+
+computational efficiency, we adopt this second method in our work.
+
+    The second phase is online adaptation, via spectral souping, where the policy can be real-
+ized through two approaches. The explicit approach directly constructs the policy's logit func-
+
+                                                                                                                                                                   6
+Spectral Souping: A Unified Framework for Online Preference Alignment
+
+tion as a linear combination of the pre-trained specialized and reference logits: logit~ (, ) =
+(1 -  ) logitref (, ) +  logit (, ). This follows directly from the definition of the specialized
+Q-functions and the spectral soup policy in Equation (7). Alternatively, the implicit approach avoids
+
+instantiating a new model by applying rejection sampling to the reference policy ref. An action is first
+
+sampled from the reference policy,   ref(|), and then accepted if   exp(                                  (log  (|)    -
+                                                                                                 =1  
+                                                                                                                     
+
+log ref(|))), where  is drawn from a uniform distribution U [0,  ()], and the upper bound can be
+
+simply set to  () = exp(-           (ref  (  ·  |  )  |  |      (·|))/).  While  this  implicit  souping  method  can  be
+
+                                                              
+
+highly efficient, its performance degrades if the personalized policy diverges significantly from the refer-
+
+ence policy, as this leads to a high rejection rate. For both approaches, the spectral soup weights   ,
+
+which tailor the policy to a specific user, are learned efficiently from online user feedback. Mirroring the
+
+offline phase, we can frame the learning problem using preference optimization, where we minimize
+
+a Bradley-Terry loss over weighted preference pairs, LBT (; B) = -B [log (   ( () -  ()))].
+Crucially, the learning problem for  reduces to logistic linear regression, allowing for efficient update
+
+via convex optimization methods (Hazan et al., 2016).
+
+5. Experiments
+
+To assess our approach's effectiveness, we conduct empirical evaluations on three realistic LLM online
+preference alignment benchmarks. Each experiment involves an offline phase for learning specialized
+policies and an online phase for personalization and adaptation.
+
+    Our first experiment is on online LLM preference alignment w.r.t. the UltraFeedback dataset
+(Cui et al., 2023), which contains prompts with response pairs annotated with a 4D feature vector
+(helpfulness, honesty, instruction-following, and truthfulness). We synthesize diverse preferences by
+ranking responses based on the dot product of their feature vector with a unique weight vector w  4.
+For the offline phase, we build  = 30 specialized datasets by creating 30 unique weight vectors,
+each randomly sampled around the basis attributes. In the online phase, we test generalization
+against 5 held-out users proxied by unseen public reward models. To increase difficulty, the dataset is
+filtered to only contentious examples (23, 614 train, 401 test) where preferences conflict. The second
+experiment focuses on optimizing an LLM's personalized prompt-expansion for text-to-image (T2I)
+generation in a 5-turn interactive process (Nabati et al., 2024), where an agent generates new textual
+prompts at each turn and inputs that to the environment to return the updated 4x4 image slate. The
+system uses Stable Diffusion XL (Podell et al., 2023) for image generation, Gemini 1.5 Flash (Team
+et al., 2024a) for prompt expansion, and Gemma 2B (Team et al., 2024b) to model utilities. In the
+offline phase, we generate  = 32 datasets from over 30,000 simulated rollouts guided by user models
+with myopic, turn-by-turn preferences; a user rates best overall image in each column and chooses
+the highest-scoring column. During the online phase, adaptability is tested against 5 held-out users,
+each simulated by a pre-trained LTV utility function that models session-level preferences based on
+criteria like aesthetics or prompt consistency. Our third experiment is on LLM sleep coaching. Each
+synthetic user is instantiated by an LLM grounded in their detailed sleep profiles obtained from 68
+real individuals in the LifeSnaps dataset (Yfantidou et al., 2022), following the experimental setup in
+Yun et al. (2025). For the offline phase, we generate three (high, medium, low) preference datasets
+for each of the Big Five personality dimensions (Goldberg, 1992) (the International Personality Item
+Pool (IPIP) version; extraversion, agreeableness, conscientiousness, stability, intellect), resulting in
+ = 15 personality types. Each dataset contains 1,000 10-turn conversation pairs, ranked by a reward
+function specific to that personality. In the online phase, we evaluate performance on 5 simulated
+users (512 samples each), each represented by a Gemini 1.5 Flash auto-rater that scores conversations
+based on its specialized rubrics on coaching tone, user understanding, and intervention quality, that
+mimics users of different backgrounds and personalities.
+
+                                                                                                                       7
+                                         Spectral Souping: A Unified Framework for Online Preference Alignment
+
+    To evaluate the performance of our spectral souping method, we compare it against a compre-
+hensive suite of baselines. The first is the "bespoke" RLHF (Ouyang et al., 2022) agent, which is
+trained directly on a specific user's feedback. This approach serves as a practical upper bound for
+performance but is computationally expensive and does not generalize across different users. To
+tackle the multi-objective nature of the task, Personalized Soups (P-SOUPS) (Jang et al., 2023) trains
+multiple specialized policies, each optimized for a single objective. At inference time, it creates
+a personalized policy by mixing the model parameters of these specialized policies via a heuristic
+weighted average. This technique is analogous to our explicit spectral souping approach. We also
+compare against two decoding-time alignment frameworks, which are conceptually similar to our
+implicit spectral souping approach. The Personalized Alignment at Decoding-time (PAD) framework
+(Chen et al., 2024) guides the decoding process by mixing the model's output distribution based on a
+preference reward vector. Inspired by successor features, the PAD-SF variant (Barreto et al., 2018)
+re-weights the output distribution using a softmax distribution derived from a learnable K-dimensional
+scorer, which operates on a spectral representation, mimics the specialized advantage functions. For
+our experiments, the default souping models are based on the Gemma-V3 (Team et al., 2025) 4B, 1B,
+270M architectures, implemented with rank-100 LoRA modules on all intermediate layers.
+
+    Our experimental results, summarized in Figures 1 & 2 for GemmaV3 4B and Figures 4 & 5 for
+GemmaV3 1B (in Appendix B.3), validate the efficacy of spectral souping across different domains. A
+key observation is that implicit and explicit spectral souping methods achieve comparable performance,
+with the explicit approach holding a slight edge in several settings. This aligns with our hypothesis that
+both methods stem from the same theoretical foundation described in Section 3, but explicit souping is
+more precise as it avoids the sampling approximations inherent to the implicit method. Crucially, our
+methods consistently approximate the performance of the computationally expensive, tailored RLHF
+upper bound, when averaged over all online users, achieving 83% of the optimal performance on
+UltraFeedback, 88% on T2I, and 72% on Sleep coaching, thereby empirically confirming our theoretical
+sub-optimality bounds. When compared against other baselines, spectral souping demonstrates
+significant advantages. It surpasses P-SOUPS, even after tuning the hyper-parameters (the P-SOUPS
+weights) used for averaging, underscoring the necessity of merging policies within the structured
+spectral representation space rather than an arbitrary parameter space. Similarly, implicit spectral
+souping is more stable and performs better than PAD and PAD-SF baselines. This suggests that
+guiding the policy mixture with optimal Q-function weights in the spectral representation space is
+more effective than using reward weights (as in PAD) or souping weights heuristically developed via
+advantage approximations with successor features (as in PAD-SF). Finally, across all held-out users
+in both T2I and sleep coaching, spectral souping exhibits faster and more robust online adaptation,
+proven to be more data-efficient than all baselines, highlighting its capability in real-world scenarios.
+
+    Our ablation study investigates the impact of reducing the number of offline specialized policies
+() on online adaptation performance, with results presented in the scaling-law curves in Figure 3 with
+analysis conducted across our 3 domains using the Gemma-V3 4B, 1B and 270M models respectively.
+To manage the combinatorial complexity of basis selection of specialized policies, we employed a
+leave-one-out elimination approach, randomly selecting and removing one specialized policy at a
+time, and averaging the results. The findings reveal several key insights. First, as illustrated in both
+figures, reducing the number of basis policies consistently degrades online learning performance
+across all domains, as expected. More importantly, we observe a significant performance drop below a
+certain threshold for each domain--specifically at  = 7 for UltraFeedback,  = 5 for T2I generation,
+and  = 13 for sleep coaching. This suggests the existence of a minimal set of specialized policies is
+required to form a basis that effectively span the representation space for various preferences. Second,
+the size of this minimal basis set appears correlated with the complexity of the problem's underlying
+characteristics; domains like UltraFeedback (4 core attributes) and T2I (5 preference categories)
+
+                                                                                                                                                                                 8
+                                         Spectral Souping: A Unified Framework for Online Preference Alignment
+
+Figure 1 | Test-time Training Performance of Different Methods: Explicit & Implicit Spectral Souping
+(SS-Exp & SS-Imp), P-SOUPS, PAD, PAD-SF, RLHF, adapted to 5 various users in the UltraFeedback, T2I
+Generation, Sleep Coaching domains. The SS methods (especially SS-Exp) consistently and outperform
+P-SOUPS and the PAD baselines, demonstrating superior performance in online adaptation.
+
+Figure 2 | Evaluation Performance of Different Online Adaptation Methods: Explicit & Implicit Spectral
+Souping (SS-Exp & SS-Imp), P-SOUPS, PAD, PAD-SF, RLHF, across adapted to 5 various users in
+the UltraFeedback, T2I Generation, Sleep Coaching domains. The superior performance of the SS
+methods (over P-SOUPS, PAD, and PAD-SF baselines) is also generalizable to online evaluations.
+
+                                                                                                                                                                                 9
+                                         Spectral Souping: A Unified Framework for Online Preference Alignment
+
+require fewer basis policies than the real-world sleep coaching domain, which involves more diverse
+and complex auto-rater feedback. Finally, the larger Gemma-V3 4B model exhibits a more gradual
+decrease in performance as specialized policies are removed. This suggests that larger pretrained
+models capture a more semantically comprehensive spectral representation, making each specialized
+policy more expressive and the overall basis more robust to reductions in its span.
+
+Figure 3 | Scaling Laws of SS-Exp to illustrate the effect of model size on performance with an
+increasing number of specialized policies across three domains. While performance consistently
+improved with model size, the larger (4B) model architecture developed a more comprehensive
+spectral representation, making its online adaptation agents more robust to basis reductions.
+
+6. Related Work
+
+Our work is situated at the intersection of LLM preference alignment, RL spectral representation, and
+online adaptation. We review the key concepts in these areas that relate to our methods below.
+
+LLM Alignment A dominant approach to aligning LLMs with human preferences is RLHF (Bakker
+et al., 2022; Christiano et al., 2017), which involves training a reward model to mimic human feedback
+and then using an algorithm like Proximal Policy Optimization (PPO) (Schulman et al., 2017) to
+fine-tune the LLM. Direct Policy Optimization (DPO) has also emerged as a promising alternative that
+simplifies the above process and reduces computational cost. It reformulates the RLHF problem as a
+preference-based classification task, optimizing a policy without the need for an explicit reward model.
+More recently, research has explored decoding-time alignment as a way to avoid the computational
+cost of model training. This includes methods like Controlled Decoding (CD) (Mudgal et al., 2023),
+which uses a value-based scorer to guide generation, ARGS (Khanov et al., 2024), which adjusts
+probabilistic predictions based on online feedback, and DeAL (Huang et al., 2024) which focuses
+on heuristic-guided searches to meet diverse alignment goals. While these methods are powerful,
+they often address alignment w.r.t. a single, uniform preference. Our work extends these concepts by
+focusing on personalized alignment, which considers the diverse preferences of individual users.
+
+Spectral Representations for RL Representation learning is crucial in RL for abstracting complex
+state and action spaces to facilitate policy optimization. Existing methods for learning these repre-
+sentations utilize various techniques, including reconstruction (Fujimoto et al., 2023; Hafner et al.,
+2019; Watter et al., 2015), successor features (Barreto et al., 2017; Gershman et al., 2012; Kulkarni
+et al., 2016), and bisimulation (Ferns and Precup, 2014; Gelada et al., 2019; Zhang et al., 2025). A
+particularly effective approach involves using spectral decomposition, which has been explored in
+
+                                                                                                                                                                               10
+                                         Spectral Souping: A Unified Framework for Online Preference Alignment
+
+works like Mahadevan and Maggioni (2007) and Ren et al. (2022). These methods often assume
+that the environment's transition kernel has a low-rank spectral structure, enabling the use of linear
+representations for value functions and leads to provably sample-efficient algorithms (Jin et al.,
+2019; Yang and Wang, 2020). Leveraging the above theoretical underpinnings, our work develops a
+universal spectral representation in LLMs, whose existence within language MDPs has been proven.
+This finding justifies our online adaptation algorithm for personalized preference alignment, which
+is designed to only modify the projection vectors within this stable spectral representation, rather
+than fine-tuning the entire model. Our approach is distinct from prior work as it connects spectral
+representation principles to LLM personalization, a domain where such techniques have not been
+previously explored in this manner.
+
+Online Preference Alignment Aligning LLMs with online preferences is crucial to addresses widely-
+varying tastes of individual users (Feng et al., 2024; Jiang et al., 2024; Kirk et al., 2023a; Wang
+et al., 2024; Zhang et al., 2024; Zhong et al., 2024). Existing personalized alignment methods can
+be grouped into three categories: (i) Joint optimization of multi-dimensional preference rewards
+(Chakraborty et al., 2024; Das et al., 2024; Li et al., 2024; Wang et al., 2024; Yang et al., 2024b;
+Zeng et al., 2023; Zhong et al., 2024; Zhu et al., 2025); (ii) Merging model parameters (via linearly
+interpolation) or outputs (via mixture-of-expert composition) w.r.t. multiple preference dimensions
+(Jang et al., 2023; Park, 2024; Ramé et al., 2024; Wan et al., 2024; Yang et al., 2024a); (iii) Prompt-
+based methods that use diverse prompts to guide the model toward specific preferences (Hwang
+et al., 2023; Jafari et al., 2024; Min et al., 2025; Ravichandran et al., 2025; Trivedi et al., 2025), but
+that requires textual preference descriptions. Our work combines the first two approaches, which
+formulates the personalized preference alignment as a Multi-objective language MDP, utilizes its
+universal spectral representation for LLMs, and develops a theoretically-grounded online adaptation
+recipe that unifies both model parameter merging and mixture-of-expert output sampling to effectively
+handle different trade-offs on conflicting preferences.
+
+7. Conclusion
+
+This work introduces spectral souping, a principled framework that addresses the critical challenge of
+LLM adaptation by discovering a universal spectral representation within the language MDP. This
+reveals that diverse policies inhabit a structured, low-dimensional latent space, allowing any special-
+ized policy to be effectively represented as a linear combination of a few pre-trained basis policies.
+This discovery unlocks an efficient two-phase methodology: an offline phase to train a compact set
+of basis policies, followed by an online inference phase where they are dynamically combined to
+tailor responses to any user without costly retraining. The efficacy of this approach is validated across
+several realistic LLM preference-alignment domains where spectral souping consistently outperforms
+state-of-the-art baselines. For instance, it is significantly more data-efficient than two-stage methods
+that first infer a tailored reward before applying RLHF, and more stable than alternatives that estimates
+the occupancy measures (via successor features) of tailored policies. Crucially, unlike prior heuristic
+approaches, our framework is grounded in formal guarantees, providing sub-optimality bounds that
+ensure its performance approximates that of a fully fine-tuned LLM. Spectral souping thus offers a
+scalable, computationally efficient, and theoretically sound solution for online adaptation of LLMs.
+
+    This work opens several promising avenues for future research. One key direction is to learn
+an optimal spectral representation directly during pre-training, embedding a universal basis for
+diverse human preferences into the foundation model itself to make it inherently more adaptable.
+Another avenue involves analyzing more sophisticated online adaptation algorithms, such as non-
+linear souping techniques or meta-learning approaches, to infer user needs more rapidly from sparse
+
+                                                                                                                                                                               11
+                                         Spectral Souping: A Unified Framework for Online Preference Alignment
+
+feedback. Finally, extending the principles of spectral souping to other modalities (beyond LLMs),
+including personalized text-to-image generation, presents an exciting opportunity to generalize this
+framework, enabling robust personalization across a wide range of creative and practical domains.
+
+References
+
+M. Bakker, M. Chadwick, H. Sheahan, M. Tessler, L. Campbell-Gillingham, J. Balaguer, N. McAleese,
+  A. Glaese, J. Aslanides, M. Botvinick, et al. Fine-tuning language models to find agreement
+   among humans with diverse preferences. Advances in neural information processing systems, 35:
+  38176­38189, 2022.
+
+A. Barreto, W. Dabney, R. Munos, J. J. Hunt, T. Schaul, H. P. van Hasselt, and D. Silver. Successor
+   features for transfer in reinforcement learning. Advances in neural information processing systems,
+  30, 2017.
+
+A. Barreto, D. Borsa, J. Quan, T. Schaul, D. Silver, M. Hessel, D. Mankowitz, A. Zidek, and R. Munos.
+  Transfer in deep reinforcement learning using successor features and generalised policy improve-
+   ment. In International Conference on Machine Learning, pages 501­510. PMLR, 2018.
+
+S. Chakraborty, J. Qiu, H. Yuan, A. Koppel, F. Huang, D. Manocha, A. S. Bedi, and M. Wang. Maxmin-
+   rlhf: Alignment with diverse human preferences. arXiv preprint arXiv:2402.08925, 2024.
+
+R. Chen, X. Zhang, M. Luo, W. Chai, and Z. Liu. Pad: Personalized alignment of llms at decoding-time.
+   arXiv preprint arXiv:2410.04070, 2024.
+
+P. F. Christiano, J. Leike, T. Brown, M. Martic, S. Legg, and D. Amodei. Deep reinforcement learning
+   from human preferences. Advances in neural information processing systems, 30, 2017.
+
+G. Cui, L. Yuan, N. Ding, G. Yao, W. Zhu, Y. Ni, G. Xie, Z. Liu, and M. Sun. Ultrafeedback: Boosting
+   language models with high-quality feedback. 2023.
+
+G. Cui, L. Yuan, Z. Wang, H. Wang, W. Li, B. He, Y. Fan, T. Yu, Q. Xu, W. Chen, et al. Process
+   reinforcement through implicit rewards. arXiv preprint arXiv:2502.01456, 2025.
+
+N. Das, S. Chakraborty, A. Pacchiano, and S. R. Chowdhury. Active preference optimization for sample
+   efficient rlhf. arXiv preprint arXiv:2402.10500, 2024.
+
+S. Feng, T. Sorensen, Y. Liu, J. Fisher, C. Y. Park, Y. Choi, and Y. Tsvetkov. Modular pluralism: Pluralistic
+   alignment via multi-llm collaboration. arXiv preprint arXiv:2406.15951, 2024.
+
+N. Ferns and D. Precup. Bisimulation metrics are optimal value functions. In UAI, pages 210­219,
+  2014.
+
+S. Fujimoto, W.-D. Chang, E. Smith, S. S. Gu, D. Precup, and D. Meger. For sale: State-action
+   representation learning for deep reinforcement learning. Advances in neural information processing
+   systems, 36:61573­61624, 2023.
+
+D. Garg, J. Hejna, M. Geist, and S. Ermon. Extreme q-learning: Maxent rl without entropy. arXiv
+   preprint arXiv:2301.02328, 2023.
+
+C. Gelada, S. Kumar, J. Buckman, O. Nachum, and M. G. Bellemare. Deepmdp: Learning continuous
+   latent space models for representation learning. In International conference on machine learning,
+   pages 2170­2179. PMLR, 2019.
+
+                                                                                                                                                                               12
+                                         Spectral Souping: A Unified Framework for Online Preference Alignment
+
+S. J. Gershman, C. D. Moore, M. T. Todd, K. A. Norman, and P. B. Sederberg. The successor
+   representation and temporal context. Neural Computation, 24(6):1553­1568, 2012.
+
+L. R. Goldberg. The development of markers for the big-five factor structure. Psychological assessment,
+  4(1):26, 1992.
+
+D. Hafner, T. Lillicrap, J. Ba, and M. Norouzi. Dream to control: Learning behaviors by latent
+   imagination. arXiv preprint arXiv:1912.01603, 2019.
+
+J. L. Hau, M. Petrik, and M. Ghavamzadeh. Entropic risk optimization in discounted mdps. In
+   International Conference on Artificial Intelligence and Statistics, pages 47­76. PMLR, 2023.
+
+E. Hazan et al. Introduction to online convex optimization. Foundations and Trends® in Optimization,
+  2(3-4):157­325, 2016.
+
+J. Y. Huang, S. Sengupta, D. Bonadiman, Y.-a. Lai, A. Gupta, N. Pappas, S. Mansour, K. Kirchhoff, and
+   D. Roth. Deal: Decoding-time alignment for large language models. arXiv preprint arXiv:2402.06147,
+  2024.
+
+E. Hwang, B. P. Majumder, and N. Tandon. Aligning language models to user opinions. arXiv preprint
+   arXiv:2305.14929, 2023.
+
+Y. Jafari, D. Mekala, R. Yu, and T. Berg-Kirkpatrick. Morl-prompt: An empirical analysis of multi-
+   objective reinforcement learning for discrete prompt optimization. arXiv preprint arXiv:2402.11711,
+  2024.
+
+J. Jang, S. Kim, B. Y. Lin, Y. Wang, J. Hessel, L. Zettlemoyer, H. Hajishirzi, Y. Choi, and P. Ammanabrolu.
+   Personalized soups: Personalized large language model alignment via post-hoc parameter merging.
+   arXiv preprint arXiv:2310.11564, 2023.
+
+L. Jiang, T. Sorensen, S. Levine, and Y. Choi. Can language models reason about individualistic human
+  values and preferences? arXiv preprint arXiv:2410.03868, 2024.
+
+Y. Jin, W. Fu, J. Kang, J. Guo, and J. Guo. Bayesian symbolic regression. arXiv preprint
+   arXiv:1910.08892, 2019.
+
+M. Khanov, J. Burapacheep, and Y. Li. Args: Alignment as reward-guided search. arXiv preprint
+   arXiv:2402.01694, 2024.
+
+H. R. Kirk, A. M. Bean, B. Vidgen, P. Röttger, and S. A. Hale. The past, present and better future of
+   feedback learning in large language models for subjective human preferences and values. arXiv
+   preprint arXiv:2310.07629, 2023a.
+
+H. R. Kirk, B. Vidgen, P. Röttger, and S. A. Hale. Personalisation within bounds: A risk taxonomy and
+   policy framework for the alignment of large language models with personalised feedback. arXiv
+   preprint arXiv:2303.05453, 2023b.
+
+T. D. Kulkarni, A. Saeedi, S. Gautam, and S. J. Gershman. Deep successor reinforcement learning.
+   arXiv preprint arXiv:1606.02396, 2016.
+
+J. Li, F. Zhou, S. Sun, Y. Zhang, H. Zhao, and P. Liu. Dissecting human and llm preferences. arXiv
+   preprint arXiv:2402.11296, 2024.
+
+S. Mahadevan and M. Maggioni. Proto-value functions: A laplacian framework for learning repre-
+   sentation and control in markov decision processes. Journal of Machine Learning Research, 8(10),
+  2007.
+
+                                                                                                                                                                               13
+                                         Spectral Souping: A Unified Framework for Online Preference Alignment
+
+E. Min, H.-Y. Huang, X. Yang, M. Yang, X. Jia, Y. Wu, H. Cai, J. Wang, S. Wang, and D. Yin. From
+   prompting to alignment: A generative framework for query recommendation. arXiv preprint
+   arXiv:2504.10208, 2025.
+
+S. Mudgal, J. Lee, H. Ganapathy, Y. Li, T. Wang, Y. Huang, Z. Chen, H.-T. Cheng, M. Collins, T. Strohman,
+   et al. Controlled decoding from language models. arXiv preprint arXiv:2310.17022, 2023.
+
+O. Nabati, G. Tennenholtz, C. Hsu, M. Ryu, D. Ramachandran, Y. Chow, X. Li, and C. Boutilier.
+   Preference adaptive and sequential text-to-image generation. arXiv preprint arXiv:2412.10419,
+  2024.
+
+O. Nachum, M. Norouzi, K. Xu, and D. Schuurmans. Bridging the gap between value and policy based
+   reinforcement learning. Advances in neural information processing systems, 30, 2017.
+
+L. Ouyang, J. Wu, X. Jiang, D. Almeida, C. Wainwright, P. Mishkin, C. Zhang, S. Agarwal, K. Slama,
+  A. Ray, et al. Training language models to follow instructions with human feedback. Advances in
+   neural information processing systems, 35:27730­27744, 2022.
+
+S. Park. Learning more generalized experts by merging experts in mixture-of-experts. arXiv preprint
+   arXiv:2405.11530, 2024.
+
+D. Podell, Z. English, K. Lacey, A. Blattmann, T. Dockhorn, J. Müller, J. Penna, and R. Rombach.
+   Sdxl: Improving latent diffusion models for high-resolution image synthesis. arXiv preprint
+   arXiv:2307.01952, 2023.
+
+R. Rafailov, A. Sharma, E. Mitchell, C. D. Manning, S. Ermon, and C. Finn. Direct preference
+   optimization: Your language model is secretly a reward model. Advances in neural information
+   processing systems, 36:53728­53741, 2023.
+
+R. Rafailov, J. Hejna, R. Park, and C. Finn. From  to : Your language model is secretly a -function.
+   arXiv preprint arXiv:2404.12358, 2024.
+
+A. Ramé, J. Ferret, N. Vieillard, R. Dadashi, L. Hussenot, P.-L. Cedoz, P. G. Sessa, S. Girgin, A. Douillard,
+   and O. Bachem. Warp: On the benefits of weight averaged rewarded policies. arXiv preprint
+   arXiv:2406.16768, 2024.
+
+B. Ravichandran, D. Joy, P. Elliott, B. Hu, J. Adams, C. Funk, E. Veenhuis, A. Hoogs, and A. Basharat.
+  Align: Prompt-based attribute alignment for reliable, responsible, and personalized llm-based
+   decision-making. arXiv preprint arXiv:2507.09037, 2025.
+
+T. Ren, T. Zhang, L. Lee, J. E. Gonzalez, D. Schuurmans, and B. Dai. Spectral decomposition
+   representation for reinforcement learning. arXiv preprint arXiv:2208.09515, 2022.
+
+J. Schulman, F. Wolski, P. Dhariwal, A. Radford, and O. Klimov. Proximal policy optimization
+   algorithms. arXiv preprint arXiv:1707.06347, 2017.
+
+G. Team, P. Georgiev, V. I. Lei, R. Burnell, L. Bai, A. Gulati, G. Tanzer, D. Vincent, Z. Pan, S. Wang,
+   et al. Gemini 1.5: Unlocking multimodal understanding across millions of tokens of context. arXiv
+   preprint arXiv:2403.05530, 2024a.
+
+G. Team, M. Riviere, S. Pathak, P. G. Sessa, C. Hardin, S. Bhupatiraju, L. Hussenot, T. Mesnard,
+   B. Shahriari, A. Ramé, et al. Gemma 2: Improving open language models at a practical size. arXiv
+   preprint arXiv:2408.00118, 2024b.
+
+                                                                                                                                                                               14
+                                         Spectral Souping: A Unified Framework for Online Preference Alignment
+
+G. Team, A. Kamath, J. Ferret, S. Pathak, N. Vieillard, R. Merhej, S. Perrin, T. Matejovicova, A. Ramé,
+   M. Rivière, et al. Gemma 3 technical report. arXiv preprint arXiv:2503.19786, 2025.
+
+P. Trivedi, S. Chakraborty, A. Reddy, V. Aggarwal, A. S. Bedi, and G. K. Atia. Align-pro: A principled
+   approach to prompt optimization for llm alignment. In Proceedings of the AAAI Conference on
+   Artificial Intelligence, volume 39, pages 27653­27661, 2025.
+
+F. Wan, X. Huang, D. Cai, X. Quan, W. Bi, and S. Shi. Knowledge fusion of large language models.
+   arXiv preprint arXiv:2401.10491, 2024.
+
+H. Wang, Y. Lin, W. Xiong, R. Yang, S. Diao, S. Qiu, H. Zhao, and T. Zhang. Arithmetic control of llms
+   for diverse user preferences: Directional preference alignment with multi-objective rewards. arXiv
+   preprint arXiv:2402.18571, 2024.
+
+X. Wang, L. Aitchison, and M. Rudolph. Lora ensembles for large language model fine-tuning. arXiv
+   preprint arXiv:2310.00035, 2023.
+
+M. Watter, J. Springenberg, J. Boedecker, and M. Riedmiller. Embed to control: A locally linear latent
+   dynamics model for control from raw images. Advances in neural information processing systems,
+  28, 2015.
+
+E. Yang, L. Shen, G. Guo, X. Wang, X. Cao, J. Zhang, and D. Tao. Model merging in llms, mllms,
+   and beyond: Methods, theories, applications and opportunities. arXiv preprint arXiv:2408.07666,
+  2024a.
+
+H. Yang, L. He, M. Hou, S. Shen, R. Li, J. Hou, J. Ma, and J. Zhao. Aligning llms through multi-
+   perspective user preference ranking-based feedback for programming question answering. arXiv
+   preprint arXiv:2406.00037, 2024b.
+
+L. Yang and M. Wang. Reinforcement learning in feature space: Matrix bandit, kernels, and regret
+   bound. In International Conference on Machine Learning, pages 10746­10756. PMLR, 2020.
+
+S. Yfantidou, C. Karagianni, S. Efstathiou, A. Vakali, J. Palotti, D. P. Giakatos, T. Marchioro, A. Kazlouski,
+   E. Ferrari, and S. Girdzijauskas. LifeSnaps, a 4-month multi-modal dataset capturing unobtrusive
+   snapshots of our lives in the wild. Sci. Data, 9(1):663, Oct. 2022.
+
+T. Yun, E. Yang, M. Safdari, J. H. Lee, V. V. Kumar, S. S. Mahdavi, J. Amar, D. Peyton, R. Aharony, A. M.
+   PhD, L. D. Schneider, I. Galatzer-Levy, Y. Jia, J. Canny, A. Gretton, and M. Mataric. Sleepless nights,
+   sugary days: Creating synthetic users with health conditions for realistic coaching agent interactions.
+   In W. Che, J. Nabende, E. Shutova, and M. T. Pilehvar, editors, Findings of the Association for
+  Computational Linguistics: ACL 2025, pages 14159­14181, Vienna, Austria, July 2025. Association
+   for Computational Linguistics. ISBN 979-8-89176-256-5. doi: 10.18653/v1/2025.findings-acl.729.
+
+  URL https://aclanthology.org/2025.findings-acl.729/.
+
+D. Zeng, Y. Dai, P. Cheng, L. Wang, T. Hu, W. Chen, N. Du, and Z. Xu. On diversified preferences of
+   large language model alignment. arXiv preprint arXiv:2312.07401, 2023.
+
+H. Zhang, T. Ren, C. Xiao, D. Schuurmans, and B. Dai. Provable representation with efficient planning
+   for partial observable reinforcement learning. arXiv preprint arXiv:2311.12244, 2023.
+
+L. Zhang, Z. Wang, X. Li, and Y.-H. Li. Revisiting bisimulation metric for robust representations in
+   reinforcement learning. arXiv preprint arXiv:2507.18519, 2025.
+
+                                                                                                                                                                               15
+                                         Spectral Souping: A Unified Framework for Online Preference Alignment
+
+S. Zhang, D. Yu, H. Sharma, H. Zhong, Z. Liu, Z. Yang, S. Wang, H. Hassan, and Z. Wang. Self-
+   exploring language models: Active preference elicitation for online alignment. arXiv preprint
+   arXiv:2405.19332, 2024.
+
+Y. Zhong, C. Ma, X. Zhang, Z. Yang, H. Chen, Q. Zhang, S. Qi, and Y. Yang. Panacea: Pareto
+   alignment via preference adaptation for llms. Advances in Neural Information Processing Systems,
+  37:75522­75558, 2024.
+
+L. Zhu, F. Guo, G. Cai, and Y. Ma. Structured preference modeling for reinforcement learning-based
+   fine-tuning of large models. Journal of Computer Technology and Software, 4(4), 2025.
+
+                                                                                                                                                                               16
+                             Spectral Souping: A Unified Framework for Online Preference Alignment
+
+A. Derivations of Results in Section 3
+
+A.1. Proof of Lemma 1
+
+Given the reference LLM representation ()   and an action token embedding ref()  , the ref-
+                                                                                                      ))/
+erence  policy     is  expressed    as  a  softmax    function:    (|)         =  exp(   ( )  ref  (                  exp(()ref ()).
+                                                                                                               
+
+We   can  also     rewrite   the    inner    product     using     the   identity  ()ref ()           =   -        1  (    ()   -     ref () 2     -
+                                                                                                                   2
+() 2 - ref() 2). Substituting this into the reference policy equation reveals a Gaussian kernel:
+
+ref (|)  exp           -  1  ()     -   ref () 2  , which measures the similarity between the state and action
+                          2
+
+embeddings. To create a more tractable linear representation, we approximate this Gaussian kernel
+
+using Random Fourier Features (RFF). RFF approximates a continuous shift-invariant kernel with an
+
+inner product of randomized feature maps. Applying this technique yields a spectral representation
+
+of the reference LLM policy:
+
+                                             ref (|)  =        (), ref, () ()                                                                   (11)
+
+                                                              (),           ref, () ()
+
+                                                                     
+
+Here, the expectation ·, · () is over a random frequency vector   N (0, ), and the feature maps
+
+are  defined     as:    ()   =      exp(-(        ))  exp  (  1    (  )    2)  ,  ref, ()  =  exp  (  ref          ())     exp  (  1    ref  (  )  2)
+                                                              2                                                                    2
+
+This spectral representation transforms the non-linear kernel into a linear inner products in a ran-
+
+domized feature space, providing a direct path toward understanding the conditions under which the
+
+corresponding optimal Q-function can also be represented linearly.
+
+    To prove this technical lemma, we start by understanding the L-step decodability condition in
+Assumption 2. Consider the optimal Bellman equation for (, ) in Equation 3, which can be easily
+
+derived by unrolling the one-step Bellman equation forward in time for  steps and using the time
+consistency property of exponential risk measure Hau et al. (2023) log ref exp((, )/), and the
+fact that the transition dynamics of the language MDP is deterministic  = (, ):
+
+                                                                         1  +-1                  
+
+                                                                                               
+
+              (    ,   )  =   (  ,   )  +    log  ref,+1:+-1     exp               (  ,  )  +      (  +,  +)               , ,  .               (12)
+
+                                                                            =+1
+
+According to the -step decodability assumption, the function (+, +) from the above formulation
+is directly independent to the earlier history  = (0, 0, 1, . . . , -1) and . However, the forward
+steps are conducted according to the policy ref,+1:+-1 = {ref (·|+1), . . . , ref (·|+-1)} still depends
+on parts of , hence the distribution in the above expectation still retains a dependence on .
+
+    To further study the dependence on history of this optimal Q-function, we introduce a final
+
+observation: For the reference policy ref in Equation (11), under the L-step decodability assumption
+there exists a corresponding policy ref, known as the moment matching policy, that conditions
+on a sufficient latent variable (the reference LLM representation) to generate the same expected
+
+observation dynamics while being independent of history older than  steps Zhang et al. (2023). Now,
+
+with this observation we consider the -step auto-regressive distribution induced by the reference
+policy ref, i.e., ref (+1:+, +1:+|, ). Under -step decodability, for any arbitrary state-action
+pair (, ) at any step , this forward distribution emits the following spectral decomposition:
+
+     ref (+1:+, +1:+ |, )                    =              (, ), ref, (+1:+, +1:+)N ()                                                         (13)
+                                                                                                                                ,
+
+                                                 (, ),  ref, (+1:+, +1:+)+1:++1:+N ()
+
+When modeling the state-action pairs in the next   {1, . . . , } steps, the above expression uses the
+moment matching trick, which uses the policy ref that only depends on the latent variable and is
+
+                                                                                                                                                   17
+                                  Spectral Souping: A Unified Framework for Online Preference Alignment
+
+independent of (, ). Under this policy, ref, (+1:+, +1:+), is then a function that maps to the
+latent space by construction and is independent of history, leading to the above spectral representation.
+
+Utilizing this result, one can re-write Equation (12) as
+
+    (  ,   )     -   (  ,    )
+
+
+
+                                                           1  +-1                      (+,
+= log
+                                                               
+
+              ref (+1:+, +1:+ |, ) exp                                    (  ,  )  +             +)      +1:+  +1:+
+
+                                                              =+1
+
+          (, ), ref, (+1:+, +1:+)N () exp                                       1  +-1     (  ,  )   +   (+,    +)   +1:+  +1:+
+                                                                                   =+1
+
+= log                                      (, ),  ref, (+1:+, +1:+)+1:++1:+N ()
+
+           (,                ) ,          (                )  exp  (  1     +-1     (  ,  )  +   (+,    +))N ()
+                                                                            =+1
+                                  ref  ,     +1:+,  +1:+                                                             +1:+  +1:+
+
+=  log                                     (, ),  ref, (+1:+, +1:+)+1:++1:+N ()
+
+                                                                         1  +-1                    
+           (, ),
+                                                                                                 
+
+                                  ref, (+1:+, +1:+) exp                             (  ,  )  +       (  +,  +)   +1:+  +1:+
+
+                                                                            =+1                                               N ()
+
+= log                                                     ,,=exp( -,  ) exp( ,  2/2), for some , 
+
+                                                                                                                                    ,
+
+                                           (, ), ref, (+1:+, +1:+)+1:++1:+N ()
+
+                                                         ref,=exp( -ref ) exp( ref 2/2), for some ref
+
+where the first equality follows directly from the definitions of the optimal Q-function and the forward
+distribution in Equation (13), the second equality follows from the linear property of the Fourier
+spectral representation, which is characterized by an inner product ·, · () in the frequency space,
+and the third equality follows from algebraic operations of the corresponding random Fourier feature
+maps. The above arguments further imply that
+
+              (     ,    )  - (, )           =    · log  exp(( (, )), )            = ( (, )) (,              - ref) · , ,  .
+                                                          exp(((, ))ref)
+          
+
+This further implies that  (, ) = ( (, )),,ref with ,,ref = r + ,  - ref, meaning that
+the optimal Q-function can be linearly parametrized with the reference LLM feature  under these
+conditions, completing the proof of this lemma.
+
+                                                                                                                              18
+                                     Spectral Souping: A Unified Framework for Online Preference Alignment
+
+A.2. Proof of Theorem 1
+
+For any base and spectral soup temperatures ,  > 0, logit-mixture vector   , recall the
+
+spectral soup policy ~ (|)  ref (|) exp(                                                        (  ,  )/        ),  the      personalized               policy    w (|)           
+
+                                                                                              
+
+ref (|) exp(w (, )/), i.e., KL (w (·|)||~ (·|)), the personalized value function
+
+       ()    =  max              -1                                                                                 =  · log ref (· |)                  exp w (, )          ,
+                                                                                                                                                                  
+w                               
+                                    w (, ) -   ((·|) ref (·|)) |0 = 
+
+                                 =0
+
+and notice that the spectral soup policy has the following optimal value function:
+
+                                         -1                                                                                                               
+                                                                         | | ·  (~ (·|) ref (·|)) |0 =                                                        | |
+             (  )  :=   max      ~          w (, ) -                                                                                         s.t.                        
+    w,
+                                        =0                                                                                                                              .
+
+                                                                                                                                                          
+
+    First, we aim to compute an upper bound for the KL divergence between the spectral soup policy
+and the personalized policy, i.e., KL(w (·|)||~ (·|)). Expanding the KL divergence term, we obtain
+the following inequality for any logit-mixture vector   :
+
+0  KL (w (·|) ||~ (·|)) = w (·|)                                     log w (|)
+                                                                          ~ (|)
+
+                                              w (, ) - w ()                                                                  (  ,  )                                       (, )
+                                                                                                                                                                              
+=w (· |)           log ref (|)          +                                    -   log ref (|) +                                        - log ref (· |)           exp
+                                                                                                                         
+
+             w (,       )                       (  ,  )                                                             (  ,  )                                     w (,     )
+                                                                                                                                                                    
+=w                            -                             +     log ref (· |) exp                                             -  log ref (· |)          exp
+
+                                                                                                              
+
+                                 
+
+1                                                                                                             
+
+   w [( (, ))] 2 +  ref |( (, )) | 2 ·  ,w,ref -  ,,ref ,                                                                                                                (14)
+
+                                                                                                                                          2
+
+where the last inequality follows from Lemma 1 and the Lipchitz property of the log ref exp()
+
+function (with Lipschitz constant 1). Second, we aim to derive the performance sub-optimality
+bound with respect to the personalized-soup value function w, (), and personalized value function
+w (). By the above definitions, we can easily argue that (i) w ()  w, () as the personalized-soup
+
+optimization problem always has a lower objective value than that of the personalized RLHF problem,
+                                
+and    (ii)  w ,     ()              (  )  ,          {1,   .  .  .  ,   },  as  the   right         hand     side       of  this  inequality           can  be   recovered
+                              w,
+by setting the logit mixture vector  as the corresponding one-hot vector with magnitude / > 0 at
+
+the -th attribute. Furthermore, based on the assumption of non-negative rewards r, which implies
+                                                                                                                      
+that   all   optimal       value     functions        (w ,     w ,        ,     but  not      necessarily                       since  it    is  not    an  optimal    value
+                                                                                                                    w,
+                                                                          
+
+function) are also non-negative. With /(                                           | |)         1,    we    can     therefore         express      the    sub-optimality
+
+                                                                                      
+
+performance bound of the personalized-soup policy at any state  as
+
+                                     |   |                                      | |                          ()               ()
+
+w   (  )     w,      (  )                       |  w,    (  )  =                         w,          ()  -                +    
+
+                                         |                                        | |
+                                                                          
+
+                              | |                                                         ()                           | |                                         (,          )
+                                                                        + 
+                                        w,         ()    -        ()                                     -                      log  ref                exp          
+
+                                | |                                                                                                              (· |)                 | |
+
+                                                                                                                                                                          
+
+                                                                                                                  
+
+                                            (  )                                                                                    (  )
+
+                                     | |                                           (, )                                                          w (, )                
+                                                                                                                                                     
+                           +                  log  ref (· |)            exp                           -         log      ref              exp                     +  w   (  )
+
+                                                                                           |      |                                (· |)                                       .
+
+                                                                                                
+
+                                 
+
+                                                                                            ()
+
+                                                                                                                                                                               19
+                                             Spectral Souping: A Unified Framework for Online Preference Alignment
+
+This performance bound can further be simplified via the following sequence of inequalities:
+
+                                                   ( /) ()                                                                                                      ( /)                   
+                                                                                                                                                                                       
+w,      (  )     w      (  )  +       ()       +                                 -    ref |( (,                       )) | 2 ,w,ref                   -                                     ,     ,ref    2
+
+                                                                                                                                                                               
+
+                 -1                                                                            |      |                                                                                                                        
+                                                                                                                            ()                                                                                     
+w () -   [( (, )) 2|] w -                                                                                          +                    -    ref |( (, )) | 2 ,w,ref                                         -                  , ,ref  2
+                                                                                                  | |
+                 =0                                                                            2
+                                                                                                                                                                                                                          
+
+                 -1                                                                                        |       |                  2                                      
+                                                                                                                                      
+w () -   [( (, )) 2|0 = ] · w -                                                                                                    +        ·                      ()   (      )-
+                                                                                                              | |
+                 =0                                                                                                                                                          
+
+                                                                                                             2                                    
+
+                                                                                                                   ( /)                   
+
+                                 -      ref           | ( ( ,        ) ) |  2           ·     ,w ,ref         -                                ,,ref 2,                                                                 (15)
+
+                                                                                                                                          
+
+                                                                                                                                      
+
+where the first inequality follows from the derivations in Equation (9), i.e., Lipschitz continuity of
+                                                                                                                                     /(                
+log ref exp(),             and            the  convexity                   of      the     function              ()         =                     |       |  )  ,  /(                | |)           1   i.e.,
+                                                                                                                                   
+                                                                                                                                                                                        
+
+                                                                                                         (,   )                                                            w (, )
+                                                                                                                                                                               
+         ()    =              |        |  log  ref (· |)                exp                                           -        log      ref                        exp
+
+                                                                                            | |                                                      (    ·  |  )
+
+                                                                                                  
+
+                                                                                                           (,   )            /          |  |                                                      w (,          )
+                                                                                                                                                                                                      
+                                                                                                                                           
+
+               =              |        |  log  ref                         exp                                                                 -             log     ref (· |)           exp
+
+                                                            (  ·  |  )                                                                               
+
+                                   
+
+                        
+
+                      ·  | |                                                                              (,               )                                                           w    (,      )
+                                                  log     ref (· |) exp                                                            -          log    ref (· |)                 exp          
+                                                                                                                                        
+                                    | |
+                                                                                                              
+
+                                                                                                                          
+                                                                                   
+                     -   ref              | ( ( ,     ))|2                 ·              ,w ,ref        -                  ,,ref 2,
+
+                                                                                                                          
+
+                                                                                                                
+
+, the second inequality follows from utilizing the definitions of value functions in the soft MDP:
+
+                        | |                                                                                                            -1                                            
+
+                                       (w, ()                ())                            1                                         
+   () :=                                                                                    | |
+                          | |                          -                         =                              |       |                  ( (, )) |0 =                                  w - 
+                                                                                                                                 
+                         
+                                                                                                                                      =0
+
+     1                         -1
+                                                                  
+                                                                                   
+               min                        (  (     ,    ))                    |      |     w -                  |0 = 
+     |      |
+                 
+
+                              =0                                     
+
+     1                -1                                                                                                        -1                                                                              |       |
+                                                                                                                                                                                                                      
+                                                  )                                                                                                                                                          
+=                                (  (          )            |           |     w -                     |0 =               -  [( (, )) 2|] · w -
+     |      |                             ,                                                                                                                                                                        |      |    ,
+                                                                                                                               =0
+                     =0                                                                                                                                                                                                      2
+
+and assume both the linear parameterization rewards in Assumption 1 and the existence of a minimal
+
+policy over the mixture of reward differences   arg min                                                                                     -1               (  (    ,     )  )       | |         w -                   |0 =  ,
+                                                                                                                                           =0
+                                                                                                                                                                                      
+
+and the third inequality follows from a hypothesis that there exists  ()  0 such that the following
+
+property holds (such a technical result will be derived in the remaining part of the proof):
+
+                                                                           | |                                                                    (,      )                                         )
+
+               ()    :=                         (  )  -                              log       ref (· |)              exp                                                  ·             (  )  (                        (16)
+
+                                                                                                                                               |       |                                                -    .
+
+                                                                                                                                                    
+
+                                                                                                                                                                               
+
+                                                                                                                                                                                         0
+
+    To show that Equation (16) holds, first consider the following upper-bound of 1/, with 0   
+  , with respect to an arbitrary anchor point     , such that | - |  ||, :
+
+                 1 = 1 -  -  + ( - )2 1  1 -  -  + ( - )2 1
+                   2                                        2   2                                                           2 
+
+                 1                     ( -     )2           1 -  -                               2 -                        1                  2 -  2                                          2 - 
+                                                   )                                           =
+                           
+
+        =                          (         2                  2                                        2                  (- )2         =                                              =                         .
+                                                                                                                               2                     2  (2 - )  (2 - )
+                           =0                                                                                      1-
+
+                                                                                                                                                                                                                             20
+                             Spectral Souping: A Unified Framework for Online Preference Alignment
+
+Substituting to the above inequality
+
+                                 (, )                                                      (, )
+                   = exp                              =  () · ref exp                        
+                                                ,                                                            ,
+                                                                                               
+
+                                                         (, )                                                             (, )
+                   =  () · ref exp                                               =  () · ref exp                           
+                                                                       ,                                                                   ,
+                                                                                                                             
+
+for  the  importance-sampling          (IS)        factor    ()    :=        (  |  )/ref     (  |  )  ,  IS     lower    bound            (),       and  IS  upper
+
+                                                                         
+
+bound  (), where 0   ()  1,  ()  1,  ()  [ (),  ()], and taking expectation ref on
+
+both sides, this expression becomes
+
+          ref (· |)          1                           2 () - 1                                  1                                                            (17)
+                                                    () (2 () -  ()) ref (·|)                       exp
+
+                              (,)                                                                                (,)
+                                       
+                        exp                                                                                        
+                     
+                                                                                                                    
+
+                                       
+
+     =    log ref (· |)             1               log            2 () - 1                     - log ref (· |)                       (, )
+                                                              () (2 () -  ())                                                   exp 
+
+                                       ( , )                                                                                              
+                                                
+                             exp                
+                           
+
+                                                
+                                       - (, )                                                    (, )
+     = - log ref (·|) exp                                    log ref (· |) exp                                     -  log             2 () - 1
+                                                                                                                                   () (2 () -  ())                .
+                                                                                                     
+                                                                                                                             
+
+                                                                                                                                          ()
+
+                                                                                                                                           
+
+The above bound is only valid when  ()  0. We will achieve that and also minimize  () by
+                                                                                                                                                         
+
+choosing the right  (). Notice that, since 0   ()  1 and 1   (), the expression exp  () =
+
+                                                                                                                                                                                      
+
+      2 () -1        1  only    when           ()       1   (1  +   ()),     and      this   value       would        monotonically                 increase    with
+ () (2 () - () )                                        2
+
+ beyond that. However, to satisfy the necessary condition -||   -   ||, , that guarantees the
+
+convergence of the above geometric sum, for     , the smallest  value can only be ( + )/2, or
+
+in other words the smallest possible  is ( () +  ())/2, which is a valid choice as it is greater than
+
+(1 +  ())/2. Substituting  = ( () +  ())/2 into  () yields
+
+                                                                                                           
+
+                         ()     :=     ()          =  log( ()      +    ()         -  1)  -  log( ()            ·   ())             0.                          (18)
+
+                                        
+
+If  () is constructed via Equation (18), then the inequality in Equation (16) can be proven by using
+the convexity arguments and definitions of  via the following inequalities:
+
+                                                                                       
+
+     1                          1                                                        (, )
+      | |                        | |                                               exp 
+                     (  )  =                            log     ref (· |)
+                                                                                             
+                                                     
+
+                                  
+
+                                1                                                                               sgn() (, )                                        )
+                                                            (sgn(      )  )  log  ref                 exp                                        +       ()  (
+                                                                                                                                                                  
+                                    |      |                                                (· |)                                                                    -
+                                                          
+                                                                                                                           
+                                
+                                                
+
+                                              | |                                     sgn() (, )                                (  )  (    )  -
+                           =
+                                                      log   ref (· |)        exp                                      +                    
+                             
+                                                | |                                                                                   | |
+                                                                                                                                    
+
+                            log ref (· |) exp                      | |sgn(          )     (,    )        +               ()  (      )-
+
+                                                                                                                                  
+
+                                                                                  | |                                    | |
+
+                                                                                                                            
+
+                           = log ref (· |) exp                      (,          )     +            () (          )-
+
+                                                                                                               
+
+                                                                          | |                            | |          ,
+
+                                                                                                            
+
+where the first equality follows from the definition of (), the first inequality follows from the
+
+                                                                                                                
+
+arguments in Equation (17) applied to the cases when  < 0 (with equality holds trivially when
+
+                                                                                                                 
+
+                                                                                                                                                                     21
+                                         Spectral Souping: A Unified Framework for Online Preference Alignment
+
+  0), the second and third equalities follows from simple algebra, the second inequality follows
+
+  
+
+from convex property of the function log ref exp().
+    Combining all these arguments complete the proof of this theorem.
+
+                                                                                                                                                                               22
+                                         Spectral Souping: A Unified Framework for Online Preference Alignment
+
+B. Experiment Details
+
+B.1. Experimental Domains
+
+To assess the effectiveness of our approach, we conduct empirical evaluations of spectral souping
+on three realistic LLM personalization experiments. Each experiment contain two phases, an offline
+learning phase of specialized policies and an online adaptation phase for LLM personalization.
+
+    The first experiment is built upon the UltraFeedback dataset, which initially contains a training
+set of 60,829 examples and a test set of 985 examples. Each data point consists of an input prompt
+ and a pair of distinct agent responses, ( 1, 2), where each response  is annotated with a four-
+dimensional feature vector, (, ), quantifying its helpfulness, honesty, instruction-following, and
+truthfulness. We leverage this fine-grained scores to synthesize diverse preference labels, each with
+a unique weight vector w  4. Pairwise preference rankings of two responses is determined by
+the dot product of their feature vectors with this weight vector; for instance, 1 is preferred over
+2 if (, 1), w > (, 2), w. In the offline phase, we build a library of  = 30 specialized
+policies. We generate 30 distinct datasets by creating 30 unique preference vectors, w, each sampled
+from a distribution centered around a basis vector for one of the four attributes (e.g., [1, 0, 0, 0] for
+helpfulness). The online phase evaluates the algorithm's generalization to novel preferences under
+ambiguous conditions. On the same dataset of prompts and responses, we simulate responses of eight
+held-out "users," proxied by publicly available reward models. Crucially, the preference functions
+of these models were unseen during offline training, providing a rigorous test of generalization. To
+further amplify the task's difficulty, we filter the dataset to retain only the most contentious examples
+where preferences conflict, resulting in a benchmark of 23, 614 training and 401 test examples,
+forcing the model to learn nuanced preference trade-offs.
+
+    The second experimental setup focuses on personalized text-to-image (T2I) generation within
+the PASTA framework, which involves a 5-turn (H=5) interactive process. At each turn, the agent
+presents the user with a 4x4 slate of 16 images, where each column corresponds to a unique prompt
+expansion. The core generation models include Stable Diffusion XL for images and Gemini 1.5 Flash
+for creating a candidate set of 25 prompts, from which the four are selected for the slate. The utility
+functions are based on fine-tuned Gemma 2B models. For the offline learning phase, we generated
+K=32 specialized datasets from over 30,000 simulated user rollouts, totaling more than 2.5 million
+images. These rollouts were guided by 32 distinct user models designed to capture myopic, turn-
+by-turn preferences. In this simulation, a user provides an absolute satisfaction score (on a 5-point
+scale) for the best image in each column based on its relevance to the original prompt. The choice
+is then modeled as selecting the column that received the highest score. In the online phase, the
+algorithm's adaptability is tested against 5 held-out, simulated users. Each of these "auto-raters"
+is powered by a unique, pre-trained Q-function that models a holistic, session-level preference. In
+contrast to the myopic offline models, these Q-functions evaluate the entire 5-turn session based on
+salient user values, such as aesthetic quality, prompt-image consistency, or a specific artistic style.
+These user-mimicking Q-functions were trained on a large offline dataset using Implicit Q-Learning.
+
+    Our third experiment is grounded in the healthcare domain of sleep coaching. We begin by
+obtaining detailed user profiles from 68 real individuals from the LifeSnaps dataset. Each profile
+is constructed using a rich set of attributes, including demographics (age, gender), health metrics
+(BMI, average and variable sleep duration). From these attributes, we generate a 'sleep profile' for
+each user, detailing their primary sleep concern, goals, and barriers. To simulate conversations, each
+user is instantiated as an LLM whose prompt contains the user's entire backstory vignette, along with
+the full preceding conversation history, ensuring that the dialogue is consistently grounded in the
+user's profile. For the offline learning phase, we generate  = 15 specialized preference datasets, each
+
+                                                                                                                                                                               23
+                                         Spectral Souping: A Unified Framework for Online Preference Alignment
+
+corresponding to one of the five personality dimensions. To create each dataset, we first generate
+1, 000 pairs of 10-turn conversations by having our synthetic users interact with the coaching agent--a
+'Talker' and 'Reasoner' system powered by Gemini 1.5 Pro. The key step for creating specific data
+is via persona-based ranking: each of the 1, 000 conversation pairs is ranked by a reward function
+that specifically embodies one of the five target personalities. For the online adaptation phase, we
+evaluate the algorithm's performance on a test set of 512 samples for each of 5 distinct "users,"
+who are simulated by a auto-rater system with generative feedback. This system employs Gemini
+1.5 Flash to score conversations by systematically evaluating them against a detailed set of rubrics
+designed to holistically assess sleep-coaching quality. These rubrics cover the agent's tone and style
+(friendliness, supportiveness, empowerment), its ability to understand the user (rapport establishment,
+capturing concerns, efficient information gathering), and the efficacy of its personalized intervention
+(collaborative goal-setting, relevance, and quality of the structured plan).
+B.2. Model and Training Details
+B.3. Additional Results
+
+Figure 4 | Test-time Training Performance of Different Methods using the Gemma3 1B model: Explicit &
+Implicit Spectral Souping (SS-Exp & SS-Imp), P-SOUPS, PAD, PAD-SF, RLHF, adapted to 5 various users
+in the UltraFeedback, T2I Generation, Sleep Coaching domains. The SS methods (especially SS-Exp)
+consistently and outperform P-SOUPS and the PAD baselines, demonstrating superior performance in
+online adaptation.
+
+                                                                                                                                                                               24
+                Spectral Souping: A Unified Framework for Online Preference Alignment
+
+Figure 5 | Evaluation Performance of Different Online Adaptation Methods using the Gemma3 1B
+model: Explicit & Implicit Spectral Souping (SS-Exp & SS-Imp), P-SOUPS, PAD, PAD-SF, RLHF,
+across adapted to 5 various users in the UltraFeedback, T2I Generation, Sleep Coaching domains.
+The superior performance of the SS methods (over P-SOUPS, PAD, and PAD-SF baselines) is also
+generalizable to online evaluations.
+
+C. Sequential Estimation of 
+
+The loss functions in both cases (binary labels and preference labels) are convex in , and so inference
+of these parameters is tractable using off-the-shelf convex optimization methods. However evaluation
+of the loss function is relatively expensive and must be performed for each user, ideally in real-time.
+Thus, in this section we propose an online method optimization of . The formulation of our method
+is based on sequential variational inference, but we will show the resulting inference algorithm is a
+simple weighted least squares update.
+
+    Our variational method aims to compute a variational posterior () via
+
+                   (         )  =  arg min () [L (; B)]   +  KL (  (  )  |   (  ) ) .                (19)
+
+                
+
+We fix () = N (¯, ), and a Gaussian prior (). Note that this objective is convex in the parameters
+of the variational posterior. In the case where we sequentially observe trajectories and labels at
+interaction , (, ), we propose a sequential method for identification of  based on variational
+continual learning. In particular, at time index , we compute variational posterior  via
+
+                 () = arg min () [L (; (, ))] + KL(() | -1 ()).                                      (20)
+
+                                     
+
+Briefly, this method aims to sequentially infer the variational posterior by regularizing to the posterior
+of the previous timestep, using a method similar to sequential filtering.
+
+We derive the least squares update for the preference learning case, and the binary classification
+
+model is a straightforward extension. We approximate (20) via second order Taylor expansion,
+
+allowing exact  computation  of the expectation.  We will define  -1        =  -1 () --1 ()  (where  each
+                                                                                          
+
+ term here is vectorized over ). This term is computed by the log likelihoods of the policy as in
+
+Section ??. We further define -1 = (¯-1-1), the predictive preference likelihood after updating
+at step  - 1.
+
+Computing the analytical minimum of this second order approximation, we get updates
+
+                                -1  =  --11  +  -1 (1  -  -1 ) -1 -1                                 (21)
+                                                                                                     (22)
+                                  
+
+                                   ¯ = ¯-1 + (1 - -1)-1
+
+                                                                                                     25
+                             Spectral Souping: A Unified Framework for Online Preference Alignment
+
+which are inexpensive to compute compared to the cost of the model evaluation. The updates may be
+
+made cheaper by exploiting rank-1 updates, but this is a relatively minor consideration. This update
+
+can naively be performed once per timestep/user feedback, corresponding to a Newton-style step per
+
+interaction. It can also be performed multiple times (matching iteratively reweighted least squares)
+
+by  setting  -1  =    (  ¯   -1).
+
+                           
+
+                                                                                                    26
+

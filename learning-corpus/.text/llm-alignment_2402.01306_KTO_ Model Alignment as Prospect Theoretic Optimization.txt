@@ -1,0 +1,62 @@
+KTO: Model Alignment as Prospect Theoretic Optimization
+
+arXiv:2402.01306v4 [cs.LG] 19 Nov 2024
+
+Kawin Ethayarajh 1 Winnie Xu 2 Niklas Muennighoff 2 Dan Jurafsky 1 Douwe Kiela 1 2
+
+Abstract
+Kahneman & Tversky's prospect theory tells us that humans perceive random variables in a biased but well-defined manner (1992); for example, humans are famously loss-averse. We show that objectives for aligning LLMs with human feedback implicitly incorporate many of these biases--the success of these objectives (e.g., DPO) over crossentropy minimization can partly be ascribed to them belonging to a family of loss functions that we call human-aware losses (HALOs). However, the utility functions these methods attribute to humans still differ from those in the prospect theory literature. Using a Kahneman-Tversky model of human utility, we propose a HALO that directly maximizes the utility of generations instead of maximizing the log-likelihood of preferences, as current methods do. We call this approach KTO, and it matches or exceeds the performance of preference-based methods at scales from 1B to 30B, despite only learning from a binary signal of whether an output is desirable. More broadly, our work suggests that there is no one HALO that is universally superior; the best loss depends on the inductive biases most appropriate for a given setting, an oft-overlooked consideration.
+1. Introduction
+Aligning generative models with human feedback has been successfully used to make generations more helpful, factual, and ethical, among other desiderata (Ouyang et al., 2022; Tian et al., 2023). For LLMs, alignment methods such as RLHF and DPO have consistently proven to be more beneficial than doing supervised finetuning (SFT) alone. However, human feedback is often discussed only in the context of preferences (e.g., output yw  yl for input x), even though it can take many forms (e.g., approval/disapproval of y given
+1Stanford University (first author was an intern at Contextual AI) 2Contextual AI. Correspondence to: Kawin Ethayarajh <kawin@stanford.edu>.
+Proceedings of the 41 st International Conference on Machine Learning, Vienna, Austria. PMLR 235, 2024. Copyright 2024 by the author(s).
+
+Figure 1. The utility that a human gets from the outcome of a random variable, as implied by different human-aware losses (HALOs). Notice that the implied value functions share properties such as loss aversion with the canonical human value function in prospect theory (Tversky & Kahneman, 1992).
+x). This is because preferences, despite being a kind of data that is relatively scarce and expensive to collect in practice (Casper et al., 2023), are required by the alignment methods shown to work best--RLHF (Christiano et al., 2017) and DPO (Rafailov et al., 2023).
+To understand why these methods work so well, and whether feedback needs to be in preference form, we frame alignment through the lens of prospect theory (Kahneman & Tversky, 1979; Tversky & Kahneman, 1992). Prospect theory explains why humans make decisions about uncertain events that do not maximize their expected value. It formalizes how humans perceive random variables in a biased but well-defined manner; for example, relative to some reference point, humans are more sensitive to losses than gains, a property called loss aversion. We show that popular alignment methods such as DPO and PPO-Clip (Schulman et al., 2017) implicitly model some of these biases, helping explain their success independently of the data used (§3.2). We then propose a more general class of such loss functions called human-aware losses (HALOs).1
+1We use the term human-aware to draw an analogy with how hardware-aware methods benefit from being designed around hardware limitations (Dao et al., 2022), not to claim that a simple loss function is fully aware of human behavior.
+
+1
+
+Model Alignment as Prospect Theoretic Optimization
+
+Although it is impossible to say that HALOs are categorically better than non-HALOs, we find that among existing methods, those that meet the definition of a HALO work better than those that do not (§3.3). We find that DPO performance can even be matched at most scales by running an offline PPO variant on dummy +1/-1 rewards, suggesting that preference data might not be needed if the inductive bias in the loss function is good enough. However, despite the surprising success of this simple baseline, it significantly lags behind DPO at the 30B LLM scale and suffers from hyperparameter sensitivity, making it difficult to use.
+Taking a more principled approach, we derive a HALO using the model of human utility that Kahneman & Tversky proposed to describe how humans make decisions about uncertain monetary outcomes (Tversky & Kahneman, 1992). This approach, which we call Kahneman-Tversky Optimization (KTO), directly maximizes the utility of generations instead of maximizing the log-likelihood of preferences, as most current methods do (§4.1). KTO only requires a binary signal of whether an output is desirable or undesirable for an input. This data is more abundant, cheaper, and faster to collect in the real world, making it easier to scale alignment in production and rapidly iterate on models. We find that:
+· KTO matches or exceeds DPO performance at scales from 1B to 30B parameters (§4.3).2 That is, breaking up n preferences meant for DPO into 2n examples for KTO can yield better LLM generations, as determined by closed-ended tasks such as mathematical reasoning and open-ended judgments from humans and GPT-4.
+· KTO can handle extreme data imbalances, matching DPO performance while using up to 90% fewer desirable examples (i.e., examples of good generations). Its success cannot be ascribed to the alignment data being sourced from a preference dataset.
+· When the pretrained model is sufficiently good, one can skip supervised finetuning (SFT) and go straight to KTO without a loss in generation quality, whereas SFT is always needed for best results with DPO.
+The intent behind KTO was that even if the model learns from a weaker signal, we could compensate with the higher volume of data that could be accessed in practice; the fact that KTO can match and even outperform DPO on the same data is thus surprising. We conclude by discussing some theoretical explanations for this phenomenon (§4.4). Despite the success of KTO in our experiments, our work ultimately suggests that there is no one HALO that is universally superior; the best HALO depends on the inductive biases appropriate for a given setting, and this choice should be made deliberately instead of defaulting to any one loss.
+2Our code is available on Github; models are on Huggingface.
+
+2. Background
+For a detailed survey, please see Appendix A. In brief, LLMs are traditionally trained in three stages (Ouyang et al., 2022):
+
+Pretraining Given a large corpus, train the model to maximize the log-likelihood of the next token conditioned on the preceding text. Let 0 denote the pretrained model.
+
+Supervised Finetuning (SFT) Finetune the model to predict the next token on data that is more relevant to the downstream task. Often, such data will comprise instructions and an appropriate response (i.e., instruction finetuning). Let ref denote the finetuned model.
+
+RLHF Given a dataset D of preferences (x, yw, yl)-- where x is an input, yw, yl are the preferred and dispreferred outputs (i.e., yw  yl for x), and r is the "true" reward function underlying the preferences--it is first assumed that the probability that yw is preferred to yl can be captured with a specific function class, typically a Bradley-Terry model (Bradley & Terry, 1952). Where  is the logistic function:
+p(yw  yl|x) = (r(x, yw) - r(x, yl)) (1)
+Since getting the true reward from a human would be intractably expensive, a reward model r learns to serve as a proxy, done by minimizing the negative log-likelihood of the human preference data:
+LR(r) = Ex,yw,ylD[- log (r(x, yw) - r(x, yl))]
+
+But solely maximizing the reward might come at the expense of desiderata such as generating grammatical text. To avoid this, a KL divergence penalty is introduced to restrict how far the language model can drift from ref. Where  is the model we are optimizing, the optimal model  is that which maximizes
+
+ExD,y [r(x, y)] - DKL((y|x)ref(y|x)) (2)
+where  > 0 is a hyperparameter. Since this objective is not differentiable, we need to use an RL algorithm like PPO (Schulman et al., 2017).
+
+However, RLHF is often slow (largely because of having to sample generations) and quite unstable in practice (especially in a distributed setting). For this reason, recent work has focused on designing closed-form losses that maximize the margin between the preferred and dispreferred generations. In particular, Direct Preference Optimization (DPO) (Rafailov et al., 2023) has emerged as a popular alternative as it allows the same optimal policy as in RLHF to be recovered under certain conditions:
+
+LDPO(, ref) = Ex,yw,ylD
+
+- log   log (yw|x) -  log (yl|x)
+
+(3)
+
+ref (yw |x)
+
+ref(yl|x)
+
+2
+
+

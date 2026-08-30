@@ -1,0 +1,84 @@
+arXiv:2405.16406v4 [cs.LG] 20 Feb 2025
+
+Published as a conference paper at ICLR 2025
+SP I NQU A N T : LLM QUANTIZATION WITH LEARNED ROTATIONS
+Zechun Liu Changsheng Zhao Igor Fedorov Bilge Soran Dhruv Choudhary Raghuraman Krishnamoorthi Vikas Chandra Yuandong Tian Tijmen Blankevoort Meta
+ABSTRACT
+Post-training quantization (PTQ) techniques applied to weights, activations, and the KV cache greatly reduce memory usage, latency, and power consumption of Large Language Models (LLMs), but may lead to large quantization errors when outliers are present. Rotating activation or weight matrices helps remove outliers and benefits quantization. In this work, we identify a collection of applicable rotation parameterizations that lead to identical outputs in full-precision Transformer architectures while enhancing quantization accuracy. In addition, we find that some random rotations lead to much better quantization than others, with an up to 13 points difference in downstream zero-shot reasoning performance. As a result, we propose SpinQuant, a novel approach that incorporates learned rotation matrices for optimal quantized network accuracy. With 4-bit quantization of weight, activation, and KV-cache, SpinQuant narrows the accuracy gap on zero-shot reasoning tasks with full precision to merely 2.9 points on the LLaMA-2 7B model, surpassing LLM-QAT by 19.1 points and SmoothQuant by 25.0 points. Furthermore, SpinQuant also outperforms concurrent work QuaRot, which applies random rotations to remove outliers. In particular, for LLaMA-3 8B models that are hard to quantize, SpinQuant reduces the gap to full precision by up to 45.1% relative to QuaRot. Code is available at github.com/facebookresearch/SpinQuant.
+1 INTRODUCTION
+Large Language models (LLMs) have demonstrated impressive performance across many disciplines. SoTA open source models (e.g., LLaMA (Touvron et al., 2023b), Mistral (Jiang et al., 2023), etc) and proprietary LLMs (e.g., GPT (Achiam et al., 2023), Gemini(Team et al., 2023), etc) have been used in general purpose chatting assistants, medical diagnosticians (Thirunavukarasu et al., 2023), computer game content generators (Cox and Ooi, 2023), coding co-pilots (Roziere et al., 2023), and much more.
+To serve such a high demand, the inference cost becomes a real issue. Many effective techniques have been developed. Post-training Quantization (PTQ), as one effective category of techniques, quantizes the weights (or activations) into low-precision and thus reduces the memory usage and may significantly improve latency. This is not only important for server-side inference, but also for on-device scenarios with small-sized LLMs (Liu et al., 2024; AI@Meta, 2024).
+When applying quantization, outliers remain an open challenge because they stretch the quantization range, leaving fewer effective bits available for the majority of values. Prior research mitigates this challenge by trading quantization difficulty between weights and activations (Xiao et al., 2022; Lin et al., 2023) or employing mixed-precision to handle outliers (Zhao et al., 2023). In this work, we focus on a new angle: multiplying the weight matrix with a rotation matrix to reduce outliers and enhance quantizability. Inspired by (Elhage et al., 2023) and SliceGPT (Ashkboos et al., 2023a), we leverage the property of rotational invariance to construct rotation matrices in pairs from identity mapping, which can be integrated into nearby weights without affecting the overall network outputs. By applying these random rotations, we produce a distribution of weight or activation entries that is outlier-less, facilitating easy quantization.
+ Equal contribution. Correspondence to: Zechun Liu <zechunliu@meta.com>.
+1
+
+Published as a conference paper at ICLR 2025
+
+Embedding  1
+
+1-1
+
+Multi-Head Self-Attention
+
+1
+
+ @1
+
+Reduce outliers inside the block
+
+1-1
+
+Feed-forward Network
+
+1
+
+@1
+
+... 1-1 Output 
+
+(a)
+
+Reduce outliers inside the block
+
+1-1  RoPE 3 1-1  RoPE 3 1-1  2
+
+Softmax
+
+2-1  1
+(b)
+
+1-1  4
+1-1  Swish
+
+4-1  1
+(c)
+
+1 Mergeable 3 Online 2 rotations 4 rotations
+
+K-V cache quantization
+
+Activation Quantization
+
+1-1 
+
+2
+
+Merge and quantize weights
+
+Rotated activation
+
+Original activation
+
+Figure 1: Overall diagram of rotation. (a) The residual stream can be rotated in the transformer network, resulting in numerically equivalent floating point networks before and after rotation. The rotated activations exhibit fewer outliers and are easier to quantize. (b) & (c) The rotation matrix can be integrated with the corresponding weight matrices and we further define R2, R3, and R4 for reducing outliers inside the block.
+
+In addition to using random rotation, which statistically works well, we find that the performance of quantized network could vary a lot with different rotation matrices. For example, the downstream averaged accuracy on zero-shot reasoning tasks may change up to 13 points with different rotations. As a result, we propose SpinQuant that integrates and optimizes the rotation matrix to minimize the final loss of the quantized network, with fixed weight parameters, by employing the Cayley SGD (Li et al., 2020), a proficient technique for optimizing orthonormal matrices. This optimization does not alter the full-precision network output but refines the intermediate activations and weights, making them more quantization-friendly.
+In SpinQuant, we introduce two rotation strategies tailored for different complexity levels: SpinQuantno had and SpinQuanthad. Here, had refers to hadamard rotation matrix. In SpinQuantno had, as depicted in Figure 1(b), we implement shortcut rotation (R1) and WvWo pair rotation (R2), which can be directly absorbed into the respective weight matrices. During inference, the original weights are simply replaced with the rotated quantized weights, eliminating the need for modification in the forward pass. Conversely, in SpinQuanthad, designed for scenarios with low-bit quantization of KV cache or activations (e.g., 4-bit), we further incorporate online Hadamard rotation matrices (R3, R4) to address activation outliers inside MLP block and KV cache.
+To rigorously assess the effectiveness of SpinQuant, we executed comprehensive experiments across seven leading Large Language Models (LLMs), including LLaMA-2(Touvron et al., 2023b) models (7B/13B/70B), LLaMA-3(AI@Meta, 2024) models (1B/3B/8B), and the Mistral (Jiang et al., 2023) 7B model. The key contributions of this study are summarized as follows:
+· We introduce SpinQuant, the first method that employs learned rotations to mitigate outliers in weight and activation distributions, boosting the performance of quantized LLMs.
+· We reveal that random rotations introduce substantial variance in quantized network performance. We propose optimizing rotation matrices within Stiefel manifold, directly minimizing the final loss of rotated quantized network. Ablation studies validate that our learned rotations consistently outperform random rotations, with improvements up to 16.2 points.
+· SpinQuantno had merges rotation matrices into pre-trained weights without altering the network architecture, significantly narrowing the W4A8KV8 quantization performance gap from 12.1 to 1.6 on the Mistral-7B model in zero-shot commonsense reasoning tasks. Noteworthily, SpinQuantno had W4A8 quantization achieves comparable performance as state-of-the-art weight only quantization methods like QuIP# (Tseng et al., 2024) and OminiQuant (Shao et al., 2023) on LLaMA-2.
+· SpinQuanthad attains an average accuracy of 64.0 in extreme W4A4KV4 quantization settings on LLaMA-2 7B. This represents a mere 2.9 point gap from the full-precision network, a substantial improvement over the previous LLM-QAT (Liu et al., 2023c) approach, which exhibited a 22.0 point gap under identical precision conditions.
+
+2
+
+

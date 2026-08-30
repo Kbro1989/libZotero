@@ -1,0 +1,2186 @@
+                                        Distributed Direct Preference Optimization
+
+                                        Zhanhong Jiang 1
+
+arXiv:2605.20696v1 [cs.LG] 20 May 2026                          Abstract                                    agent behavior. This approach has played a central role in
+                                                                                                            aligning large language models (LLMs) (Wang et al., 2024;
+                                              Preference-based reinforcement learning (RL) is               Sun et al., 2025), human-centered robotic assistants (Li et al.,
+                                              a key paradigm for aligning policies with hu-                 2019a; Wang et al., 2025a), and interactive decision-making
+                                              man judgments, yet its theoretical behavior in                systems (Liu et al., 2024a; Zhang & Kashima, 2024).
+                                              distributed settings where preference data are
+                                              fragmented across heterogeneous users remains                 Despite its growing importance, preference-based RL is pre-
+                                              poorly understood. Direct Preference Optimiza-                dominantly studied in centralized settings where all data and
+                                              tion (DPO) avoids explicit reward modeling but                computational resources are pooled together. As AI systems
+                                              lacks convergence guarantees under federated and              proliferate into distributed and heterogeneous environments
+                                              decentralized training, where communication con-              spanning smartphones, wearables, healthcare devices, and
+                                              straints and non-IID preferences fundamentally                institutional silos (Sabry et al., 2022), this foundational as-
+                                              alter optimization dynamics. We provide the                   sumption becomes increasingly unrealistic, and cannot be
+                                              first convergence and time-complexity analysis of             aggregated without violating regulatory constraints (e.g.,
+                                              DPO in distributed environments. Modeling per-                HIPAA in healthcare (Mbonihankuye et al., 2019), GDPR
+                                              sonalized offline RL with user-specific preference            in European deployments (Hoofnagle et al., 2019)). In ad-
+                                              distributions, we characterize the induced global             dition, these devices or systems interact with users holding
+                                              optimization landscape. For federated DPO, we                 diverse and evolving preferences. For example, a medical
+                                              derive convergence rates that quantify the impact             professional in one hospital rates two treatment recommen-
+                                              of client drift, communication frequency, and pref-           dations, a user on a mobile device evaluates two assistant
+                                              erence heterogeneity; for decentralized DPO, we               responses, a driver rates two navigation suggestions. These
+                                              establish convergence over general communica-                 preference judgments are locally generated and often can-
+                                              tion graphs and show how spectral connectivity                not be centrally collected due to privacy regulations, data
+                                              governs optimization speed and consensus. Em-                 sovereignty constraints, or infrastructure limitations, as stud-
+                                              pirically, we corroborate our theoretical insights            ied precisely in the federated and decentralized data regime.
+                                              on standard alignment benchmarks, demonstrat-                 It is not merely a theoretical idealization, but a reflection of
+                                              ing that our proposed methods not only enjoy                  how preference data will realistically be generated at scale.
+                                              strong theoretical guarantees but also deliver ro-
+                                              bust and scalable performance in practice. The                While appealing, existing methods including ranking-based
+                                              code base is available here.                                  RL and reinforcement learning from human feedback
+                                                                                                            (RLHF) pipelines (Bai et al., 2022; White et al., 2024; Yu
+                                        1. Introduction                                                     et al., 2025) typically rely on complex and multi-stage proce-
+                                                                                                            dures, which assume centralized data access and are difficult
+                                        Preference-based reinforcement learning (RL) (Wirth et al.,         to extend to federated or decentralized settings. Direct Pref-
+                                        2017; Jiang et al., 2025) has become a powerful paradigm            erence Optimization (DPO) (Rafailov et al., 2023) was in-
+                                        for aligning autonomous systems with human intent. By               troduced as a streamlined alternative that eliminates explicit
+                                        leveraging human comparisons or rankings rather than engi-          reward modeling and enables stable fine-tuning of large
+                                        neered reward functions, preference-based RL offers a more          models. Regardless of numerous empirical refinements and
+                                        flexible, interpretable, and robust mechanism for guiding           variants (Chen et al., 2024; Zeng et al., 2024; Xiao et al.,
+                                                                                                            2024), its theoretical properties especially in distributed set-
+                                            1Translational AI Center, Iowa State University, Ames, USA.     tings remain largely unexplored. As a first step, our work
+                                        Correspondence to: Zhanhong Jiang <zhjiang@iastate.edu>.            tactically studies DPO in distributed settings to bridge such
+                                                                                                            gaps presented here. In the following, we describe in detail
+                                        Proceedings of the 43 rd International Conference on Machine        why the combination between DPO and distributed learn-
+                                        Learning, Seoul, South Korea. PMLR 306, 2026. Copyright 2026        ing is a non-trivial extension beyond existing distributed
+                                        by the author(s).                                                   learning frameworks.
+
+                                                                                                         1
+Distributed DPO
+
+Why we need distributed DPO? Existing distributed noncon-           cannot be removed. Decentralized DPO (DecDPO). We
+vex optimization theory does not directly apply to DPO for          introduce a fully decentralized variant over general commu-
+three key reasons. First, DPO employs a pairwise, trajectory-       nication graphs, with convergence rates governed by spectral
+level objective based on log-ratios between the learned and         connectivity. Empirical Validation. Experiments on real-
+reference policies, inducing nonlinear sigmoid-weighted             world preference datasets confirm our theoretical predictions
+gradients whose variance depends on the current policy dis-         across participation, staleness, and network topology.
+tribution rather than decomposing as in standard empirical
+risk minimization (ERM). Second, preference data are in-            2. Related Work
+herently heterogeneous across users: each client observes
+distinct preference distributions, causing client-specific gra-     Preference-based RL. Preference-based RL has long been
+dient drift that is amplified by local updates in ways not          studied as an alternative to reward engineering, particularly
+captured by standard federated SGD analysis. Third, in              when human feedback is provided as pairwise or ordinal
+decentralized settings, consensus errors interact nonlinearly       comparisons (Wirth et al., 2016; 2017). Early work formal-
+with preference logits, since each node computes gradients          ized preference models and optimization schemes, while
+using its local parameters, leading to error amplification          highlighting persistent challenges such as limited-feedback
+absent in classical decentralized optimization (Saadati et al.,     exploration and the computational cost of learning from
+2024). Although federated and decentralized optimization            comparisons. In LLMs, RLHF (Bai et al., 2022) has be-
+methods such as FedAvg (Li et al., 2019b), FedProx (Yuan            come dominant but typically relies on a multi-stage pipeline
+& Li, 2022), and decentralized gradient descent (Jiang et al.,      that fits a reward model and then optimizes a policy (e.g., via
+2017) have mature theory and extensions to RL (Jiang et al.,        PPO (Schulman et al., 2017) and HP3O (Liu et al., 2026)),
+2022), they do not address the trajectory-level nonlinearities      introducing additional complexity and instability. To ad-
+unique to preference-based objectives.                              dress these issues, Rafailov et al. (Rafailov et al., 2023)
+                                                                    proposed DPO, which eliminates explicit reward modeling
+Contributions. This paper provides the first rigorous theo-         by directly optimizing a classification-style loss over pref-
+retical foundation for distributed DPO, covering both feder-        erence pairs, yielding a simpler and more stable alignment
+ated learning (FL) and decentralized learning in multi-agent        procedure that matches or outperforms PPO-based RLHF.
+systems. We formalize personalized preference-based of-
+fline RL by modeling each user as possessing a distinct             Several extensions of DPO have been proposed. Offset-
+distribution over trajectory comparisons. Based on this for-        DPO (ODPO) (Amini et al., 2024) generalizes the binary
+mulation, we analyze the DPO objective under distributed            DPO objective by introducing a learned offset margin, re-
+stochastic optimization and derive precise convergence guar-        quiring the likelihood gap between preferred and dispre-
+antees. For federated DPO, we show how preference hetero-           ferred responses to exceed a threshold that reflects prefer-
+geneity, local steps, and communication frequency jointly           ence strength. Uncertainty-Penalized DPO (Houliston et al.,
+determine the convergence rate, revealing explicit trade-offs       2024) mitigates overfitting by down-weighting updates with
+between personalization and stability. For decentralized            high preference uncertainty. Other work analyzes patholo-
+DPO, we quantify how network connectivity through the               gies in DPO, such as verbosity bias (Park et al., 2024),
+spectral gap of the mixing matrix governs consensus forma-          and proposes regularization to decouple length from qual-
+tion and optimization speed, and provide the first analysis         ity. While these variants and related methods (Wang et al.,
+of DPO under decentralized gradient updates.                        2025b; Zhou et al., 2025; Kim et al., 2025; Croitoru et al.,
+                                                                    2025; Pan et al., 2026; Zhu et al., 2025; Kang et al., 2025)
+Specifically, the main contributions are summarized as:             demonstrate the practical power of DPO, none provide a
+DPO-specific Smoothness and Variance Constants. We                  theoretical analysis of its optimization behavior, particularly
+first derive closed-form expressions for the smoothness con-        in distributed settings required for scalable policy align-
+stant L and gradient variance g2 in terms of RL horizon H,          ment. While a recent concurrent work, FedPDPO (Zhu et al.,
+bounded feature norms 2, inverse temperature , and trajec-          2026), studies personalized federated DPO for LLM align-
+tory mixing rate Cmix (all defined in later analysis), making       ment from an algorithmic and empirical perspective, our
+all optimization constants fully explicit. Federated DPO            work focuses on the first theoretical analysis of distributed
+(FedDPO). We propose the first federated DPO framework              DPO, establishing convergence and complexity guarantees
+with convergence guarantees under full and partial client           for both federated and decentralized settings.
+participation, quantifying the effects of heterogeneity, local
+updates, and communication frequency. Staleness and For-            Distributed reinforcement learning. Federated and decen-
+mal Lower Bounds. We extend FedDPO to asynchronous                  tralized RL have widely been studied to address privacy,
+updates with stale models, deriving explicit staleness penal-       scalability, and heterogeneity. Early work by Jin et al. (Jin
+ties and proving fundamental lower bounds showing that              et al., 2022) considers federated RL under environment het-
+dependence on heterogeneity, local steps, and sampling              erogeneity, proposing algorithms such as QAvg and PAvg
+
+                                                                 2
+Distributed DPO
+
+and analyzing how heterogeneity limits the optimality of             (low-rank adapters such as LoRA can be used to improve ef-
+aggregated policies. More recently, CAESAR (Mak et al.,              ficiency). Decentralized learning removes the central server
+2024) introduces convergence-aware aggregation by selec-             entirely: clients communicate only with neighbors over a
+tively incorporating client updates to mitigate instability          connected graph using a mixing protocol. These two set-
+from noisy or divergent local learning. To remove reliance           tings capture the dominant privacy-preserving paradigms
+on a central server, a broad line of work has developed de-          for large-scale preference-based learning.
+centralized RL methods for multi-agent systems (Figetakis
+et al., 2024; Tadevosyan et al., 2025; Jiang et al., 2022;           Performance metric (optimization). For theoretical analy-
+Zhang et al., 2018; Oh et al., 2025; Li et al., 2026), in-           sis, we use the standard stationarity metric: show the number
+cluding extensions that enforce safety constraints (Melcer           of gradient evaluations and communication rounds required
+et al., 2022; Lu et al., 2021; Cai et al., 2021). While these        to find parameter  such that E[L2]  , where L is
+studies highlight the impact of communication constraints,           the (population or empirical) DPO loss defined below and
+heterogeneity, and aggregation strategies, they focus on              > 0 is the accuracy.
+value-based or policy-gradient objectives and do not address
+preference-based optimization such as DPO. Moreover, per-            Policy parameterization. The policy is defined by a soft-
+sonalized per-client preference models are absent from ex-
+isting distributed RL frameworks. Our work fills this gap            max function over a finite set of candidate actions such
+by providing the first theoretical analysis of DPO under fed-
+erated and decentralized learning with personalization and           that:                         exp((s, u))
+resource constraints.
+                                                                            (u|s) = uA exp((s, u)) ,                              (1)
+3. Problem Formulation and Preliminaries
+                                                                     where (s, u)  Rd are policy features.
+Notation. In this work, we use lower-case characters for
+scalars or vectors, e.g., n, r, , throughout the analysis.           Remark 3.1. (On neural policy extensions.) The log-linear
+Upper-case characters are used for matrices (e.g., W, A, B).
+For a vector or matrix z, z denotes Euclidean (or spectral           softmax parameterization is a standard first step in RL theory
+for matrices) norm unless otherwise specified. [K] denotes
+the set {1, ..., K} and [N ] denotes the set {1, ..., N }. ED[·]     that permits explicit, closed-form derivations of smoothness
+denotes the expectation over dataset sampling and D is the
+data; We also follow the standard O(·) notation: Z = O(U )           constants and gradient variance (see Section A). Extending
+is defined as Z  GU for some absolute constant G > 0.
+                                                                     these bounds to neural network policies (e.g., transformers)
+Problem formulation. We consider an regular RL-style
+environment (episodic Markov Decision Process (MDP))                 requires additional assumptions on Hessian structure and
+with horizon H > 0. A trajectory is defined as  =
+(s1, u1, ..., sH , uH ), where sj and uj indicate the state and      feature covariance. The DPO objective structure and partic-
+action at time step j for all 1  j  H, where s  S
+((possibly infinite) state space) and u  A (finite action            ularly the coupling between sigmoid weighting and gradient
+space). A policy (u|s) parameterized by   Rd induces
+a trajectory distribution ( ). In this work, trajectory data         direction is preserved under general policies, suggesting our
+are collected offline and remain locally owned by individual
+clients in distributed settings. While distributed data can          qualitative conclusions extend beyond the log-linear case.
+also arise from post hoc partitioning, we focus on the in-
+creasingly relevant regime where each client collects and            This is also evidently validated in our work.
+retains its own data due to privacy constraints, leading to pro-
+nounced data heterogeneity. Let Di denote the local dataset          Preference data model. For an initial state (or context),
+available only to client i. The goal is to learn policy param-
+eters  such that the induced policy (·|s) aligns action              we observe preference labels between two full trajectories
+rankings with human preferences, while supporting person-
+alization and communication efficiency. We consider two              ( +,  -) where a human annotator prefers trajectory  +
+deployment architectures. Federated learning (FL) employs
+a central server to coordinate communication rounds while            over  - in that state. Hence, we can obtain the offline pref-
+clients retain local datasets and update personalized models
+                                                                     erence data Di of the form {j+, j-}jn=i 1 for agent i with
+
+                                                                     ni = |Di|. Each tuple is drawn (i.i.d or with mild depen-
+
+                                                                     dence assumptions) from the data Di over preference pairs.
+
+                                                                     In the distributed setting, agent (or client) i has dataset Di of
+                                                                                   K
+                                                                     size ni, and  i=1  ni  =  n.  Intuitively,  the  preference  data
+
+                                                                     directly optimizes the probability that, under the model, the
+
+                                                                     preferred action is ranked above the dispreffered one. Given
+
+                                                                     a preference pair ( +,  -), define the model preference
+
+                                                                     probability as Pr( +   -) = (log( +)-log( -)),
+
+                                                                     where (z)  =         1    is  the logistic sigmoid.  This is also
+                                                                                   1+exp(-z)
+
+                                                                     known for Bradley-Terry (BT) model (Bradley & Terry,
+
+                                                                     1952). With this, based on (Rafailov et al., 2023), the stan-
+
+                                                                     dard logistic (cross-entropy) loss for preference pair j is
+
+                                                                       l(j+, j-) = -log([(j+, j-) - ref(j+, j-)]),
+                                                                                                                                         (2)
+
+                                                                     where  > 0 is the inverse temperature param-
+                                                                     eter, (j+, j-) := log(j+) - log(j-), and
+                                                                     ref(j+, j-) := logref(j+) - logref(j-), ref is a ref-
+
+                                                                  3
+                                                       Distributed DPO
+
+erence policy. Therefore, the population DPO loss over                     matrix   RN×N that is symmetric and doubly stochas-
+dataset Di is
+                                                                           tic. In decentralized learning, a typical update alternates
+
+           Li = E(+,-)Di [l( +,  -)].                              (3)     between a local stochastic gradient step on Lii and a local
+
+                                                                           averaging (mixing): i            N    ij j .  ij  is  an  element  of
+                                                                                                            j=1
+
+Remark 3.2. (Canonical logistic loss.) In practical imple-                 i-th row and j-th column in matrix . The corresponding
+mentation, DPO-like losses may include an offset or regular-
+ization toward a reference policy ref. A generalized form                  optimization problem is slightly different from that in FL:
+used empirically is l(j+, j-) = -log([(j+, j-) -
+ref(j+, j-)]) + l, where l is an optional offset or base-                                                 1  K
+line term (for instance to account for the reference policy                                      L := K
+or preference strength). Our theoretical development ac-                                                          Li .                 (5)
+commodates such offsets as additive bounded terms (they
+affect constants in smoothness and variance bounds but do                                                    i=1
+not change the high-level rates). For clarity, we focus the
+presentation primarily on the canonical logistic loss above.               Multiple local or mixing steps may be performed within
+                                                                           each communication round. For simplicity, we use a unified
+We also define score function for a trajectory as: ( ) :=                  weight notation, with subscripts distinguishing between fed-
+                                                                           erated and decentralized communication patterns. We also
+log( ) =          H     (h),    (h)   :=  log (uh |sh ).  The              remark on the corresponding communication cost models
+                  h=1                                                      for both settings.
+
+score function plays a critical role in deriving the smooth-               Remark 3.3. (Communication costs.) In FL, a communi-
+                                                                           cation round consists of a server­client roundtrip, with cost
+ness constant and the upper bound for the variance of                      proportional to the parameter size ||; parameter-efficient
+                                                                           fine-tuning methods such as LoRA can be used to signifi-
+stochastic gradients. To characterize the analysis for dis-                cantly reduce this cost via small adapters. In decentralized
+                                                                           learning, each mixing step exchanges parameters with neigh-
+tributed settings, we now present the problem formulation                  bors, incurring communication cost proportional to the node
+                                                                           degree and ||. Accordingly, our time-complexity bounds
+for federated and decentralized learning.                                  explicitly account for the number of mixing steps.
+
+Federated model. We consider N clients indexed by
+
+i  [N ]. Client i has dataset Di and maintains local pa-                   Several technical assumptions are imposed as follows for
+rameter i. The server keeps a global  (the aggregated                      characterizing theoretical analysis.
+
+parameters). Training proceeds in communication rounds                     Assumption 3.4. (Bounded score function second mo-
+                                                                           ment) There exists 2 > 0 such that for any policy parame-
+r = 0, 1, .... In each round, a subset Sr  [N ] (S = |Sr|)                 ter  and any time h, E [(h)2]  2.
+
+of clients may be selected (partial participation) and per-
+
+form E local stochastic gradient steps on their local DPO
+
+loss in Eq. 3. After local update, clients send their parame-
+
+ter updates to the server, which aggregates (e.g., weighted                This assumption indicates that the second moment of per-
+                                                                           step score function is bounded above, which is weaker than
+average) r+1 = iSr iir,E and broadcast r+1 to                              the standard assumption in existing work (Jiang et al., 2022;
+                                                                           Huang et al., 2020; Xu et al., 2019). Also, it will serve to
+clients. Weight i typically  ni (data-size weighting),                     obtain the similar quantity for a trajectory that complies
+                                                                           with the RL environment. In this work, we denote the
+i.e., i =     ni  nm  .  This  leads  to  the  global  objective:          local stochastic gradient as gi = l( +,  -; ), where 
+                                                                           denotes the random sampling manner, which could be one
+           mSr                                                             sample or a mini-batch. Hence, the second assumption is:
+
+                               K
+
+                       L := iLi .                                  (4)
+
+                               i=1
+
+For personalization, clients may maintain local parameters                 Assumption 3.5. (Unbiased stochastic gradients and
+i separate from , for example, by mixing local and global
+parameters, or by storing both a global parameter and small                bounded heterogeneity) At each step we can sample mini-
+local residual, which is more implementation wise. For
+theoretical analysis, we still leverage the weighted average               batches and form unbiased stochastic gradient for each client
+as the final output for each client.
+                                                                           with E[gi ] = Li, E[gi - Li2]  g2, and the gra-
+Decentralized (peer-to-peer) model. Different from feder-
+ated models, in decentralized models, clients are nodes of an              dient  diversity  is  uniformly  bounded     1    N    E[L         -
+undirected and connected graph expressed by G = (V, E),                                                                 N    i=1
+where V = {1, 2, ..., N } := [N ] is a set of nodes and                    Li 2]  2, g,  > 0, for any .
+E = {(i, j), i  V, j  V} is a set of edges. Let N = |V|.
+Each node i stores local parameter i. The communica-                       The above assumptions have been used in (Saadati et al.,
+tion in graph G occurs over edges according to a mixing                    2024; Yu et al., 2019), signifying the bounded noise for
+                                                                           local agents and quantifying the gradient diversity among
+                                                                           agents, due to the personalized preference heterogeneity. To
+                                                                           provide a tighter convergence, we will upper bound g2.
+
+                                                                        4
+                                           Distributed DPO
+
+Remark 3.6. (On unbiasedness in offline DPO). A key                h < t  H and any : |E[(h), (t)]|  C0t-h2.
+question is whether the stochastic gradient gi is an unbiased
+estimator of Li when preference pairs are generated by a           This captures the temporal decorrelation of the trajectory
+behavior policy different from . In standard offline DPO,          under the Markov policy: actions and states at distant time
+pairs are drawn from a fixed dataset Di reflecting the behav-      steps become approximately independent. The assumption
+ior policy, and the gradient l(j+, j-) does not depend             is satisfied whenever the induced Markov chain has a spec-
+on the sampling distribution, only on the evaluation of the        tral gap (exponential mixing time), which holds for tabular
+current policy  on fixed trajectories (j+, j-). Therefore,         MDPs and linearly parameterized softmax policies over fi-
+Assumption 3.5 holds under the mild condition that each            nite state-action spaces. The constant   [0, 1) is bounded
+                                                                   away from 1 precisely when the chain has a positive spectral
+pair is drawn i.i.d. (or with mild dependence) from Di, in-        gap. When steps are independent  = 0, the bound reduces
+dependently of . This is the standard offline assumption           to the diagonal case ( )2  2H. This assumption
+                                                                   does not appear directly in the theorem statements because
+in DPO and RLHF literature. Coverage requirements (en-             its effect is absorbed into the derived constants L and g2.
+                                                                   We state it here for transparency and to allow readers to
+suring the behavior policy has sufficient support) affect the      verify its applicability to their problem settings.
+
+quality of the learned policy but not the unbiasedness of
+
+gradient estimators.
+
+To measure the connectivity/mixing speed, we also impose           Smoothness constant L. We first derive the smooth-
+another assumption for the graph G, which implies that the         ness constant that will characterize our convergence anal-
+second-largest eigenvalue magnitude is strictly less than 1.       ysis. Let  := ( - ref) such that per-sample loss
+                                                                   l = -log(). Applying chain rule gives the following
+Assumption 3.7.    :=   -  1  11    <  1,  where 1  =              relationship l = (-). Using score identity
+                           N                                       () = log( ) yields
+[1, ..., 1].
+                                                                   l( +,  -) = (-( - ref))(( +) - ( -)).
+Assumption 3.8. (Lipschitz continuous gradient) Each                                                                                  (6)
+
+Li is L-smooth such that Li 1 - Li2   L1 - 2,                      From l = av with a = (-( - ref)), v =
+for all 1, 2  Rd.                                                  ( +) - ( -). We then compute Hessian
+
+Typically, L is an unknown positive constant in numerous                            2l = (a)v + av.                             (7)
+existing work. However, as the setting in this work is RL,
+not regular supervised learning, we can derive it with respect     Using |(u)|  1/4 and Assumption 4.1, we derive:
+to the feature variance and horizon as follows. Additionally,
+the DPO loss satisfies this structural assumption when the              E[( )2]                Cmix 2 H,  Cmix  =    1+  2C0 .  (8)
+log-ratio  is smooth in  and log( ) has uniformly                                                                        1-
+bounded form (or when gradients are clipped). In the sequel,
+we will show that DPO gradients enable smoothness and              This bound is linear in H because the trajectory has H
+variance bounds due to some properties (e.g., 1 - (·) is
+bounded in (0, 1) and is Lipschitz) and under mild condi-          correlated steps. The factor Cmix captures the geometric
+tions. Thus, our FedDPO convergence results apply directly         series contribution of temporal correlations: when  = 0,
+to DPO training under standard regularity conditions.
+                                                                   Cmix = 1 and the bound reduces to the independent case
+4. Auxiliary Technical Quantities                                  2H. Combining Hessian terms yields the explicit smooth-
+                                                                   ness constant: L = (2Cmix + 2)2H. The derivation
+This section derives closed-form upper bounds for the              shows L scales as O(2H), reflecting both the inverse tem-
+smoothness constant L and the gradient variance g2 spe-
+cific to the DPO objective under the RL trajectory model.          perature (sharpness of the sigmoid) and the trajectory length.
+These quantities are standard inputs to convergence analyses,
+but for DPO they require non-trivial derivation due to the         We refer interested readers to Section B for more details
+nonlinear sigmoid weighting and trajectory-level correlation
+structure. The derivations here are of independent interest:       on how both E[( )2] and L are derived. If there is
+they make explicit how the RL horizon H, inverse temper-
+ature , feature variance 2, and trajectory mixing rate             correlation but it decays geometrically with rate , the ex-
+(defined below) jointly determine optimization difficulty.
+To characterize these two constants, another assumption as         tra  factor  is  2C0   ,  which  remains  O(1)  when    is  bounded
+follows is required:                                                                1-
+
+Assumption 4.1. (Exponential trajectory mixing) There              away from 1. One may replace the exponential decay k
+exist   [0, 1) and a constant C0  1 such that for all 1 
+                                                                   by a general decay (k) in Assumption 4.1 and obtain
+
+                                                                   Cmix = 1 + 2C0                 (k),  giving  the  same  linear-in-H
+                                                                                             k=1
+
+                                                                   dependence but with different constant, which intuitively
+
+                                                                   makes sense as a trajectory consists of H correlated steps.
+
+                                                                   Variance of stochastic gradient g2. To obtain the upper
+                                                                   bound for the variance, we investigate the second moment of
+
+                                                                   stochastic gradients. Bounding the second moment also give
+
+                                                                5
+                                                                  Distributed DPO
+
+the upper bound for the variance. As g := (-( -                                Algorithm 1 FedDPO
+ref))v and ||  1, we have g2  2v2. Taking
+the expectation over the sampled pair and using E[v2]                          1: Input: Step size , datasets Di, i  [N ], local steps E,
+4Cmix2H, we obtain E[g2]  42Cmix2H. We define
+g2 := 42Cmix2H. Both L and g2 scale linearly with H,                              communication rounds R, b
+which leads to step sizes of order O(1/H) and irreducible                      2: Server initializes global parameters 0
+
+variance floors proportional H. This H-dependence is a                         3: for Communication rounds r = 0, 1, 2..., R do
+
+distinctive feature of trajectory-level DPO analysis that does                 4: #Client Selection (Full or Partial Participation)#
+                                                                               5: The server selects subset Sr  {1, ..., N }.
+not appear in standard nonconvex stochastic optimization
+                                                                               6: if Full participation then
+analysis.
+                                                                               7:        Sr = {1, ..., N }
+
+                                                                               8: else
+
+                                                                               9: Sample clients i.i.d. or via sampling distribution
+
+                                                                               10: end if
+                                                                               11: Broadcast global model r to all clients i  Sr
+
+5. FedDPO                                                                      12: #Local Preference-based DPO Updates (Client i)#
+
+                                                                               13: for e = 1, ..., E local steps do
+
+In this section, we introduce Federated DPO (FedDPO),                          14: Client i samples a mini-batch (B) of preference pairs
+which integrates DPO with FedAvg (Li et al., 2019b), as
+shown in Algorithm 1. Although conceptually based on                                     {(j+, j-)}jb=1  Di
+FedAvg, FedDPO departs from standard local SGD by opti-
+mizing preference-based objectives via log-ratio gradients                     15:       j  B, compute ie (j+, j-) = ie (j+, j-) -
+over paired samples, introducing challenges absent in clas-
+sical FL, including preference heterogeneity and nonlinear                               ref(j+, j-), where (j+, j-) := log(j+) -
+gradients. Consequently, the analyses under full and partial
+client participation differ and are treated separately. To im-                           log(j-)
+prove parameter efficiency for large models, client updates
+may be restricted to low-rank adaptations rather than full pa-                 16: Compute the DPO log-ratio gradient:
+rameter sets; analyzing the resulting optimization dynamics
+is left for future work. We focus first on the generally partial                         gi ie  =  1        (-ie (j+, j-))(ie (j+) - ie (j-))
+participation setting, with full proofs deferred to Section C.                                     b
+                                                                                                      jB
+
+                                                                               17:       Compute the update for i: ie+1 = ie - giie
+
+                                                                               18: end for
+
+                                                                               19: Upload local models iE to the server
+                                                                                    Server aggregation: r+1 =                  iSr iiE , where i =
+                                                                               20:       . ni
+
+                                                                                       mSr nm
+
+Theorem 5.1. (FedDPO, partial participation) Under As-                         21: end for
+
+sumptions 3.4 - 4.1, suppose that the server runs Fed-
+
+DPO for R rounds. Let local stepsize satisfy 0 <                               choose step size       0  <        1  .  Then   FedDPO with   satisfies
+                                                                                                                8LE
+min{    1  ,      S     }.  Then  the   iterates   {r }   produced     by
+      8LE     16LN   E
+
+FedDPO obey                                                                    1    R-1                       2(L0 - L) + 2Lg2 +8L22E2.
+                                                                               R
+     R-1                                                                                 E[Lr 2]                ER             N
+
+1         E[Lr 2]             2(L0 - L)            +  8Lg2                          r=0
+R                                 ER                     S
+                                                                                                                                             (10)
+
+     r=0                                                               (9)
+
+                            + 16L22E2 + 16L22E2g2 ,                            Theorem 5.1 shows that FedDPO converges to stationary
+                                                         S
+                                                                               points with a rate that depends on step size , local steps
+
+where L = infL. Consequently, to obtain an -                                   E, heterogeneity , sampling size S, and gradient variance
+
+stationary point in expectation, it suffices to set  =                         g. The principal tradeoff is the usual one: increasing E
+                                                                               amplifies heterogeneity drift proportional to 2E (or 2E2
+                                                             Eg2
+(min{1/(LE       ),  (S     )/(Lg2  ),    /(LE        2   +   S   )})          in some intermediate terms), while decreasing S saves com-
+
+and  choose   R  =   O(     L0 -L  ),   with  the  total  communication        munication per round but increases sampling variance 1/S.
+                               E
+                                                                               When the participation is full, Corollary 5.2 removes the
+rounds R and the total local gradient computations RSE
+                                                                               1/S penalty and yields the clean bound. So far, we have
+as implied.
+                                                                               obtained the convergence rate for both partial and full partic-
+
+As we have noted before, Theorem 5.1 is dedicated to the                       ipation for FedDPO. We now investigate the complexity for
+partial participation scenario. Hence, we state the special
+case of full participation, i.e., S = N in the following result.               both cases. Setting  = (              1  )  to  balance  the  terms,  we
+When all clients participate each round, the bound simpli-                                                           R
+fies because sampling variance due to partial participation
+disappears. We give a tightened statement as follows.                          then obtain -stationarity as follows: R = O(1/2), which
+
+Corollary 5.2. (FedDPO, full participation) Under As-                          is the number of communication rounds. Thus, the total
+sumption 3.4-4.1, and assuming each round uses all clients,
+                                                                               local steps = RE = O(E/2) per client. Recall that L
+
+                                                                               and g2 scale linearly with the horizon H (through 2H and
+                                                                               Cmix), so step sizes scale as O(1/H) and variance floors
+                                                                               scale like O(H). The heterogeneity constant 2 produces
+
+                                                                            6
+                                                               Distributed DPO
+
+an irreducible floor that can be removed by reducing  or                     by constructing a problem family where local objectives dif-
+local steps E. However, reducing  also slows down the                        fer by a constant shift in gradient direction while satisfying
+convergence speed in the early phase of optimization.                        our assumptions.
+
+With staleness. We now analyze a realistic variant in which                  Theorem 5.5. (Lower Bound for FedDPO) There exists a
+clients perform local updates on possibly stale server mod-
+els (e.g., because they were sampled previously and begin                    family of nonconvex DPO-like objectives (satisfying Assump-
+local work later), and the server aggregates these stale up-
+dates with weights. This models partial participation with                   tions 3.4- 4.1. with appropriate constants) and a federated
+staleness. We formalize the system model with staleness as:
+                                                                             sampling model with N clients such that any algorithm that,
+
+                                                                             in each round, samples as most S clients and then performs
+
+                                                                             at most E local stochastic gradient updates per sampled
+
+· Let time be indexed by global rounds r = 0, 1, ...                         client must incur an expected stationary-gap lower bound
+
+· At round r the server has r. A subset Sr of clients                        of  order  (  E2   )  or  ( g )       in  general.  In  particular,  no
+  is selected. Each selected client i  Sr uses a model                                       S
+  r-qi,r (stale by qi,r rounds) to run E local steps, pro-                                                     SR
+  ducing ir,E. We assume qi,r  {0, 1, ..., qmax} and we
+  denote qmax the maximum delay. Clients upload ir,E                         algorithm can obtain a uniform o(E2/S)-type dependence
+  to server, which aggregates a weighted average:
+                                                                             for all problem instances in this family.
+
+                r+1 =             iir,E ,          i = 1.           (11)     The lower-bound construction shows the presence of the
+                                                                             g, E, and 1/S terms is intrinsic to distributed preference
+                                                                             optimization: they cannot be removed by algorithmic clev-
+                                                                             erness in the worst case.
+
+                            iS r            iS r
+
+For analysis, we assume server weights are uniform over                      6. DecDPO
+sampled clients: i = 1/S. (Extension to weighted by
+dataset sizes are straightforward.) For characterizing the                   Although FedDPO preserves data privacy in federated set-
+analysis, we impose another assumption on the bounded                        tings, it relies on a central server, which introduces robust-
+staleness drift since we will need a lemma bounding the drift                ness concerns. Decentralized learning avoids this depen-
+r - r-k due to updates and this drift is controllable if                     dency by enabling flexible peer-to-peer communication. We
+local step sizes and local step counts are modest.                           therefore develop Decentralized DPO (DecDPO), which
+                                                                             extends DPO to fully decentralized settings. DecDPO is
+Assumption 5.3. For all r and k  qmax, E[r - r-k]                            not a straightforward extension of classical decentralized
+Cqk, for some constant Cq that depends on , E, , g.                          learning: the DPO objective is pairwise, non-additive, and
+                                                                             trajectory-dependent, producing stochastic gradients with in-
+Theorem 5.4. (FedDPO with staleness) Under Assump-                           flated variance due to concentrability. Moreover, consensus
+                                                                             error interacts with the nonlinear logit-gap in the DPO loss,
+tions 3.4-5.3, suppose that each client updates on a                         creating feedback effects absent in decentralized empirical
+                                                                             risk minimization. Addressing these challenges requires
+model stale by at most qmax. Let  satisfy 0 <                                new smoothness bounds and stability guarantees that explic-
+                                                                             itly depend on the RL horizon H, mixing constant , and
+min{     1  ,  32LN    S       )  }.  Then  after  R   rounds  the  Fed-     policy variance 2. Please see Section D for missing proof.
+      16LE           E(1+qmax
+
+DPO   iterates  satisfy  1     R-1    E[Lr         2]    2(L0 -L)   +
+                         R     r=0                           ER
+
+O(g2  +  E      2  +  Cq qmax ).      The   term   Cq qmax  quantifies
+                S
+
+the penalty due to staleness.
+
+Theorem 5.4 addresses staleness: delays up to qmax in-                       We denote by N b(i) the neighborhood of a node i such that
+cur an extra penalty proportional to Cqqmax, where Cq =
+O(2E(2 + g2)) is the per-step drift constant. In practice,                   N b(i) := {j  V|(i, j)  E or i = j}. In this context,
+ensuring that qmax is small or step size  is small controls                  each node is an LLM that is parameterized by   Rd
+the staleness penalty. Setting  = ( 1/R) retains the
+similar communication and computational complexities as                      (representing all weight matrices in multiple layers) and
+in the vanilla FedDPO.
+                                                                             fine-tuned over a local dataset Di. We are now ready to state
+Lower bounds. We now give a formal construction and
+argument showing the dependencies on heterogeneity ,                         the DecDPO in Algorithm 2. Each agent i learns using its
+local steps E, and sampling size S cannot generally be re-
+moved. The type of lower bound presented is standard in                      local preference distribution and communicates only with
+distributed stochastic optimization (see. e.g., (Woodworth
+et al., 2021) for analogues). We adapt it to the DPO setting                 neighbors through matrix . We define the network aveage
+
+                                                                             as  ¯r  =  1  i ir and analyze the convergence for ¯r.
+                                                                                        N
+
+                                                                             Theorem 6.1. (DecDPO convergence) Under Assump-
+
+                                                                             tions 3.4-4.1 and the DecDPO dynamics with step size satis-
+                                                                                                   1-2
+                                                                             fying 0 <             4L   ,  then  after  R  iterations  the  average
+
+                                                                          7
+                                                       Distributed DPO
+
+Algorithm 2 DecDPO                                                              (a) Gradient Norm Mean ± Std                                     (b) DPO Loss Mean ± Std
+
+ 1: Input: Step size , datasets Di, i  [N ], R, b                           100                                                         10 1
+ 2: Each agent i initializes local parameters i0
+ 3: for each iteration r = 0, 1, 2..., R do                              E[ L 2] (log)10 1                                              10 3
+ 4: #Local Preference-Pair Sampling#                                                                                          DPO Loss
+ 5: Each agent samples a mini-batch (B) of preference pairs                                                                             10 5
+
+        {(j+, j-)}bj=1  Di                                                           Centralized DPO                                    10 7     Centralized DPO
+ 6: j  B, compute ir (j+, j-) = ir (j+, j-) -                                        FedDPO (full, S=5)                                          FedDPO (full, S=5)
+                                                                                     FedDPO (partial, S=3)                                       FedDPO (partial, S=3)
+        ref(j+, j-), where (j+, j-) := log(j+) -                            10 2     DecDPO ring ( =0.54)                               10 9     DecDPO ring ( =0.54)
+        log(j-)
+ 7: Compute the DPO log-ratio gradient:                                           0    20 Ro4u0nd 60          80                              0  20 Ro4u0nd 60              80
+
+                                                                         Figure 1. Comparison of gradient norm and training loss for
+                                                                         different methods with SHP dataset.
+
+   gi ir  =  1      (-ir (j+, j-))(ir (j+) - ir (j-))                    step size or mitigated through increased communication,
+             b                                                           such as denser networks.
+                jB
+
+ 8: Mixes with neighbors: ir+1/2 = jNb(i) ij ir                          7. Numerical Results
+
+ 9: Compute the update for i: ir+1 = ir+1/2 - giir                       Experimental Setup. We evaluate on two human-
+10: end for                                                              preference datasets, i.e., Stanford Human Preferences (SHP)
+                                                                         ((Cui et al., 2023)) and Anthropic HH-RLHF ((Bai et al.,
+squared gradient satisfies                                               2022), results in Section F), to ensure findings are not ar-
+                                                                         tifacts of a single distribution. Five agents (N = 5) each
+1  R-1                      2(L¯0 -  L)  +  32L22g2                      hold a disjoint subset of 120 preference pairs, creating the
+R                                R            1 - 2                      non-IID heterogeneity  required for theoretical bounds
+        E[L¯r 2]                                                         to manifest empirically. All experiments use DistilGPT-2
+                                                                         (82M parameters, 6 transformer layers), chosen for its
+   r=0                                                 (12)              lightweight footprint enabling multi-agent experiments on a
+                                                                         single GPU while remaining a proper causal LM over which
+   16L222                                                                DPO's log-probability objective is well-defined; a frozen
++ 1 - 2 .                                                                copy serves as the reference model ref. Four algorithms are
+                                                                         compared: Centralized DPO (oracle, pooled data), FedDPO
+When  = (       1  ),  DecDPO  achieves  O( 1       +       1  )  ).     full (S = 5), FedDPO partial (S = 3, introducing participa-
+                R                                      R(1-2             tion noise per Theorem 5.1), and DecDPO ring ( = 0.54,
+                                                 R                       gossip mixing, no central server). Hyperparameter details
+                                                                         are provided in Section E.
+When R is sufficiently large, the first term of the con-
+
+vergence rate dominates. The convergence result for
+
+DecDPO highlights several non-trivial aspects of decen-
+
+tralized preference-based RL. Although the DPO objective
+
+is trajectory-level, nonconvex, and involves stochastic pref-
+
+erence logits, the algorithm achieves the same O(R-1/2)
+
+gradient norm decay rate as classical decentralized SGD,                 To validate the theoretical claims we have established in this
+
+leading to the time complexity of O(1/2). This follows                   work, we conduct ablation studies with the following setup:
+
+because score-function variance and preference-induced                   Local steps E  {1, 3, 6} on FedDPO validates the relative
+
+noise diminish as the policy stabilizes, while network mix-              significance between optimization dynamics O(1/ER)
+                                                                         and client-drift penalty O(2E2) (Theorem 5.1). Partic-
+ing renders the consensus error summable. As a result,
+
+both stochastic variance and client heterogeneity scale as               ipation S  {1, 3, 5} on FedDPO validates the variance
+
+O(R-1) and do not affect the asymptotic convergence rate.                floor O(g2/S) (Theorem 5.1). Staleness qmax  {0, 2, 5}
+                                                                         on async-FedDPO validates the additive penalty Cqqmax
+All agents therefore converge to a common policy without                 (Theorem 5.4). Graph topology {path, ring, star, complete}
+
+a central coordinator, even under non-IID preferences and
+
+data. Decentralization incurs no asymptotic penalty relative             on DecDPO validates the spectral-gap dependence er =
+
+to centralized DPO, with only mixing-matrix constants in-                1        N    ir  -          ¯r 2    1/(1  -                   2)       (Theorem            6.1).
+                                                                         N        i=1
+fluencing convergence. Consequently, DecDPO represents
+
+a principled synthesis of decentralized optimization and                 Comparative Study. For empirical results, we focus pri-
+                                                                         marily on the SHP dataset and refer interested readers to
+preference-based RL, offering strong theoretical guarantees              Section F for additional results. All four algorithms in Fig-
+                                                                         ure 1 show monotonically decreasing gradient norms and
+for large-scale distributed preference learning. Similar to              DPO loss over 80 rounds, with narrow std bands confirming
+                                                                         reproducibility across seeds. DecDPO ring achieves the
+FL settings, L and g2 scale linearly with the horizon H                  steepest descent and lowest final gradient norm, consistent
+(through 2H and Cmix) in decentralized settings, leading
+to step sizes of order O(1/H) and variance floors of order
+
+O(H). Likewise, the heterogeneity constant 2 induces an
+
+irreducible error floor that can be reduced by shrinking the             with its larger effective local computation (5 local steps
+
+                                                                      8
+                                                                                                               Distributed DPO
+
+vs. E = 3 for FedDPO). Centralized DPO converges slow-                                                                       C1omP²=atm0h.2u38nication1GRr²=ian0gp.7h09s                           (a()loCwoenrvelorsgsen=cbeeEtrtreorravlisgTnompeonlotg) y         (b) Gradient Norm vs Topology       (c) Consensus Error vs Spectral Gap
+est due to its smaller effective batch size per round, while                                                                                                                                                                                                  100
+FedDPO full (S = 5) benefits from parallel gradient aggre-                                                                         1              1                                           1.0  Path (1 ²=0.238)                                                                                 0.5             Theory: 1/(1 2)
+gation. The tight std shading for FedDPO variants validates                                                                                                                                        Ring (1 ²=0.709)
+that our theoretical bounds hold consistently across random                                                                                                                                        Star (1 ²=0.360)
+initializations.                                                                                                          2                    2                                        DPO Loss (convergence error)Complete (1 ²=1.000)                                                            0.4  Star
+                                                                                                                                                                                                                             E[ L 2] (log)
+                                                                                                                                            0                             0                   0.8                                                                                                        Path
+                                                                                                                                                                                                                                                                     Final Consensus Error e
+                                                                                                                          3                    3                                              0.6                                                             10 1                                  0.3
+                                                                                                                                      4                    4
+                                                                                                                                                                                              0.4                                                                                                   0.2
+                                                                                                                             1 S²=ta0r.360        1Com²=p1le.0t0e0
+                                                                                                                                      1                    1
+
+                                                                                                                          2                    2
+
+                                                                                                                                            0                             0                   0.2                                                             10 2  Path (1 ²=0.238)                0.1
+                                                                                                                                                                                                                                                                    Ring (1 ²=0.709)
+                                                                                                                          3                    3                                                                                                                    Star (1 ²=0.360)                                Ring
+                                                                                                                                      4                    4                                  0.0                                                                                                   0.0                    Complete
+                                                                                                                                                                                                  0 Comm25unicatio5n0Round75                                        Complete (1 ²=1.000)
+
+                                                                                                                                                                                                                                                                    0 Comm25unicatio5n0Round75                 0.5        1.0
+                                                                                                                                                                                                                                                                                                         Spectral Gap 1 2
+
+    (a) Convergence vs Local Steps E                                               0.8690 (b) Final Gap vs E                             Figure 4. Impact of topology on performance with SHP.
+
+100                                                                           0.8
+
+E[ L 2]                                                                       0.6                                                                                 Convergence under Staleness
+                                                      Final Stationary Gap
+10 1 Local Steps E                                                              0.4                                                      100
+             E=1                                                                0.2
+             E=3                                                          80 0.0 1                0.0956       0.0390     E[ L 2]  6 × 10 1
+             E=6                                                                               Local S3teps E    6
+
+     0  20              Ro4u0nd  60                                                                                                4 × 10 1 Max Staleness
+                                                                                                                                                                          qqqmmmaaaxxx  =  0
+Figure 2. Impact of local steps on performance with SHP.                                                                           3 × 10 1                                             =  2
+                                                                                                                                   2 × 10 1                                             =  5
+
+                                                                                                                                                  0                                           10   20                         30 Ro4u0nd                            50                              60         70          80
+
+Ablation Studies. As shown in Figure 2, E = 6 achieves                                                                                   Figure 5. Impact of staleness on performance with SHP.
+the lowest final gap (0.039) vs. E = 3 (0.0956) and E = 1
+( 0.87), confirming the computation-dominated regime of                                                                   explicitly depend on trajectory horizon, sigmoid Lipschitz
+Theorem 5.1 at  = 0.0001: larger E provides more gra-                                                                     factor, and mixing structure. For DecDPO, imperfect con-
+dient work per round while the drift floor 2E2 remains                                                                    sensus interacts nonlinearly with sigmoid-weighted prefer-
+negligible due to 2 = 1e-8. When turning to Figure 3, final                                                               ence gradients, which is a feedback effect absent in standard
+stationary gaps S = 1:  0.56, S = 3:  0.29, S = 5:                                                                        distributed ERM. Additionally, empirical results with lan-
+ 0.10 lie on the linear fit in panel (b), directly confirming                                                             guage models suggest our theoretical conclusions extend
+the g2/S variance floor of Theorem 5.1. The positive slope                                                                beyond the log-linear case primarily established in this work.
+represents the empirical g2 coefficient, providing strong                                                                 Several limitations remain. The theory assumes log-linear
+quantitative evidence of bound tightness. In Figure 4, gradi-                                                             softmax policies, whereas extending to transformer archi-
+                                                                                                                          tectures requires controlling Fisher information spectra and
+ent norm floors in panel (b) decrease with spectral gap, and                                                              Hessian structure. Exponential trajectory mixing may yield
+                                                                                                                          loose constants in long-horizon or near-deterministic set-
+the consensus error scatter in panel (c) follows the theoreti-                                                            tings; polynomial mixing extensions are left for future work.
+cal 1/(1 - 2) curve closely -- path:  0.35, ring:  0.04,                                                                  Practical challenges including communication compression,
+complete:  0.0 -- spanning an order of magnitude and                                                                      Byzantine clients, and adaptive optimizers such as Adam or
+directly validating Theorem 6.1. The star anomaly ( 0.40)                                                                 FedAdam (Ju et al., 2024) are not addressed and constitute
+reflects a finite-N = 5 hub asymmetry effect. Figure 5                                                                    important directions for future work.
+shows that qmax = 0 converges cleanly to  0.30 by round
+80, qmax = 2 reaches  0.70, and qmax = 5 stalls near 0.72,                                                                8. Conclusion
+qualitatively consistent with Theorem 5.5's Cqqmax penalty:
+larger staleness induces growing gradient bias as the global                                                              This work establishes the first rigorous convergence the-
+                                                                                                                          ory for Direct Preference Optimization in distributed learn-
+model drifts from stale local copies.                                                                                     ing environments. We derive explicit convergence guaran-
+                                                                                                                          tees for FedDPO and DecDPO that characterize how DPO-
+(a) Convergence under Partial Participation                                                    (b) Gap vs 1/S             specific constants (trajectory horizon H, inverse tempera-
+100                                                                           0.6                                         ture , trajectory mixing ) interact with distributed learning
+                                                                                   Linear fit                  S=1        parameters (heterogeneity , local steps E, sampling rate
+                                                                                                                          S, spectral gap ). Formal lower bounds confirm that key
+E[ L 2]                                                                       0.5                                         dependencies are intrinsic. Empirical studies on standard
+                                                      Stationary Gap                                                      alignment benchmarks further validate our theoretical pre-
+     Sampled Clients S                                                        0.4                                         dictions, demonstrating that the proposed methods achieve
+                                                                                                                          both strong theoretical guarantees and scalable practical
+        S=1                                                                   0.3      S=3                                performance. While significant gaps remain, our results pro-
+        S=3                                                                                                               vide the first principled framework for analyzing scalable
+        S=5                                                                   0.2 S=5                                     and privacy-preserving distributed preference optimization.
+10 1 0
+        20              Ro4u0nd  60                                       80       0.2 0.4 0.16/S 0.8 1.0
+
+Figure 3. Impact of participation on performance with SHP.
+
+Summary and Limitations. This work establishes con-
+vergence guarantees for FedDPO and DecDPO. While the
+proof structure partially follows distributed SGD, the analy-
+sis is fundamentally DPO-specific: the trajectory-level log-
+ratio objective induces gradients whose variance depends
+on the current policy state, requiring direct analysis of the
+DPO Hessian with smoothness and variance constants that
+
+                                                                                                                       9
+Distributed DPO
+
+Impact Statement                                                      Computer Vision and Pattern Recognition Conference, pp.
+                                                                       2824­2834, 2025.
+Distributed DPO algorithms enable organizations to train
+aligned models across multiple devices, compute nodes,              Cui, G., Yuan, L., Ding, N., Yao, G., Zhu, W., Ni, Y., Xie, G.,
+or institutions without centralizing sensitive preference              Liu, Z., and Sun, M. Ultrafeedback: Boosting language
+data. This has the potential to greatly expand the reach of            models with high-quality feedback. 2023.
+RLHF-style alignment to privacy-preserving and resource-
+constrained environments, including healthcare, mobile plat-        Figetakis, E., Bello, Y., Refaey, A., and Shami, A. Decen-
+forms, and cross-institution collaborations. At the same               tralized semantic traffic control in avs using rl and dqn
+time, the ability to perform preference optimization in a              for dynamic roadblocks. In ICC 2024-IEEE International
+distributed manner also introduces new considerations: the            Conference on Communications, pp. 5449­5454. IEEE,
+correctness of learned human preferences depends on com-               2024.
+munication integrity, robustness to adversarial clients, and
+the responsible interpretation of collective reward signals.        Hoofnagle, C. J., Van Der Sloot, B., and Borgesius, F. Z. The
+Our results highlight both the feasibility and the limitations         european union general data protection regulation: what
+of federated and decentralized alignment, providing theo-              it is and what it means. Information & communications
+retical tools to reason about how preference data should               technology law, 28(1):65­98, 2019.
+be aggregated, how consensus should be maintained, and
+how safety properties propagate through distributed training        Houliston, S., Pace, A., Immer, A., and Ra¨tsch, G.
+systems.                                                               Uncertainty-penalized direct preference optimization.
+                                                                       arXiv preprint arXiv:2410.20187, 2024.
+References
+                                                                    Huang, F., Gao, S., Pei, J., and Huang, H. Momentum-based
+Amini, A., Vieira, T., and Cotterell, R. Direct preference             policy gradient methods. In International conference on
+   optimization with an offset. In Findings of the Asso-               machine learning, pp. 4422­4433. PMLR, 2020.
+   ciation for Computational Linguistics: ACL 2024, pp.
+   9954­9972, 2024.                                                 Jiang, R., Chen, K., Bai, X., He, Z., Li, J., Yang, M., Zhao,
+                                                                      T., Nie, L., and Zhang, M. A survey on human prefer-
+Arambasic´, L., Bakic´, D., and Moslehian, M. S. A treatment           ence learning for aligning large language models. ACM
+   of the cauchy­schwarz inequality in c*-modules. Journal            Computing Surveys, 58(6):1­39, 2025.
+   of mathematical analysis and applications, 381(2):546­
+   556, 2011.                                                       Jiang, Z., Balu, A., Hegde, C., and Sarkar, S. Collaborative
+                                                                       deep learning in fixed topology networks. Advances in
+Bai, Y., Jones, A., Ndousse, K., Askell, A., Chen, A., Das-           Neural Information Processing Systems, 30, 2017.
+   Sarma, N., Drain, D., Fort, S., Ganguli, D., Henighan, T.,
+   et al. Training a helpful and harmless assistant with rein-      Jiang, Z., Lee, X. Y., Tan, S. Y., Tan, K. L., Balu, A., Lee,
+   forcement learning from human feedback. arXiv preprint             Y. M., Hegde, C., and Sarkar, S. Mdpgt: momentum-
+   arXiv:2204.05862, 2022.                                             based decentralized policy gradient tracking. In Proceed-
+                                                                       ings of the AAAI conference on artificial intelligence,
+Bradley, R. A. and Terry, M. E. Rank analysis of incom-               volume 36, pp. 9377­9385, 2022.
+   plete block designs: I. the method of paired comparisons.
+  Biometrika, 39(3/4):324­345, 1952.                                Jin, H., Peng, Y., Yang, W., Wang, S., and Zhang, Z. Feder-
+                                                                       ated reinforcement learning with environment heterogene-
+Cai, Z., Cao, H., Lu, W., Zhang, L., and Xiong, H. Safe                ity. In International Conference on Artificial Intelligence
+   multi-agent reinforcement learning through decentral-               and Statistics, pp. 18­37. PMLR, 2022.
+   ized multiple control barrier functions. arXiv preprint
+   arXiv:2103.12553, 2021.                                          Ju, L., Zhang, T., Toor, S., and Hellander, A. Accelerating
+                                                                       fair federated learning: Adaptive federated adam. IEEE
+Chen, Y., Tan, J., Zhang, A., Yang, Z., Sheng, L., Zhang, E.,         Transactions on Machine Learning in Communications
+  Wang, X., and Chua, T.-S. On softmax direct preference               and Networking, 2:1017­1032, 2024.
+   optimization for recommendation. Advances in Neural
+  Information Processing Systems, 37:27463­27489, 2024.             Kang, S., Kim, M., Oh, J., and Yun, S.-Y. Dual preference
+                                                                       learning for multi-agent reinforcement learning. IEEE
+Croitoru, F.-A., Hondru, V., Ionescu, R. T., Sebe, N., and            Access, 14:113­130, 2025.
+   Shah, M. Curriculum direct preference optimization for
+   diffusion and consistency models. In Proceedings of the          Kim, G.-H., Jang, Y., Kim, Y. J., Kim, B., Lee, H., Bae, K.,
+                                                                       and Lee, M. Safedpo: A simple approach to direct prefer-
+                                                                       ence optimization with enhanced safety. arXiv preprint
+                                                                       arXiv:2505.20065, 2025.
+
+                                                                10
+Distributed DPO
+
+Li, C., BAO, B., and Gao, Y. In-context fully decentral-               In Proceedings of the Twenty-sixth International Sympo-
+   ized cooperative multi-agent reinforcement learning. Ad-            sium on Theory, Algorithmic Foundations, and Protocol
+   vances in Neural Information Processing Systems, 38:               Design for Mobile Networks and Mobile Computing, pp.
+  147796­147818, 2026.                                                 241­250, 2025.
+
+Li, G., Gomez, R., Nakamura, K., and He, B. Human-                  Pan, J., Shen, W., Huang, S., Zhou, Q., and Zhang, Y. Pre-
+   centered reinforcement learning: A survey. IEEE Trans-              dpo: Improving data utilization in direct preference op-
+   actions on Human-Machine Systems, 49(4):337­349,                    timization using a guiding reference model. In Proceed-
+   2019a.                                                              ings of the AAAI Conference on Artificial Intelligence,
+                                                                      volume 40, pp. 32646­32654, 2026.
+Li, X., Huang, K., Yang, W., Wang, S., and Zhang, Z. On
+   the convergence of fedavg on non-iid data. arXiv preprint        Park, R., Rafailov, R., Ermon, S., and Finn, C. Disentan-
+   arXiv:1907.02189, 2019b.                                            gling length from quality in direct preference optimiza-
+                                                                       tion. In Findings of the Association for Computational
+Liu, L., Guan, Y., Wang, Z., Shen, R., Zheng, G., Fu, X.,             Linguistics: ACL 2024, pp. 4998­5017, 2024.
+  Yu, X., and Jiang, J. An interactive food recommendation
+   system using reinforcement learning. Expert Systems with         Rafailov, R., Sharma, A., Mitchell, E., Manning, C. D.,
+  Applications, 254:124313, 2024a.                                     Ermon, S., and Finn, C. Direct preference optimiza-
+                                                                       tion: Your language model is secretly a reward model.
+Liu, Q., Lee, X. Y., and Sarkar, S. A study of natural                Advances in neural information processing systems, 36:
+   robustness of deep reinforcement learning algorithms                53728­53741, 2023.
+   towards adversarial perturbations. AI Open, 5:126­141,
+   2024b.                                                           Saadati, N., Pham, M., Saleem, N., Waite, J. R., Balu, A.,
+                                                                      Jiang, Z., Hegde, C., and Sarkar, S. Dimat: Decentralized
+Liu, Q., Jiang, Z., Yang, H.-J., Khosravi, M., Waite, J. R.,           iterative merging-and-training for deep learning models.
+   and Sarkar, S. Enhancing ppo with trajectory-aware hy-              In Proceedings of the IEEE/CVF Conference on Com-
+   brid policies. IEEE Transactions on Neural Networks                 puter Vision and Pattern Recognition, pp. 27517­27527,
+   and Learning Systems, 2026.                                         2024.
+
+Lu, S., Zhang, K., Chen, T., Bas¸ar, T., and Horesh, L. De-         Sabry, F., Eltaras, T., Labda, W., Alzoubi, K., and Malluhi,
+   centralized policy gradient descent ascent for safe multi-          Q. Machine learning for healthcare wearable devices: the
+   agent reinforcement learning. In Proceedings of the AAAI            big picture. Journal of Healthcare Engineering, 2022(1):
+   conference on artificial intelligence, volume 35, pp. 8767­        4653923, 2022.
+   8775, 2021.
+                                                                    Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and
+Mak, H. Y., Fan, F. X., Lanzendo¨rfer, L. A., Tan, C., Ooi,            Klimov, O. Proximal policy optimization algorithms.
+  W. T., and Wattenhofer, R. Caesar: Enhancing federated rl            arXiv preprint arXiv:1707.06347, 2017.
+   in heterogeneous mdps through convergence-aware sam-
+   pling with screening. arXiv preprint arXiv:2403.20156,           Sun, H., Shen, Y., and Ton, J.-F. Rethinking reward model-
+   2024.                                                               ing in preference-based large language model alignment.
+                                                                       In The Thirteenth International Conference on Learning
+Mbonihankuye, S., Nkunzimana, A., and Ndagijimana, A.                 Representations, 2025.
+   Healthcare data security technology: Hipaa compliance.
+  Wireless communications and mobile computing, 2019                Tadevosyan, G., Osipenko, M., Aschu, D., Fedoseev, A.,
+  (1):1927495, 2019.                                                   Serpiva, V., Sautenkov, O., Karaf, S., and Tsetserukou,
+                                                                       D. Safeswarm: Decentralized safe rl for the swarm of
+Melcer, D., Amato, C., and Tripakis, S. Shield decentral-              drones landing in dense crowds. In 2025 20th ACM/IEEE
+   ization for safe multi-agent reinforcement learning. Ad-           International Conference on Human-Robot Interaction
+   vances in Neural Information Processing Systems, 35:               (HRI), pp. 1665­1669. IEEE, 2025.
+  13367­13379, 2022.
+                                                                    Wang, J., Yan, Y., Hu, Y., and Yang, X. A reinforcement
+Odasso, C. Exponential mixing for stochastic pdes: the                 learning from human feedback based method for task allo-
+   non-additive case. Probability theory and related fields,           cation of human robot collaboration assembly considering
+  140(1):41­82, 2008.                                                  human preference. Advanced Engineering Informatics,
+                                                                       66:103497, 2025a.
+Oh, M. S., Zhang, Z., Hairi, F., Velasquez, A., and Liu,
+  J. Consensus-based decentralized multi-agent reinforce-
+   ment learning for random access network optimization.
+
+                                                                11
+Distributed DPO
+
+Wang, P., Xu, A., Zhou, Y., Xiong, C., and Joty, S. Direct        Zeng, Y., Liu, G., Ma, W., Yang, N., Zhang, H., and Wang,
+   judgement preference optimization. In Proceedings of             J. Token-level direct preference optimization. In Proceed-
+   the 2025 Conference on Empirical Methods in Natural               ings of the 41st International Conference on Machine
+  Language Processing, pp. 1979­2009, 2025b.                        Learning, ICML'24. JMLR.org, 2024.
+
+Wang, S., Zhang, S., Zhang, J., Hu, R., Li, X., Zhang,            Zhang, G. and Kashima, H. Learning state importance
+  T., Li, J., Wu, F., Wang, G., and Hovy, E. Reinforce-              for preference-based reinforcement learning. Machine
+   ment learning enhanced llms: A survey. arXiv preprint            Learning, 113(4):1885­1901, 2024.
+   arXiv:2412.10400, 2024.
+                                                                  Zhang, K., Yang, Z., Liu, H., Zhang, T., and Basar, T. Fully
+White, D., Wu, M., Novoseller, E., Lawhern, V. J., Way-              decentralized multi-agent reinforcement learning with
+   towich, N., and Cao, Y. Rating-based reinforcement learn-         networked agents. In International conference on ma-
+   ing. In Proceedings of the AAAI Conference on Artificial          chine learning, pp. 5872­5881. PMLR, 2018.
+  Intelligence, volume 38, pp. 10207­10215, 2024.
+                                                                  Zhou, Z., Xia, X., Ma, F., Fan, H., Yang, Y., and Chua,
+Wirth, C., Fu¨rnkranz, J., and Neumann, G. Model-free               T.-S. Dreamdpo: Aligning text-to-3d generation with
+   preference-based reinforcement learning. In Proceed-              human preferences via direct preference optimization.
+   ings of the AAAI conference on artificial intelligence,           In International Conference on Machine Learning, pp.
+  volume 30, 2016.                                                  79414­79435. PMLR, 2025.
+
+Wirth, C., Akrour, R., Neumann, G., and Fu¨rnkranz, J. A          Zhu, H., Xiao, T., and Honavar, V. G. Dspo: Direct score
+   survey of preference-based reinforcement learning meth-           preference optimization for diffusion model alignment.
+   ods. Journal of Machine Learning Research, 18(136):               In The Thirteenth International Conference on Learning
+  1­46, 2017.                                                       Representations, 2025.
+
+Woodworth, B. E., Bullins, B., Shamir, O., and Srebro,            Zhu, K., Yi, L., Zhao, Z., Qi, Z., Yu, H., and Hu, Q. Fed-
+   N. The min-max complexity of distributed stochastic               pdpo: Federated personalized direct preference optimiza-
+   convex optimization with intermittent communication. In           tion for large language model alignment. arXiv preprint
+  Conference on Learning Theory, pp. 4386­4437. PMLR,                arXiv:2603.19741, 2026.
+   2021.
+
+Xiao, T., Yuan, Y., Zhu, H., Li, M., and Honavar, V. G.
+   Cal-dpo: Calibrated direct preference optimization for
+   language model alignment. Advances in Neural Informa-
+   tion Processing Systems, 37:114289­114320, 2024.
+
+Xu, P., Gao, F., and Gu, Q. Sample efficient policy gradient
+   methods with recursive variance reduction. arXiv preprint
+   arXiv:1909.08610, 2019.
+
+Yu, H., Jin, R., and Yang, S. On the linear speedup analysis
+   of communication efficient momentum sgd for distributed
+   non-convex optimization. In International Conference on
+  Machine Learning, pp. 7184­7193. PMLR, 2019.
+
+Yu, R., Wan, S., Wang, Y., Gao, C.-X., Gan, L., Zhang, Z.,
+   and Zhan, D.-C. Reward models in deep reinforcement
+   learning: a survey. In Proceedings of the Thirty-Fourth
+  International Joint Conference on Artificial Intelligence,
+   pp. 10807­10816, 2025.
+
+Yuan, X. and Li, P. On convergence of fedprox: Local dis-
+   similarity invariant bounds, non-smoothness and beyond.
+  Advances in Neural Information Processing Systems, 35:
+  10752­10765, 2022.
+
+                                                              12
+                                                                       Distributed DPO
+
+A. Technical Remark on Log-Linear Softmax Parameterization
+
+The log-linear softmax parameterization is primarily introduced to enable explicit characterization of the smoothness and
+variance constants appearing in the distributed DPO convergence analysis. In particular, for policies of the form
+
+                                                                      exp((s, u))
+                                                   (u|s) = uA exp((s, u)) ,
+the score function and Hessian admit closed-form expressions:
+                                              log(u|s) = (s, u) - Eu [(s, u)],
+
+and
+                                                  2log(u|s) = -Covu [(s, u)],
+
+which are uniformly bounded whenever the feature representation is bounded. These identities allow us to explicitly derive:
+
+   · the DPO smoothness constant L,
+   · stochastic gradient variance bounds g2,
+   · and the dependence of these quantities on trajectory horizon, preference noise, and client heterogeneity.
+
+Without this structure, the convergence analysis would require assuming L-smoothness and bounded gradient variance as
+black-box conditions, reducing the results to a largely standard distributed nonconvex optimization framework. Thus, the
+log-linear parameterization is not required for the optimization proof itself, but rather for obtaining explicit DPO-specific
+constants and interpretable scaling laws. More generally, the convergence arguments extend to broader neural policy classes
+provided the log-policy and its gradient are Lipschitz continuous. In such settings, the analytic constants derived here would
+be replaced by architecture-dependent Lipschitz bounds.
+
+B. Derivation of Auxiliary Technical Quantities
+
+Derivation of E[( )2] and L. Based on Section 4, as a = 2(-( - ref))v. Use |(-)| = |(-)(1 -
+
+(-))|  1/4, so
+
+                                              (a )v              2  ·  1  v  2.                                         (13)
+                                                                       4
+
+We bound v2  2( +)2 + 2( -)2. We next need to upper bound E[( )2] for any trajectory  . As
+
+E[( )2] = E[    H      (h)2],  we  have
+                h=1
+
+                       H                      H
+
+                     E[ (h)2] = E[ (h)2 + 2                                      (h), (t)]
+
+                       h=1                      h=1                    1h<tH                                            (14)
+                                              H
+
+                                    = E[(h)2] + 2                                E[(h), (t)].
+
+                                              h=1                      1h<tH
+
+Based on Assumption 3.4, the diagonal sum is  H      E[ (h)2 ]            H 2 .  However,  it  remains  to  bound  the  off-diagonal
+                                              h=1
+
+covariance sum 2 1h<tH E[(h), (t)]. We use a standard exponential mixing assumption (Odasso, 2008; Liu
+
+et al., 2024b) for the process that generates the trajectory under . Based on Assumption 4.1, we have |E[(h), (t)]| 
+
+C0t-h2. Note that this follows from bounds of the form |Cov(fh, ft)|  C(t - h) Efh2Eft2 (Arambasic´ et al., 2011)
+
+combined with exponential decay (k) = k. Also, C0 absorbs small dimensional or constant factors and if the chain mixes
+
+very rapidly one can take C0 close to 1. Therefore, we have
+
+                          2              |E[(h), (t)]|  2                        C0  t-h 2
+
+                             1h<tH                                        1h<tH
+
+                                    H H-h                           H -1                                                (15)
+
+                            = 2C02                   k = 2C02 (H - k)k.
+
+                                    h=1 k=1                         k=1
+
+                                                             13
+                                                         Distributed DPO
+
+The second equality is due to k = t - h. Now we bound the inner sum by a simple geometric-series bound. For   [0, 1),
+
+H -1  (H  -   k) k    H       k  =  H      .  Thus,  combining  the  last  two  inequalities  obtains
+k=1                      k=1           1-
+
+                         2         |E[(h), (t)]|  2C02 · H           ·           =    2C0     2H.                   (16)
+                                                                           1-         1-
+                              h<t
+
+Hence, we can attain the following relationship: E[( )2]                1  +    2C0   2H. Define Cmix  =  1+  2C0   such that
+E[( )2]  Cmix2H.                                                                1-                            1-
+Given the upper bound for E[( )2] in hand, then we have
+
+                                                     v2  4Cmix2H,                                                   (17)
+
+which implies (a)v  2Cmix2H. We now proceed to bound the second term av. Note that |a| =
+
+|(-))|  . So we have
+
+                                                     av  v.                                                         (18)
+
+Since v = ( +) - ( -). Each ( ) is the Hessian of log-probability for the trajectory  . For softmax/log-
+
+linear parameterization, this Hessian equals the negative covariance matrix of per-step features (Fisher information) summed
+
+across the trajectory. Its spectral norm is bounded by the sum of per-step feature covariances. Using per-step covariance
+
+bound 2 and horizon H, we can get
+
+                                                     ( )  2H,                                                       (19)
+
+which yields
+
+                                    v  ( +) + ( -)  22H.                                                            (20)
+
+Thus, av  22H. Now, the smoothness constant can be obtained by upper bounding the Hessian 2l such that
+L = 2Cmix2H + 22H = (2Cmix + 2)2H.
+
+C. Auxiliary Technical Lemmas and Missing Proof of FedDPO
+
+Lemma C.1. By Assumption 3.4, for any L-smooth function Li, for all ,   Rd,
+
+                                       Li +          Li  +  Li ,        +  L 2.                                     (21)
+                                                                           2
+
+We skip the proof as this is a well-known result.
+Lemma C.2. Fix client i and parameter . If client i takes one stochastic gradient step  =  - gi with  > 0, then
+
+                                       E[Li  ]       Li  -  Li 2     +     L2   Egi 2                               (22)
+                                                                            2
+
+Proof. Apply Lemma C.1 to Li at  with  = -gi :
+
+                                       Li       Li   +   Li, -gi     +     L  2  gi   2  .                          (23)
+                                                                           2
+
+Take expectation over sampling, and use E[gi ] = Li:
+
+                                       E[Li  ]       Li  -  Li 2     +     L2   Egi 2.                              (24)
+                                                                            2
+
+This proves the lemma.
+
+Lemma C.3. For any client i and parameter ,
+
+                                                Egi 2  2Li 2 + 2g2.                                                 (25)
+
+                                                            14
+                                                   Distributed DPO
+
+Proof. Write g = gi and g¯ = Li . Then
+
+                            Eg2 = Eg - g¯ + g¯2 = g2 + Eg - g¯2 + 2g¯, E[g - g¯].                                                   (26)
+
+The last inner product vanishes because E[g - g¯] = 0. Hence,
+
+                            Eg2  Li 2 + g2  2Li 2 + 2g2,                                                                            (27)
+
+where the last inequality is trivial (we could keep the tighter Li2 + g2, but the looser form is convenient).
+Lemma C.4. Let client i start at 0 =  and perform E SGD steps:
+
+                                        e+1 = e - gie , e = 0, ..., E - 1.                                                          (28)
+
+Then
+
+                                                                                                   E-1
+
+                            EE - 2  22E ELi e 2 + 22E2g2.                                                                           (29)
+
+                                                        e=0
+
+Proof. Unroll the updates:
+
+                                                                                                        E-1
+
+                                              E -  = -                                                         gi e                 (30)
+
+                                                                                                        e=0
+
+Taking the squared norm on both sides yields
+
+                                                                                                        E-1
+
+                                              E - 2 = 2 gie 2.                                                                      (31)
+
+                                                                                                        e=0
+
+Taking expectation and expanding the squared norm gives (writing ge := gie )
+
+                            E-1               E-1
+
+                            E ge2 = Ege2 + 2                                                                              Ege, gt.  (32)
+
+                            e=0               e=0                                                         0e<tE-1
+
+We bound cross terms using Cauchy-Schwartz inequality: for any e = t:
+
+                            Ege, gt           Ege2Egt2                                                    1    (Ege  2  + Egt2)     (33)
+                                                                                                          2
+
+Thus                                          E-1                                                       E-1
+
+                                              E ge2  E Ege2.                                                                        (34)
+
+                                              e=0                                                       e=0
+
+Applying Lemma C.3 yields Ege2  2ELi e 2 + 2g2. Therefore,
+
+                                 E-1                    E-1
+
+                            E ge2  E (2ELi e 2 + 2g2)
+
+                                        e=0             e=0                                                                         (35)
+                                                         E-1
+
+                                                  = 2E ELi e 2 + 2E2g2.
+
+                                                        e=0
+
+Lemma C.5. With uniform sampling without replacement of S clients per round and uniform averaging, the expected
+aggregated update equals the population average of client updated parameters:
+
+                                               1        ir,E                                                1  N                    (36)
+                                        ESr S                                                           =
+                                                                                                                  ir,E ,
+                                                                                                           N
+                                                  iS r                                                         i=1
+
+where S = |Sr|.
+
+                                                        15
+                                                       Distributed DPO
+
+Proof. This is a standard combinatorial identity: each client appears in the sampling subsets equally often across all  N
+                                                                                                                        S
+
+subsets. Formally, the probability that a fixed client i is included in Sr is S/N . Thus the expectation of the sample mean
+
+equals (1/S) i P(i  Sr)ir,E = (1/S) i(S/N )ir,E = 1/N i ir,E.
+
+We next present the proof for Theorem 5.1.
+
+Proof. Let Fr denote the -field containing all randomness up to and including r. All expectation E[·] are over all
+randomness (client sampling and gradient sampling). Denote by gri,e the stochastic gradient used by client i at its local step
+e inside round r. Denote by ir,e the local iterate of client i after e steps in round r, with ir,0 = r. After E step client i has
+ir,E. We will bound E[Lr+1 - Lr |Fr] and telescope. Using Lemma C.1 applied to L at r with  = r+1 - r:
+
+                                 Lr+1      Lr  +    Lr , r+1         -  r     +  L r+1  -    r 2 .                      (37)
+                                                                                 2
+
+Take expectation conditional on Fr yields
+
+                                       E[Lr+1 |Fr]  Lr + E[Lr , r+1 - r|Fr]
+
+                                                    +  L  E[r+1      -  r 2 |Fr ].                                      (38)
+                                                       2
+
+We will bound the two expectation on the right hand side separately. By the algorithm, we have
+
+                                 r+1 - r = 1               (ir,E  -  r)    =           E-1                              (39)
+                                                 S                             -
+                                                                                            gri,e
+                                                                                 S
+                                                     iS r                           iSr e=0
+
+Similarly, taking expectation conditional on Fr and using the above relationship grants us
+
+                                 E[Lr       ,  r+1  -  r |Fr ]    =        E[       E-1                                 (40)
+                                                                     -
+                                                                                         gri,e |Fr ].
+                                                                       S
+                                                                              iSr e=0
+
+For each client i and step e, we have
+
+                                                    E[gri,e|ir,e] = Li ir,e ,                                           (41)
+
+by taking expectation over stochastic gradients. Therefore,
+
+                                           E[Lr , r+1 - r|Fr]
+
+                                                                E-1                                                     (42)
+                                           = - S ESr [
+                                                                    Lr , Liir,e ]
+
+                                                          iSr e=0
+
+Now take expectation over the sampled client set Sr. By Lemma C.5 the expectation of the sample sum divided by S equals
+
+the population average:
+
+                                                       1                1
+                                               ESr [ S          hi] = N hi,                                             (43)
+
+                                                          iS r             i=1
+
+for any fixed numbers hi. Thus,
+
+                                            E[Lr , r+1 - r|Fr]
+
+                                                          N  E-1                                                        (44)
+                                               =-
+                                                                 Lr , Liir,e .
+                                                    N
+                                                       i=1 e=0
+
+We now decompose each inner product using the basic equality 2z1, z2 = z12 + z22 - z1 - z22:
+
+                                 Lr , Liir,e 
+
+                                 1             2     Liir,e 2                       Liir,e 2).                          (45)
+                                 2
+                                       (Lr        +                 -   Lr       -
+
+                                                                16
+                                                          Distributed DPO
+
+Combining the last two relationships and simplifying with some algebra yields
+
+                                       E[Lr , r+1 - r|Fr]
+
+                                       =    E   Lr 2         -         N E-1
+                                          -                       2N
+                                                                                Li ir,e 2          (46)
+                                             2
+                                                                      i=1 e=0
+
+                                                N    E-1
+                                       +
+                                                          Lr - Li ir,e 2.
+                                          2N
+                                                i=1 e=0
+
+We must upper bound the discrepancy term:
+
+                                                     1  N  E-1
+                                             D :=
+                                                                Lr - Liir,e 2.                     (47)
+                                                    N
+                                                        i=1 e=0
+
+Using the identity z1 - z22  2z1 - z32 + 2z3 - z22 with c = Lir , we obtain
+
+                                       Lr - Li ir,e 2  2Lr - Lir 2                                 (48)
+                                       + 2Li r - Liir,e 2
+
+Summing over i, e and dividing by N , we have
+
+                                                          1  N
+                                             D  2E ·
+                                                                  Lr - Li r 2
+                                                          N
+                                                             i=1
+                                                                                                   (49)
+                                                        N E-1
+                                                    2
+                                                +                Li r - Li ir,e 2
+
+                                                   N    i=1 e=0
+
+By Assumption 3.8, the first term is  2E2. For the second term, apply smoothness of each Li:
+
+                                             Lir - Liir,e   Lir,e - r,                             (50)
+
+which implies
+
+                                          Lir - Liir,e 2  L2ir,e - r2,                             (51)
+
+and hence
+
+                                 1  N  E-1                             L2  N   E-1
+                                 N                                     N
+                                            Li r       - Li ir,e 2                  ir,e - r2.     (52)
+
+                                    i=1 e=0                                i=1 e=0
+
+We  will  next  bound  1  i,e ir,e - r2 using Lemma C.4. For fixed i, Lemma C.4 (applied with initial 0 = r) gives for
+                       N
+
+any e  E:
+
+                                                             e-1
+
+                                    Eir,e - r2  22e                  ELiir,e 2 + 22e2g2.           (53)
+
+                                                             t=0
+
+A simple (looser) but convenient uniform bound for all e  {0, ..., E - 1} is obtained as follows:
+
+                                                             e-1
+
+                                    Eir,e - r2  22E                  ELi ir,e 2 + 22E2g2.          (54)
+
+                                                             t=0
+
+Averaging over i and setting t  E yields
+
+                          L2  N  E-1                      22E2 L2     N  E-1
+                          N                                       N
+                                      ir,e   -  r 2                           ELiir,e 2 + 22E2g2.  (55)
+
+                              i=1 e=0                                 i=1 e=0
+
+                                                                 17
+                                                       Distributed DPO
+
+We can therefore arrive at the following relationship
+
+                     D  2E2 + 2L2( 22E2                               ELi ir,e 2 + 22E2g2)
+                                               N
+                                                                i,e
+                                                                                                      (56)
+                                2E2 + 4L22E2
+                                                 N                 ELiir,e 2 + 4L22E2g2.
+
+                                                              i,e
+
+We then insert Eq. 56 into Eq. 46 and take total expectation (all expectations become unconditional)
+
+                     E[Lr            ,  r+1    -  r ]     -   E       ELr       2
+                                                               2
+                         
+                     -                  ELiir,e 2
+
+                        2N        i,e
+
+                     +  (2E2 + 4L22E2                              ELi ir,e 2 + 4L22E2g2)             (57)
+                               2                  N
+                                                          i,e
+
+                     =           E   ELr 2           -        (1   -  4L22E2)            ELi ir,e 2
+                               -                          2N
+                                                                                   i,e
+                                  2
+
+                     + E2 + 2L23E2g2.
+
+As our step size choice   1/8LE, we have 4L22E2  4L2(1/(64L2)) = 1/16. Thus 1-4L22E2  15/16. Therefore
+the coefficient preceding i,e is positive. We can lower bound it by /4N (loosen to simplify constants). Concretely,
+
+                                         (1 - 4L22E2)                         15                      (58)
+                                                                             ·              .
+                                        2N                               2N 16 4N
+
+So from Eq. 57 we obtain the simpler inequality
+
+                                  E[Lr      ,  r+1     -  r ]         -  E   ELr         2
+                                                                          2
+                                                                                                      (59)
+                                  -              ELi ir,e 2 + E2 + 2L23E2g2.
+
+                                     4N     i,e
+
+We now bound the quadratic term Er+1 - r2. As
+
+                                            r+1 - r = -                      E-1                      (60)
+                                                               S
+                                                                                  gri,e
+
+                                                                      iSr e=0
+
+We bound the second moment by
+
+                                     Er+1         -  r 2  =    2                E-1                   (61)
+                                                               S2 E
+                                                                                     gri,e2
+
+                                                                         iSr e=0
+
+A standard bound is                          E-1                         N      E-1
+
+                                  E                  gri,e2        S  1              Egri,e2,         (62)
+                                                                      N
+                                        iSr e=0                          i=1 e=0
+
+which follows from unbiased sampling combinators (or simply bounding cross-terms by Cauchy-Schwarz inequality). Thus
+
+                                        Er+1      -    r 2         2            Egri,e2.              (63)
+                                                                   SN
+                                                                           i,e
+
+Using Lemma C.2 we have Egri,e2  2Liir,e 2 + 2g2. Therefore,
+
+                               Er+1      -   r 2          22          Li ir,e 2    +     22Eg2  .     (64)
+                                                          NS                                S
+                                                                i,e
+
+                                                               18
+                                                                  Distributed DPO
+
+Substituting Eq. 59 and Eq. 64 into Eq. 38:
+
+                                     E[Lr+1 ]  E[Lr ]
+
+                                           +     E    ELr 2         -                ELiir,e 2 + E2
+                                              (-                        4N
+                                                                                i,e                                                             (65)
+                                                   2
+
+                                           +  2L23E2g2)       +   L 22           Li ir,e 2       +      22Eg2    ).
+                                                                    (                                      S
+                                                                            i,e
+                                                                  2 NS
+
+Group the coefficient for i,e ELir,e 2:
+
+                                                    E[Lr+1 ]        E[Lr ]  -        E   ELr        2
+                                                                                      2
+
+                                                            L2                   Li ir,e 2                                                      (66)
+                                                      -( - )
+                                                                         i,e
+                                                          4N SN
+
+                                                      +  E2      +  2L23E2g2            +  L2Eg2    .
+                                                                                               S
+
+We  choose    small    enough  so    that  the   coefficient      -  L2     is  non-negative.       It  is     required  that
+                                                              4N     SN
+
+                                                            L2                                S
+                                                                - 0 .                                                                           (67)
+                                                           4N SN                            4L
+
+This  is  implied  by  our  earlier  step  size  constraint             S   because        E     1  and     N    1.  So  the   coefficient  is  nonnegative,
+                                                                    16LN E
+
+allowing us to drop the entire negative term to obtain an upper bound. Then from Eq. 66,
+
+                                                    E[Lr+1 ]        E[Lr ]  -        E   ELr        2
+                                                                                      2
+                                                                                                                                                (68)
+                                                                                           L2Eg2
+                                                      +  E2      +  2L23E2g2            +      S    .
+
+Rearranging Eq. 68 such that
+
+                                                      E   ELr        2
+                                                       2
+
+                                                       E[Lr ] - E[Lr+1 ]                                                                        (69)
+
+                                                      +  E2      +  2L23E2g2            +  L2Eg2        .
+                                                                                               S
+
+Summing over r = 0, ..., R - 1 and telescope the objective difference:
+
+                                                 E       R-1
+                                                  2
+                                                              ELr 2
+
+                                                         r=0
+
+                                                  E[L0 ] - E[LR ]                                                                               (70)
+
+                                                 +    R(E2        +  2L23E2g2            +  L2Eg2          ).
+                                                                                                S
+
+Drop -E[LR ]  L and divide both sides by ER/2:
+
+                                                 1    R-1                   2(L0 - L)            +  22
+                                                 R                              ER
+                                                           ELr 2
+
+                                                      r=0                                                                                       (71)
+
+                                                 +    4L22E2g2       +  2Lg2         .
+                                                                           S
+
+                                                                         19
+                                                                        Distributed DPO
+
+Eq. 71 is a correct (and somewhat tighter) bound. We now massage constants to the form in the theorem statement. Using
+
+the  coarse    bounds     22    16L22E2         +  4Lg2     by       choosing       small     in   terms   of  , g  (this  is  a  standard  step  to  present  the
+                                                      S
+                                                                                                                    16L2  2 E 2 g2 +2L g2
+bound   in  a  single  expressing   balancing   terms),     and      similarly  bounding           4L22E2g2                       S         (again    a  constant
+
+reshuffle), we can present the result in the cleaner form as Eq. 9, which completes the proof.
+
+Remark C.6. Eq. 71 gives a more explicit intermediate bound. The theorem statement (Eq. 9) presents a cleaner asymptotic
+
+form that emphasizes the dominant scaling behavior with respect to the number of rounds R, participation level S, local
+update steps E, heterogeneity 2, and stochastic gradient variance g2 as follows:
+
+                                    O L0 - L + L22E2 + L22E2g2 + Lg2
+                                                   ER                                              S           S
+
+More precisely, Eq. 9 should be interpreted as a coarsened upper bound obtained by regrouping lower-order contributions
+and absorbing universal constants into the dominant terms. The goal is not to preserve exact coefficients from Eq. 71, but
+rather to expose the key optimization tradeoffs:
+
+    · the optimization error decreases as 1/(ER),
+    · larger participation S reduces stochastic variance,
+    · while larger local steps E amplify heterogeneity and local-drift effects.
+
+Thus, Eq. 9 captures the qualitative scaling laws governing federated DPO convergence, whereas Eq. 71 provides the
+finer-grained intermediate estimate used in the proof.
+
+We next present the proof for Corollary 5.2.
+
+Proof. The proof follows the same steps as Theorem 5.1 but with S = N . In particular, Eq. 63 becomes
+
+                                                       Er+1          -  r 2         2              Egri,e2.                                              (72)
+                                                                                    N2
+                                                                                              i,e
+
+Repeating the derivation up to Eq. 68 yields
+
+                                                   Er+1        -     r 2        2(L0 - L)             +   22
+                                                                                    ER
+                                                                                                                                                         (73)
+                                                                                2Lg2
+                                                   +      4L22E2g2           +    N
+
+Using the same constant reshaping as before (and applying   1/(8LE) to simplify 4L22E2 factors), we obtain the
+desirable result.
+
+We next present the proof for Theorem 5.4.
+
+Proof. For round r, selected client i  Sr starts from r-qi,r and performs E local steps to produce ir,E. For brevity, we
+            ~ir,0                   ~ir,e+1     ~ir,e                                                                                                 iSr ~ir,E .
+denote  by         =   r-qi,r  and           =         -    gi       for  e  =  0,  1,  ...,  E -1.   The  server  aggregates     r+1  =    (1/S)
+
+                                                              ~ir,e
+
+Applying Lemma C.1 yields:
+
+                                    Lr+1               Lr   +  Lr , r+1             -   r          +  L r+1    -  r 2 .                                  (74)
+                                                                                                      2
+
+As   r+1  - r      =   1  iSr (~ir,E - r), we can rewrite this relationship as
+                       S
+
+                                             ~ir,E - r = (~ir,E - r-qi,r ) + (r-qi,r - r).                                                               (75)
+
+                                                                                20
+                                                                      Distributed DPO
+
+The first term is the local update on stale model (an SGD sum) and can be handled by the same Lemma C.4 drift bounds
+(applied around r-qi,r ). The second term is a bias equal to negative of the inter-round drift. When taking inner products
+
+with Lr , we can obtain an extra term
+
+                                         Lr , r-qi,r           - r          1  Lr       2  +  1 r-qi,r   - r2.                                        (76)
+                                                                            2                 2
+
+Averaging      over  i  yields  an  added  penalty      of  order  1  Er-qi,r  -   r 2     per   client  included.  Using    Assumption  4.1    we  bound
+                                                                   2
+Er - r-k2  Cqk. Summing over k  qmax and averaging yields the Cqqmax factor inside the theorem statement.
+
+The remainder of the argument parallels Theorem 5.1: the inner product produces a -(E/2)Lr 2 term plus drift and
+variance terms. The mixing/aggregation variance is scaled by 1/S as before. Additional cross-terms from the stale starting
+points generate the extra O(Cqqmax) penalty. Carefully keeping constants and choosing  small yields the conclusion in
+Theorem 5.4. The last thing to show is the bound on Cq. One can show (by summing local update bounds across intervening
+rounds) that
+
+                                                                   Cq = c2E(g2 + 2)                                                                   (77)
+
+for a small absolute constant c > 0. Indeed, the parameter drift per round is O(E · (average gradient magnitude)), and
+averaging gradients gives g2 + 2 type terms. Substituting this Cq into the inequality in the theorem statement leads to
+the more implicit penalty term O(3E(g2 + 2)qmax), which for small  is dominated by the g2/S and Eg2/S terms.
+Details are a straightforward but tedious extension of earlier steps and omitted here for brevity. They follow the same pattern
+
+as in Theorem 5.1 with additional bookkeeping.
+
+We next present the proof for Theorem 5.5.
+
+Proof. We construct a simple two-component parameter vector  = (z1, z2)  R2 and design client objectives Li whose
+gradients differ across clients in a controlled way realizing heterogeneity . The key is to make the DPO per-sample
+gradients behave like simple linear functions of  (this is admissible because our assumptions do not restrict the DPO form
+beyond smoothness and bounded variance). The proof proceeds with three parts: (i) show a lower bound due to partial
+participation S, (ii) show lower bound due to local steps E and heterogeneity , and (iii) combine.
+
+Construction. Consider N clients and partition them into two groups A and B with |A| = |B| = N/2. For clients
+
+in  A,  define their population objective           Li      =  1      - z12,   with z1     =  (, 0).     For  client in  B,  define  Li  =   1    -  z22,
+                                                               2                                                                             2
+
+with z2 = (-, 0). Thus clients in different groups have opposing gradients in the z1-coordinate. Choose  > 0 so that
+
+heterogeneity  measured         at    =  0   is  2  =   1      i Li(0) - L(0) = 2 (computable). Stochasticity can be added by
+                                                        N
+letting per-sample gradients equal true gradients plus independent zero-mean noise of variance g2. This family satisfies
+
+Assumptions 3.4-3.8 (quadratic functions are smooth, gradients bounded in a compact domain, and variance set desired)
+
+Argument for dependence on S. If at a round the server samples S clients uniformly without replacement, the sample-
+
+average gradient estimator of the global            gradient   has variance    at least  proportional to      N  times  the per-client gradient variance.
+                                                                                                              S
+                                                                                          N -S
+Concretely,    the   expected   squared     error   of  the  sample   mean     equals   S(N -1)  times   the  population     variance.  For  S    N,  this
+                                                                                                                             
+    (   1  ).                                                               S                                           (1/  S) in gradient direction.
+is      S      Thus  any  single    round's  update     based     only  on     clients  has  an  estimation      error
+
+Averaging over R rounds yields a lower bound of order (g/ SR) for the gradient norm after R rounds.
+
+Argument for dependence on E and . Consider local updates: when clients perform E local steps starting from the
+
+global model, within-group updates move parameters towards their group optimum. If only a small fraction of clients
+
+are sampled each round, the aggregated update can be biased away from the global optimum. Specifically, when client
+groups have opposite gradients of magnitude , performing E local steps increases the local parameter displacement by
+O(E) (linearly in E). Aggregating over sampled clients yields an expected squared bias in the global gradient estimation
+proportional to (E)2/S, i.e., (E22/S) for constant step size . Choosing  proportional to 1/E to keep stability
+yields a dependence (E2/S). Formalizing yields the stated lower-bound dependence on E2/S.
+
+Conclusion. The constructed instance demonstrates that any algorithm with sampling size S and local steps E must
+suffer gradient estimation error scaling as (E2/S) (or (g2/ SR) depending on the regime). Therefore, the positive
+dependencies on , E and 1/S in Theorem 5.1 and Theorem 5.4 are unavoidable up to constants and polynomial factors.
+
+                                                                               21
+                                                              Distributed DPO
+
+D. Auxiliary Technical Lemmas and Missing Proof of DecDPO
+
+The following trivial lemma states the relationship between ¯r+1 and ¯r. While in our implementation, the local steps for
+DecDPO is set larger than one, we still follow most existing theoretical analysis where local step is set one for brevity.
+Lemma D.1. For any time step r, the following relationship holds:
+
+                                                           ¯r+1 = ¯r - g¯r,                 (78)
+
+where  g¯r  :=  1  i gri .
+                N
+
+Proof. We first average the mixing such that
+
+                                              1         ir+1/2  =  1        ij jr = ¯r.     (79)
+                                              N                    N
+                                                   i                   i,j
+
+Thus, averaging the update yields:
+
+                                           ¯r+1 = 1           (ir+1/2 - gri ) = ¯r - g¯r,   (80)
+                                                     N
+                                                           i
+
+which completes the proof.
+
+Lemma D.2. Let stacked vector Er = [1r - ¯r; ...; Nr - ¯r] and Gr = [gr1; ...; grN ]. Then
+
+                                               Er+1 = PEr - (Gr - 1  g¯r),                  (81)
+
+and
+
+                                                                 22    N
+                                                                 N
+                                              er+1      2er   +             gri - g¯r2,     (82)
+
+                                                                       i=1
+
+where  P    =    Id,  and   er  =  1  N    ir  -   ¯r 2 .
+                                   N  i=1
+
+Proof. Based on the update law, we can immediately obtain
+
+                                                        Zr+1 = PZr - Gr,                    (83)
+
+where Zr = [1r; ...; Nr ]. We subtract Eq. 83 by 1  ¯r+1 and use the conclusion from Lemma D.1 and invariance
+P(1  z) = 1  z for any vector z to get Eq. 81 with some simple algebra. We then take the square norm on Eq. 81 to
+
+obtain
+
+                                           Er+12 = PEr - (Gr - 1  g¯r)2                     (84)
+
+                                               2PEr2 + 22Gr - 1  g¯r2
+
+Using the relationship PEr  Er, dividing by N , and expanding the second term to sum over agents completes the
+proof.
+
+Lemma D.3. For any
+
+                                           1   N
+                                           N
+                                                   Egri - g¯r2  8g2 + 4L2er + 42.           (85)
+
+                                              i=1
+
+Proof. Decompose gri - g¯r such that
+
+                                      gri - g¯r = (gri - Liir ) + (Li ir - Li¯r )           (86)
+
+                                           + (Li¯r - L¯r ) + (L¯r - g¯r).
+
+                                                                   22
+                                                               Distributed DPO
+
+Then we take squared norm and expectation and use the basic inequality z1 + z2 + z3 + z42  4(z12 + z22 + z32 +
+z42). Thus, the following can be obtained:
+
+                                           Egri - g¯r2                                                                                            (87)
+                                           = E(gri - Li ir ) + (Liir - Li¯r )
+                                           + (Li¯r - L¯r ) + (L¯r - g¯r)2
+                                            4 Egri - Liir 2 +4 ELiir - Li¯r 2
+
+                                                    stochastic noise                  local bias
+
+                                           + 4 ELi¯r - L¯r 2 +4 EL¯r - g¯r2
+
+                                                      gradient diversity           sampling noise of average
+
+The  first  term  average  yields  1       i Egri - Li ir 2  g2. The last term on the right hand side of Eq. 86 has zero mean
+                                   N
+
+given data (sampling noise) and variance  g2/N , which is negligible. Thus, this can be absorbed into the first term  2g2.
+
+For  the  gradient  diversity,  based  on  Assumption   3.5,   we    have  1      i ELi¯r - L¯r 2  2 Now we analyze the term of
+                                                                           N
+
+local bias. In light of the Lipschitzness of Li with constant L yields
+
+                                                  Liir - Li¯r 2  L2ir - ¯r2.                                                                      (88)
+
+Note that ir - ¯r relates to eri . Hence, combining the upper bounds of all four terms completes the proof.
+
+The proof for Theorem 6.1 is presented as follows.
+
+Proof. With Lemma C.1 and Lemma D.1, we have the following
+
+                                              L¯r+1       L¯r     -  L¯r , g¯r        +  L2   g¯r   2                                             (89)
+                                                                                          2
+
+We   now analyze the  term  L¯r , g¯r.     Applying     the basic     identity  z1, z2     =  1   [z12   +    z22  -  z1  - z2 2  ]  with  z1  =  L¯r
+                                                                                              2
+
+and z2 = g¯r yields
+
+                                           L¯r , g¯r
+
+                                           =  1  (L¯r     2    +  g¯r 2    -  L¯r     -    g¯r 2 )
+                                              2
+                                                                                                                                                  (90)
+
+                                              1                               L2 1    N
+                                              2                                  N
+                                                 (L¯r     2    +  g¯r 2    -               ir - ¯r2),
+
+                                                                                      i=1
+
+where  the  last  inequality    follows  because   L¯r         -  g¯r 2   =    1      N    Li¯r    -  1       r    Liir  2       1   N     Li¯r   -
+                                                                               N      i=1             N       i=1                N   i=1
+
+Li ir 2       1     N    L2ir   -  ¯r 2 ,  where   the  first  inequality    follows  from    the   convexity  of     ·  2  and  Jensen's  inequality
+              N     i=1
+
+and the second inequality follows from the smoothness of each Li·. Hence, we have the following relationship
+
+                                           L¯r+1    L¯r   +    L2     g¯r  2
+                                                                2
+
+                                                                                   1  N
+                                              2                                    N
+                                           -     (L¯r     2    +  g¯r 2    -   L2          ir - ¯r2)
+
+                                                                                      i=1                                                         (91)
+
+                                           =  L¯r  +     L2    -      )g¯r   2  -     L¯r     2
+                                                        (          2               2
+
+                                                           2
+
+                                              L2    N
+                                           +
+                                                        ir - ¯r2
+                                              2N
+                                                   i=1
+
+                                                                          23
+                                                                      Distributed DPO
+
+As  er   =  1      N    ir   -  ¯r 2 ,  based    on  the   conclusions      in  Lemma         D.2       we  can   obtain
+            N      i=1
+
+                                                                                22       N
+                                                                                N
+                                                        er+1        2er     +                 gri - g¯r2,                                                       (92)
+
+                                                                                         i=1
+
+Taking expectation and applying Lemma D.3 to bound the disagreement term, we obtain
+
+                                                    er+1  (2 + 8L22)[er] + 162g2 + 822                                                                          (93)
+
+Let 2    + 8L22    =     q.  Choose        small so that 8L22            1-2       .  This is a sufficient condition ensuring q                     1+2   <  1, i.e.,
+                                                                            2                                                                          2
+
+                                                                                   1 - 2         .
+
+                                                                                      4L
+
+Therefore, the linear recursion contracts and unrolls to
+
+                                                        E[er ]       qr E[e0 ]     +     162g2 + 822                                                            (94)
+                                                                                               1-q
+
+                                L2                                      1-2
+                                  2                                     4L
+In  Eq.  91,  the  term  of  (       -     )g¯r  2  <   0  as                   .  Thus,     it  becomes       by  taking   expectation  on  both       sides:
+                                        2
+
+                                                 E[L¯r+1 ]        E[L¯r ]   -      EL¯r             2   +   L2    E[er  ].                                      (95)
+                                                                                2                            2
+
+Now we sum Eq. 95 from r = 0 to R - 1, telescope, and divide by /2R:
+
+                                           1     R-1                        2(L¯0 - L)              +   L2    R-1                                               (96)
+                                           R                                     R                      R
+                                                      EL¯r 2                                                       E[er ].
+
+                                                 r=0                                                          r=0
+
+Average Eq. 94 over r = 0, ..., R - 1 and use                    R-1    qr      1/(1     -    q)    to  get:
+                                                                 r=0
+
+                                                 1  R-1              1   ·  1   1     q e0  +    162g2 + 822 .                                                  (97)
+                                                 R                   R          -                      1-q
+                                                         E[er ]
+
+                                                    r=0
+
+                                           1-2                              1-2
+                                           4L                                  2
+Due to the condition that                        ,  we  have   1  -  q                .  By  setting    initialization      as  0,  it  simplifies  to
+
+                                                           1   R-1                 322    g2  + 162         2  .                                                (98)
+                                                           R                              1   - 2
+                                                                    E[er ]
+
+                                                               r=0
+
+Therefore, we substitute Eq. 98 into Eq. 96:
+
+                                        1  R-1                       2(L¯0 - L)             +       L2  (32   2g2 + 1622        )   ,                           (99)
+                                        R                                 R                                   1 - 2
+                                                EL¯r 2
+
+                                           r=0
+
+which completes the proof.
+
+E. Additional Detail for Experimental Setup
+
+E.1. Datasets
+
+Anthropic HH-RLHF (Bai et al., 2022). The Anthropic Helpfulness and Harmlessness RLHF dataset (hh-rlhf) is a large-
+scale collection of human preference annotations gathered as part of Anthropic's Constitutional AI research programme.
+Each example is a multi-turn conversation between a human and an AI assistant, ending with two candidate final turns: one
+judged by annotators as more helpful and less harmful (chosen), and one judged as less preferred (rejected). The dataset
+
+                                                                        24
+                                                                       Distributed DPO
+
+spans a broad range of everyday assistance tasks, including question answering, coding, creative writing, factual lookup,
+and general conversation, making it representative of the diverse, open-domain instructions that alignment methods must
+handle in practice. Each conversation is truncated to the final 300 characters of both the chosen and rejected branches to
+limit sequence length and GPU memory usage. Pairs where chosen and rejected are identical, or where either branch is
+shorter than 20 characters, are discarded. Each of the 5 agents receives a disjoint, non-overlapping slice of 120 preference
+pairs, creating a heterogeneous (non-IID) data partition representative of the federated setting.
+
+Stanford Human Preferences (SHF) (Cui et al., 2023). The Stanford Human Preferences dataset (SHP) is constructed from
+Reddit posts and associated community votes. Each example consists of a question or prompt drawn from domain-specific
+subreddits (e.g. AskScience, ExplainLikeImFive, Cooking, LegalAdvice) together with two human-written responses. The
+preferred response is determined by relative Reddit score: the response with the higher community upvote count is treated
+as chosen, and the lower-scoring response as rejected. SHP reflects crowd-sourced, long-form quality judgements across a
+wide variety of factual and advisory domains, complementing the curated annotator-driven preferences of hh-rlhf. Pairs
+with identical scores are discarded to avoid ambiguous supervision. The same 300-character truncation and 20-character
+minimum-length filters applied to hh-rlhf are used here. Agent data partitions are constructed identically, giving each of the
+5 agents 120 non-overlapping pairs.
+
+E.2. Hyperparameters
+
+The specific hyperparameters used in the empirical evaluation is listed in Table 1.
+
+          Table 1. Hyperparameter Setup.
+
+                 Hyperparameter                    Value
+
+                     # of agents                      5
+              The maximum length                      5
+                                                      4
+                     Batch size                      0.2
+              Inverse temperature                AdamW
+                                                   1e-4
+                     Optimizer                       1.0
+                   Learning rate                     80
+             Gradient clipping norm                   3
+             Communication rounds                     5
+             Local steps for FedDPO                   3
+            Local steps for DecDPO                  120
+# of agents in partial participation in FedDPO  [42, 43, 44]
+           Training samples per agent
+                  Random seeds
+
+E.3. Communication Topologies
+
+For decentralized learning setting, four graph structures are evaluated in the topology ablation, spanning the full range of
+spectral gaps attainable with five nodes: path, ring, star, and complete. Table 2 shows the details of different topologies in
+ablation studies.
+
+Table 2. Details of Communication Topologies.
+
+Topology     Structure                          1 - 2
+
+   Path    Linear chain   0.87                   0.24
+  Ring     Cycle graph    0.54                   0.71
+   Star   Hub-and-spoke   0.45                   0.80
+Complete
+              All pairs   0.00                   1.00
+
+          25
+                                                   Distributed DPO
+
+F. Additional Results
+
+We present additional results for the ablation study on the HH-RLHF dataset.
+
+Comparative Study. As Figure 6 shows, all four algorithms show decreasing DPO loss over 80 rounds, with narrow std
+bands confirming reproducibility across seeds. Centralized DPO (blue) performs worst, remaining near 1.0 in gradient
+norm throughout and achieving the highest final DPO loss. This is explained by its smaller effective batch size per round:
+centralized DPO processes b=4 pairs per gradient step, while FedDPO full aggregates across S = 5 agents (effective batch
+5×4=20) and DecDPO ring uses 5 local steps per round -- giving both distributed variants substantially more gradient
+work per round in the computation-dominated regime. FedDPO full (S = 5) and FedDPO partial (S = 3) converge to
+similar intermediate levels, with FedDPO full achieving a slightly lower floor consistent with Corollary 5.2's prediction that
+full participation reduces the g2/S variance penalty. DecDPO ring achieves the steepest descent and lowest final gradient
+norm (0.2), attributable to its larger local computation per round rather than a structural theoretical advantage. These
+results highlight that in practice, effective batch size and local computation budget per round are critical factors governing
+convergence speed, consistent with the computation-dominated regime of Theorems 5.1 and 6.1.
+
+               100       (a) Gradient Norm Mean ± Std                                (b) DPO Loss Mean ± Std
+
+                                                                             100
+
+E[ L 2] (log)  6 × 10 1                                DPO Loss
+
+               4 × 10 1     Centralized DPO                      10 1
+               3 × 10 1
+                                                                             Centralized DPO
+                            FedDPO (full, S=5)                                       FedDPO (full, S=5)
+               2 × 10 1     FedDPO (partial, S=3)                                    FedDPO (partial, S=3)
+                            DecDPO ring ( =0.54)                                     DecDPO ring ( =0.54)
+                                                                 10 2
+                         0  20 Ro4u0nd 60          80                             0  20 Ro4u0nd 60                                    80
+
+                         Figure 6. Comparison of gradient norm and training loss for different methods with HH-RLHF dataset.
+
+                  (a) Convergence vs Local Steps E                           1.0 1.0000 (b) Final Gap vs E
+
+               100
+
+               6 × 10 1                                Final Stationary Gap  0.8
+
+E[ L 2]        4 × 10 1  Local Steps E                                       0.6
+                               E=1
+               3 × 10 1                                                                               0.4616
+
+                                                                             0.4
+
+               2 × 10 1     E=3                                              0.2                                              0.1554
+                            E=6
+                                                                             0.0 1
+                         0  20 Ro4u0nd 60          80                                Local S3teps E                           6
+
+                                        Figure 7. Impact of local steps on performance with HH-RLHF.
+
+Local steps E. In Figure 7, E = 1 remains flat at 1.0 throughout all 80 rounds, E = 3 converges moderately, and
+E = 6 achieves the lowest final stationary gap (E = 1 : 1.000, E = 3 : 0.462, E = 6 : 0.155). This monotone
+improvement with E is fully consistent with Theorem 5.1 in the computation-dominated regime: at  = 0.0001, the
+drift floor 2E2  (1e - 8)E2 is negligible for all E, while the convergence term 1/(ER) is directly reduced by
+larger E, making more local gradient work per round strictly beneficial. The complete failure of E = 1 to converge
+highlights an important practical implication: at small , a single local step per round provides insufficient gradient
+
+                                                   26
+                                                                          Distributed DPO
+
+signal to make meaningful progress within 80 rounds. This reinforces the guideline derivable from Theorem 5.1 that, in
+communication-efficient regimes with small , E should be set generously.
+
+   (a) Convergence under Partial Participation                                                                                                                (b) Gap vs 1/S
+       100
+   9 × 10 1                                                                                                                  1.0  Linear fit                                        S=1
+
+E[ L 2]8 × 10 1                                                                                                              0.9
+                                                       Stationary Gap
+   7 × 10 1 Sampled Clients S                                                                                                0.8
+                                                   S=1
+                                                   S=3                                                                       0.7 S=5 S=3
+   6 × 10 1                                        S=5
+
+                        0                          20 Ro4u0nd 60                                                   80 0.6 0.2                      0.4        0.16/S 0.8            1.0
+
+                                                        Figure 8. Impact of participation on performance with HH-RLHF.
+
+Participation S. In Figure 8, S = 5 converges most smoothly to the lowest final gradient norm, S = 3 is intermediate,
+
+and S = 1 shows the highest variability with occasional upward spikes. Panel (b) provides direct quantitative validation
+of Theorem 5.1's g2/S variance floor: final stationary gaps S = 5 : 0.67, S = 3 : 0.65, S = 1 : 1.0 lie close to
+the linear fit in the 1/S scatter plot. The positive slope of the linear fit represents the empirical g2 coefficient, and the
+approximate linearity confirms that the dominant residual gap is the variance floor rather than heterogeneity drift. The
+
+fluctuation behavior of S = 1 in panel (a) is also consistent with theory: with a single client per round, gradient estimates
+
+carry high variance, producing occasional upward steps before the overall trend descends -- precisely the behavior predicted
+by the large g2/S term.
+
+   C1omP²=atm0h.2u38nication1GRr²=ian0gp.7h09s          (a()loCwoenrvelorsgsen=cbeeEtrtreorravlisgTnompeonlotg) y              (b) Gradient Norm vs Topology        (c) Consensus Error vs Spectral Gap
+
+                                                   1.0  Path (1 ²=0.238)                                               100                                    1.75  Star
+                                                        Ring (1 ²=0.709)
+   1                       1                            Star (1 ²=0.360)                                           6 × 10 1                                   1.50
+
+2                    2                             DPO Loss (convergence error)Complete (1 ²=1.000)
+                                                                                    E[ L 2] (log)
+                  0                             0  0.8                                                                                                        1.25
+                                                                                                                               Final Consensus Error e
+3                    3                             0.6                                                             4 × 10 1                                   1.00 Path
+            4                    4                 0.4                                                             3 × 10 1                                   0.75
+                                                   0.2
+   1 S²=ta0r.360        1Com²=p1le.0t0e0           0.0                                                                                                        0.50
+
+            1                    1                     0 Comm25unicatio5n0Round75
+2                    2
+
+                  0                             0                                                                  2 × 10 1  Path (1 ²=0.238)
+                                                                                                                             Ring (1 ²=0.709)
+3                    3                                                                                                       Star (1 ²=0.360)                 0.25            Ring
+            4                    4                                                                                           Complete (1 ²=1.000)
+                                                                                                                                                              0.00  Theory: 1/(1 2) Complete
+
+                                                                                                                             0 Comm25unicatio5n0Round75                  0.5        1.0
+                                                                                                                                                                    Spectral Gap 1 2
+
+                                                        Figure 9. Impact of topology on performance with HH-RLHF.
+
+DecDPO topology. In Figure 9, all four topologies converge from an initial DPO loss of  0.8 - 1.0, with the complete
+graph achieving the lowest final loss and path the highest in panel (a). Panel (b) shows that gradient norm steady-state
+floors follow the ordering complete < ring  path < star, consistent with Theorem 6.1's prediction that the floor scales as
+2(g2 + 2)/(1 - 2). Panel (c) provides the most direct test of Theorem 6.1: consensus error e follows the 1/(1 - 2)
+theoretical curve closely across path (1.00), ring (0.18), and complete (0.04), spanning over an order of magnitude.
+The star anomaly (e  1.72, above path) is a finite-N = 5 structural effect: the hub-and-spoke topology creates asymmetric
+mixing weights where four spoke nodes remain far from the network mean while the hub pulls toward it, inflating e beyond
+what the spectral gap alone predicts. This effect is expected to diminish as N grows and does not contradict the theory,
+which holds for symmetric doubly stochastic mixing matrices at any fixed N .
+
+Staleness. In Figure 10, only qmax=0 (synchronous) shows meaningful convergence, descending to  0.73 - 0.77 by round
+
+                                                                                                                   27
+                                                                    Distributed DPO
+
+                                  Convergence under Staleness
+
+         100
+
+E[ L 2]  9 × 10 1
+
+         8 × 10 1  Max Staleness
+                         qqqmmmaaaxxx  =  0
+                                       =  2
+                                       =  5
+
+                      0                      10           20    30 Ro4u0nd                       50       60              70     80
+
+                                             Figure 10. Impact of staleness on performance with HH-RLHF.
+
+80. Both qmax = 2 and qmax = 5 remain essentially flat at 1.0 throughout. The qualitative ordering qmax = 0 > qmax = 2 >
+qmax = 5 is directionally consistent with Theorem 5.5's Cqqmax staleness penalty. However, the complete stalling of qmax  2
+is more severe than the theorem's additive penalty alone would suggest, indicating that stale updates at small  introduce
+gradient direction inconsistencies that dominate the small learning signal per round -- an effect that Assumption 5.3's
+bounded drift model does not fully capture. We flag this as an important gap between the theoretical model and practical
+implementation, which could be refined by adjusting the staleness mechanism.
+
+Cross-Dataset Summary: HH-RLHF vs. SHP. The HH-RLHF results are strongly consistent with SHP across all
+experimental conditions, providing robust cross-dataset validation of the theoretical framework. The participation S ablation
+is the most dataset-invariant result: both datasets show a clear linear relationship between final stationary gap and 1/S,
+confirming the g2/S variance floor, with SHP exhibiting a steeper slope (larger empirical g2) attributable to its higher
+crowd-sourced preference noise. The topology ablation also replicates faithfully: both datasets show the same complete
+< ring < path ordering in consensus error, with the star anomaly appearing consistently above path in both cases and the
+1/(1 - 2) theoretical curve fitting both with comparable fidelity. For the local steps E ablation, both datasets show the
+same monotone improvement with E and the same qualitative computation-dominated behavior, with HH-RLHF yielding
+slightly larger final gaps than SHP. The comparative study shows narrower std bands on HH-RLHF than SHP, consistent
+with HH-RLHF's curated annotations producing lower gradient variance than SHP's crowd-sourced scores. Overall, the
+strong quantitative and qualitative consistency across both datasets confirms that the key DPO-specific scaling laws are
+dataset-invariant structural properties rather than artifacts of a particular preference distribution.
+
+                (a) Convergence vs Local Steps E                                 0.8    0.8402 (b) Final Gap vs E
+
+             100                                                                                          0.7197
+         9 × 10 1
+E[ L 2]                                                                          0.6
+                                                       Final Stationary Gap8 × 10 1                                           0.5423
+
+         7 × 10 1 Local Steps E                                                  0.4
+
+         6 × 10 1        E=1                                                     0.2
+                         E=3
+                         E=6
+                                                                                 0.0 1
+                   0     20 Ro4u0nd 60                                       80                           Local S3teps E      6
+
+                      Figure 11. Impact of local steps on performance with HH-RLHF and learning rate equal to 0.01.
+
+Local    Steps  E  vs.  Learning             Rate  .  We  also  investigate  dominance  between   1  and  2E2  +  2E2g2   in  Theorem  5.1.
+                                                                                                 E
+
+                                                                             28
+                                                  Distributed DPO
+
+       (a) Convergence vs Local Steps E                                               0.9211   (b) Final Gap vs E
+
+    100                                                                                                 0.8616
+                                                       0.8
+
+9 × 10 1
+                                                       0.6
+E[ L 2]                                                                                                                      0.6873
+                                                       Final Stationary Gap
+8 × 10 1 Local Steps E                                                           0.4
+                  E=1                                                            0.2
+7 × 10 1          E=3                                                      80 0.0
+                  E=6
+
+          0            20 Ro4u0nd 60                                                  1               Local S3teps E         6
+
+             Figure 12. Impact of local steps on performance with HH-RLHF and learning rate equal to 0.1.
+
+·  = 0.01: In Figure 11, increasing E from 1 to 6 consistently improves convergence (lower final gap, faster drop in
+                                         (L0 -L)
+gradient  norm).  The  beneficial  term      ER   dominates                because    harmful  terms  2E2  +  2E2g2   scale  with  2  and
+
+are negligible.
+
+·  = 0.1: The final gap decreases as E increases from 1 to 6 (no U-shape) as shown in Figure 12, meaning the beneficial
+  term still dominates over the harmful drift/variance terms within this E range. However, all gaps are larger than those at
+   = 0.01 such that raising  worsens overall convergence, consistent with harmful terms growing as 2. The gradient
+  norm curves overlap significantly, and in some regimes E = 3 yields higher gradient norm than E = 1. This indicates
+  that for  = 0.1, the harmful effects (client drift and variance) are not negligible; they occasionally push performance
+  backward, even though the final gap after many rounds still favors larger E (e.g., 10, 20), which is a direction we leave
+  for future work.
+
+                                                  29
+

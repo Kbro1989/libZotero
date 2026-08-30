@@ -1,0 +1,1119 @@
+                                        Moûsai: Efficient Text-to-Music Diffusion Models
+
+                                                  Flavio Schneider                                                 Ojasv Kamal
+                                                     ETH Zürich                                                    IIT Kharagpur
+                                                                                                           kamalojasv2000@gmail.com
+                                        flavio.schneider.97@gmail.com
+
+                                                          Zhijing Jin                                         Bernhard Schölkopf
+                                        MPI for Intelligent Systems & ETH Zürich                           MPI for Intelligent Systems
+
+                                                       jinzhi@ethz.ch                                             bs@tue.mpg.de
+
+                                                              Abstract                                     Text Description     Tokenizer           TextEncoder
+                                                                                                            Egyptian Darbuka,                                          Embedding
+                                             Recent years have seen the rapid development                   Drums, Rythm,
+                                             of large generative models for text; however,                  (Deluxe Edition),
+                      Transformer
+
+                                             much less research has explored the connec-                    2 of 4
+                                             tion between text and another "language" of
+arXiv:2301.11757v3 [cs.CL] 23 Oct 2023       communication ­ music. Music, much like text,                                                          DiffusionGenerator
+                                             can convey emotions, stories, and ideas, and
+                                             has its own unique structure and syntax. In                                        Noise               UNet1                               Latent
+                                             our work, we bridge text and music via a text-                                                  UNet1                           UNet1
+                                             to-music generation model that is highly ef-
+                                             ficient, expressive, and can handle long-term                                                          DiffusionDecoder                            Audio
+                                             structure. Specifically, we develop Moûsai, a
+                                             cascading two-stage latent diffusion model that                                    Noise
+                                             can generate multiple minutes of high-quality
+                                             stereo music at 48kHz from textual descrip-                                               UNet2        UNet2             UNet2       UNet2
+                                             tions. Moreover, our model features high effi-
+                                             ciency, which enables real-time inference on a                Figure 1: We propose a two-stage cascading diffusion
+                                             single consumer GPU with a reasonable speed.                  method, where the first stage compresses the music
+                                             Through experiments and property analyses,                    using a novel diffusion autoencoder, and the second
+                                             we show our model's competence over a vari-                   stage generates music from the reduced representation
+                                             ety of criteria compared with existing music                  conditioned on the encoding of a textual description.
+                                             generation models. Lastly, to promote the open-
+                                             source culture, we provide a collection of open-              In this paper, we further bridge the gap between
+                                             source libraries with the hope of facilitating                text and music by leveraging the power of NLP
+                                             future work in the field.1                                    techniques to generate music conditioned on tex-
+                                                                                                           tual input. Through our work, we not only aim
+                                        1 Introduction                                                     to expand the scope of NLP applications, but also
+                                                                                                           contribute to the interdisciplinary research at the
+                                        In recent years, natural language processing (NLP)                 intersection of language, music, and machine learn-
+                                        has made significant strides in understanding and                  ing techniques.
+                                        generating human language, due to the advance-
+                                        ments in deep learning and large-scale pre-trained                 However, like text, music generation has long been
+                                        models (Radford et al., 2018; Devlin et al., 2019;                 a challenging task, as it requires multiple aspects
+                                        Brown et al., 2020). While the majority of NLP                     at different levels of abstraction (van den Oord
+                                        research has focused on textual data, there exists                 et al., 2016; Dieleman et al., 2018). Existing au-
+                                        another rich and expressive "language" of commu-                   dio generation models explore the use of recursive
+                                        nication ­ music. Music, much like text, can convey                neural networks (Mehri et al., 2017), adversarial
+                                        emotions (Germer, 2011), stories (Chung, 2006),                    generative networks (Kumar et al., 2019; Kim et al.,
+                                        and ideas (Bicknell, 2002), and has its own unique                 2021; Engel et al., 2019; Morrison et al., 2022), au-
+                                        structure and syntax (Swain, 1995).                                toencoders (Deng et al., 2021), and transformers
+                                                                                                           (Yu et al., 2022a). With the recent advancement
+                                             Co-first author. Co-supervision.                              in diffusion-based generative models in computer
+                                            1We open-source the following:
+                                           ­ Codes: https://github.com/archinetai/audio-diffusion-pytorch
+                                           ­ Music samples for this paper: http://bit.ly/44ozWDH
+                                           ­ Music samples for all models: https://bit.ly/audio-diffusion
+vision (Ramesh et al., 2022; Saharia et al., 2022),            design a lightweight and specialized 1D U-Net ar-
+researchers in speech have also started to explore             chitecture. Together, our model achieves a fast
+the use of diffusion models in tasks such as speech            inference speed on a single consumer GPU in min-
+synthesis (Kong et al., 2021; Lam et al., 2022; Leng           utes, and a training time of approximately one week
+et al., 2022), although only a few these models can            per stage on one A100 GPU, making it possible
+apply well to the task of music generation.                    to train and run the overall system using resources
+                                                               available in most universities.
+Additionally, there are several long-standing chal-
+lenges in the area of music generation: (1) music              We train our model on a newly collected dataset,
+generation at length, as most text-to-audio systems            TEXT2MUSIC, with 50K text-music pairs covering
+(Forsgren and Martiros, 2022; Kreuk et al., 2022)              diverse music genres. Remarkably, our diffusion-
+can only generate a few seconds of audio; (2) model            based model improves significantly on previous
+efficiency, as many need to run on GPUs for hours              models, as it can be trained on a variety of mu-
+to generate just one minute of audio (Dhariwal                 sic genres, generate long-context music for several
+et al., 2020; Kreuk et al., 2022); (3) lack of diver-          minutes with a high quality of 48kHz stereo music,
+sity of the generated music, as many are limited by            run real-time inference efficiently within minutes,
+their training methods taking in a single modality             and can be easily controlled by text. Our extensive
+(resulting in the ability to handle only single-genre          evaluations on 11 criteria also validate the quality
+music, but not diverse genres) (Caillon and Esling,            of the generated music by our model from multi-
+2021; Pasini and Schlüter, 2022); and (4) easy con-            ple perspectives, such as text-music relevance, and
+trollability by text prompts, as most are only con-            music quality.
+trolled by latent states (Caillon and Esling, 2021;
+Pasini and Schlüter, 2022), the starting snippet of            In summary, our contributions are as follows:
+the music (Borsos et al., 2022), or text but are lyrics
+(Dhariwal et al., 2020) or descriptions of a daily               1. We are the first to propose the text-to-music
+sound like dog barking (Kreuk et al., 2022).                         diffusion model using a two-stage cascading
+                                                                     latent diffusion modeling process.
+A single model mastering all these aspects would
+make a strong contribution to the music industry,                2. We achieve high efficiency with a compres-
+as it can enable the broader public to be part of                    sion rate of 64x, and a specialized U-Net de-
+the creative process by allowing them to compose                     sign, which achieves a training time of one
+music using an accessible text-based interface, as-                  week on an A100 consumer GPU, and real-
+sist creators in finding inspiration, and provide an                 time inference time.
+unlimited supply of novel audio samples.
+                                                                 3. We collect TEXT2MUSIC, a dataset of 50K
+To address these challenges, we propose Moûsai,2                     text-music pairs constituting 2,500 hours of
+a novel text-conditional two-stage cascading diffu-                  music.
+sion model. Specifically, the first stage trains a mu-
+sic encoder by diffusion magnitude-autoencoding                  4. Our model outperforms existing baselines by
+(DMAE), which compress audio by the novel dif-                       clear margins on 11 different evaluation cri-
+fusion autoencoder; and the second stage learns to                   teria, demonstrating merits such as high ef-
+generate the reduced representation while condi-                     ficiency, text-music relevance, music quality,
+tioning on a textual description by text-conditioned                 and long-context structure.
+latent diffusion (TCLD). The two-stage generation
+process is shown in Figure 1.                                  2 Related Work
+
+Apart from proposing the novel text-to-music diffu-            Connecting Text and Music The connection be-
+sion model, we also introduce some special designs             tween text and music lies in the intersection of NLP
+to boost model efficiency, making the model more               and computational musicology. Previous work
+accessible. First, our DMAE can achieve an au-                 looks into aspects such as the similarity of mu-
+dio signal compression rate of 64x. Moreover, we               sic and linguistic structures (Papadimitriou and Ju-
+                                                               rafsky, 2020), music and dialog (Berlingerio and
+    2Moûsai is romanized ancient Greek for Muses, the sources  Bonin, 2018), and jointly modeling music and text
+of artistic inspiration (https://en.wikipedia.org/wiki/        for emotion detection (Mihalcea and Strapparava,
+Muses), and also evokes a blend of music and AI.               2012). Apart from several work that generates mu-
+                                                               sic from text (Dhariwal et al., 2020; Forsgren and
+Martiros, 2022), we are the first to explore diffusion                                   Latent
+models to interact text with music representations.
+                                                                                Encoder
+
+Generative Models Generative models aim to                          STFTMag
+learn a lower-dimension representation space, and       Audio
+then reconstruct to the high-dimension space con-
+ditioning on the given information (Rombach et al.,                          Noise       UNet    ||·||
+2022; Yang et al., 2022; Kreuk et al., 2022; Ho
+et al., 2022). Some effective methods earlier in-       Figure 2: The training scheme of our diffusion magni-
+clude auto-encoding (Hinton and Salakhutdinov,          tude autoencoder (DMAE). When denoising (bottom
+2006; Kingma and Welling, 2014), or quantized           right), we condition the U-Net on the noise level ( ) and
+auto-encoding (van den Oord et al., 2017; Esser         compressed latent representation ( ) from a reduced ver-
+et al., 2021; Lee et al., 2022). Recent proposals       sion of the non-noisy audio (the pink matrix).
+focus on the quantized representation followed by
+masked or autoregressive learning on tokens (Vil-       latent space by 64x from the original waveform. To
+legas et al., 2022; Yu et al., 2022b; Chang et al.,     train the model, we first convert the waveform to a
+2023; Dhariwal et al., 2020; Borsos et al., 2022;       magnitude spectrogram, which is a better represen-
+Yang et al., 2022; Kreuk et al., 2022), and diffusion   tation for audio models, and then we auto-encode
+models (Ramesh et al., 2022; Rombach et al., 2022;      it into a latent representation.
+Saharia et al., 2022; Ho et al., 2022; Forsgren and
+Martiros, 2022), which leads to impressive perfor-      At the same time, we corrupt the original audio with
+mance. To the best of our knowledge, we are the         a random amount of noise, and train our 1D U-Net
+first to adapt the cascading diffusion approach for     (introduced in Section 3.1.4) to remove that noise.
+audio generation.                                       During the noise removal process, we condition the
+                                                        U-Net on the noise level and the compressed latent,
+3 Moûsai: Efficient Long-Context Music                  which can have access to a reduced version of the
+    Generation from Text                                non-noisy audio.
+
+Our model Moûsai contains a two-stage training          3.1.1 v-Objective Diffusion
+process. In Stage 1, we use diffusion magnitude-
+autoencoding (DMAE), which compresses the au-           We use the v-objective diffusion process as pro-
+dio waveform 64x using a diffusion autoencoder.         posed by Salimans and Ho (2022). Suppose we
+In Stage 2, we use a latent text-to-audio diffusion     have a sample x0 from a distribution p(x0), some
+model, to generate a novel latent space by diffusion    noise schedule t  [0, 1], and some noisy data
+while conditioning on text embeddings obtained          point xt = tx0 + t. The v-objective diffu-
+from a frozen transformer language model.               sion tries to estimate a model v^t = f (xt, t) by
+                                                        minimizing the following objective:
+3.1 Stage 1: Music Encoding by Diffusion
+      Magnitude-Autoencoding (DMAE)                           Et[0,1],t,xt f(xt , t) - vt 22 , (1)
+
+We design the first step of Moûsai to be learning       where vt   =t :=x2tt t  = t - tx0, for which
+a good music encoder to capture the latent repre-       we define               , and obtain its trigonometric
+sentation space for music. Representation learn-
+ing is crucial for generative models, as it can be      values t := cos(t), and t := sin(t).
+drastically more efficient than handling the high-
+dimensional raw input data (Rombach et al., 2022;       3.1.2 DDIM Sampler for Denoising
+Yang et al., 2022; Kreuk et al., 2022; Ho et al.,
+2022; Villegas et al., 2022).                           The denoising step uses ODE samplers to turn noise
+                                                        into a new data point by estimating the rate of
+Overview To learn the representation space for mu-      change. In this work, we adopt the DDIM sampler
+sic, we deploy a diffusion magnitude autoencoder        (Song et al., 2021), which we find to work well
+(DMAE) shown in Figure 2. Specifically, we adopt
+our diffusion-based audio autoencoder, introduced
+in Section 3.1.3, to compress audio into a smaller
+and have a reasonable tradeoff between the number                             UNetBlock
+of steps and audio quality. The DDIM sampler
+denoises the signal by repeated application of the         Downsample  Items             Items        Upsample Skip
+following:
+
+v^t = f(xt , t)          (2)                                                     Items
+                                                                                   ×N
+x^0 = txt - tv^t         (3)
+
+^t = txt + tv^t          (4)                                           R      M  I       A      C
+
+x^t-1 = t-1x^0 + t-1^t,  (5)
+
+which estimates both the initial data point and the   Figure 3: Our proposed 1D U-Net architecture. Each
+noise at the step t, for some T -step noise schedule  UNetBlock (top) consists of several U-Net items (bot-
+T , . . . , 0 as a sequence evenly spaced between 1   tom). In each U-Net item (bottom), we use a 1D con-
+and 0.                                                volutional ResNet (R), and a modulation unit (M) to
+                                                      provide the diffusion noise level as a feature vector con-
+3.1.3 Diffusion Autoencoder for Audio Input           ditioning ( ). For Stage 1, we use an inject item (I)
+                                                      to inject external channels as conditioning ( ), and for
+We propose a new diffusion autoencoder that first     Stage 2, we use an attention item (A) to share time-wise
+encodes a magnitude spectrogram into a com-           information, and a cross-attention item (C) to condition
+pressed representation, and later injects the latent  on an external (text) embedding ( ). Moreover, for the
+into intermediate channels of the decoding mod-       UNetBlocks, we can recursively nest them, which we
+ules. The standard method to do diffusion, such as    indicate by the inner dashed region on the top.
+the image diffusion model (Rombach et al., 2022),
+is to compress the input into a lower-dimensional     the diffusion noise level, and an inject item to con-
+representation space and apply the diffusion pro-     catenate external channels to the ones at the current
+cess on the reduced latent space. We further com-     depth. Note that inject items are applied only at a
+press and enhance the representation space by         specific depth in the decoder in the first stage to
+diffusion-based autoencoding (Preechakul et al.,      condition on the latent representation of the music.
+2022), which is first introduced in computer vision,
+as a way to condition the diffusion process on a      In summary, our novel 1D U-Net features more
+compressed latent vector of the input itself. Since   modern convolutional blocks, a variety of attention
+diffusion serves as a more powerful generative de-    blocks, conditioning blocks, and improved skip
+coder, and hence the input can be reduced to latent   connections, maintaining an efficient skeleton of
+representations with higher compression ratios.       the hourglass architecture.
+
+3.1.4 Efficient and Enriched 1D U-Net                 3.1.5 Overall Model Architecture
+
+Another crucial module in our model is the effi-      Our entire Stage 1, DMAE, works as follows. Let
+cient 1D U-Net that we design. We identify that
+the vanilla U-Net architecture (Ronneberger et al.,   w be a waveform of shape [c, t] for c channels and t
+2015), originally introduced for medial image seg-
+mentation, has relatively limited efficiency and      timesteps, and (mw , pw ) = stft(w; n = 1024, h =
+speed, as it uses an hourglass convolutional-only
+2D architecture with skip connections.                256) be the magnitude and phase obtained from a
+
+                                                      short-time furier tranform of the waveform with a
+
+Hence, we propose a novel U-Net with only 1D          window size of 1024 and hop-length of 256. Then
+convolutional kernels, which is more efficient than
+the original 2D architecture in terms of speed, and   the  resulting   spectrograms      will   have  shape  [c  ·   n,  t  ].
+can be successfully used both on waveforms or on                                                                         h
+spectrograms if each frequency is considered as a
+different channel.                                    We discard phase and encode the magnitude into
+
+                                                      a latent z = Ee(mw ) using a 1D convolutional
+                                                      encoder. The original waveform is then recon-
+
+                                                      structed by decoding the latent using a diffusion
+
+Moreover, we infuse our 1D U-Net with multi-          model w^ = Dd(z, , s), where Dd is the diffu-
+ple new components, as illustrated in Figure 3: a     sion sampling process with starting noise  and s
+ResNet residual 1D convolutional unit, a modula-
+tion unit to alter the channels given features from   is the number of decoding (sampling) steps. The
+
+                                                      decoder is trained with v-objective diffusion while
+
+                                                      conditioning on the latent fd(wt; t, z), where
+   Text
+                 Embedding                       the U-Nets' denoising process on a text prompt
+Embedding                                                encoded by a transformer model. In this way, the
+                                                         generated music both conforms to the latent space
+           Transformer
+                                  of music and corresponds to the text prompt.
+
+Latent                   UNet       ||·||                3.2.1 Text Conditioning
+             Noise
+                                                         To obtain the text embeddings, prior work on text-
+Figure 4: The training scheme of our text-conditioned    conditioning suggests either learning a joint data-
+latent diffusion (TCLD) generator. During the denoising  text representation (Li et al., 2022; Elizalde et al.,
+process, we provide the U-Net a feature vector ( ) and   2022; Ramesh et al., 2022), or using embeddings
+a text embedding ( ).                                    from pre-trained language model as direct condi-
+                                                         tioning (Saharia et al., 2022; Ho et al., 2022) of the
+fd is the proposed 1D U-Net, called repeatedly           latent model. In our TCLD model, we follow the
+during decoding.                                         practice in Saharia et al. (2022) to use a pre-trained
+                                                         and frozen T5 language model (Raffel et al., 2020)
+Since only the magnitude is used and phase is            to generate text embeddings from the given descrip-
+discarded, this diffusion autoencoder is simulta-        tion. We use the classifier-free guidance (CFG) (Ho
+neously a compressing autoencoder and vocoder.           and Salimans, 2022) with a learned mask applied
+By using the magnitude spectrograms, higher com-         on batch elements with a probability of 0.1 to im-
+pression ratios can be obtained than autoencoding        prove the strength of the text-embedding during
+directly the waveform. We found that waveforms           inference.
+are less compressible and efficient to work with.
+Similarly, discarding phase is beneficial to obtain-     3.2.2 Adapting the U-Net for Text
+ing higher compression ratios for the same level                  Conditioning
+of quality. The diffusion model can easily learn to
+generate a waveform with realistic phase even if         To enable the U-Net to condition on the text em-
+conditioned only on the encoded magnitude.               bedding e, we append two additional blocks to
+                                                         the U-Net: an attention item to share long-context
+In this way, the latent space for music can serve        structural information, and a cross-attention item
+as the starting point for our text-to-music genera-      to condition on the text embeddings, as in Figure 3.
+tor, which will be introduced next. To ensure this       These attention blocks ensure information sharing
+representation space fits the next stage, we apply a     over the entire latent space, which is crucial to learn
+tanh function on the bottleneck, keeping the val-        long-range audio structure.
+ues in the range [-1, 1]. Note that we do not use
+a more disentangled bottleneck, such as the one          Given the compressed size of the latent space, we
+in VAEs (Kingma and Welling, 2014), as its addi-         also increase the size of this inner U-Net to be
+tional regularization reduces the amount of allowed      larger than the first stage. And due to our efficiency
+compressibility.                                         design, it maintains a reasonable training and infer-
+                                                         ence speed, even with large parameter counts.
+3.2 Stage 2: Text-to-Music Generation by
+      Text-Conditioned Latent Diffusion                  3.2.3 Overall Model Architecture
+      (TCLD)
+                                                         We illustrate the detailed process in Figure 4. Con-
+Based on the learned music representation space,         sistent with the previous stage, we use v-objective
+in this stage, we guide the music generation with        diffusion and the 1D U-Net architecture. When con-
+text descriptions.                                       dition on the text embedding e, we use the U-Net
+                                                         configuration fg (zt; t, e) to generate the com-
+Overview As shown in Figure 4, we propose a              pressed latent z = Ee(mw ). Then, the generator
+text-conditioned latent diffusion (TCLD) process.        Gg (e, , s) applies DDIM sampling and calls the
+Specifically, we first corrupt the latent space of       U-Net s times to generate an approximate latent z^
+music with a random amount of noise, then train a        from the text embedding e and starting noise . The
+series of U-Nets to remove the noise, and condition      final generation stack during inference to obtain a
+                                                         waveform is
+
+                                                         w^ = Dd (Gg (e, g, sg), d, sd) .  (6)
+4 Experimental Setup                                   Genre       # Pieces  Percentage (%) in Dataset
+
+4.1 Collection of the TEXT2MUSIC Dataset               Pop          5,498                 27.29
+                                                       Electronic   3,875                 19.38
+To provide a fertile ground to train our text-         Rock         3,584                 17.79
+to-music model on, we collect a new dataset,           Metal        1,796                  8.92
+TEXT2MUSIC, which consists of 50K text-music           Hip Hop       818                   4.06
+pairs totaling 2,500 hours. We ensure a high qual-     Others       4,492                 22.56
+ity of stereo music sampled at 48kHz and cover
+a wide variety of music spanning multiple genres,      Table 1: Our TEXT2MUSIC dataset covers a variety of
+artists, instruments, and provenience. Many ex-        music, e.g., pop, electronic, rock, metal, hip pop, etc.
+isting open-source music datasets, such as Gillick
+et al. (2019); Hawthorne et al. (2019a), have limi-    random crops of length 218 (5.5s at 48kHz), and
+tations in terms of the specific musical instruments   the text-conditional diffusion generation model on
+they encompass. While some datasets, like Engel        fixed crops of length 221 (44s at 48kHz) encoded
+et al. (2017); Boulanger-Lewandowski et al. (2012),    in the 32-channels, 64x compressed latent represen-
+cover a broader array of instruments, they fall short  tation. We use the AdamW optimizer (Loshchilov
+in representing a wide variety of genres. This in-     and Hutter, 2019) with a learning rate of 10-4, 1
+adequacy underscores the need for a more compre-       of 0.95, 2 of 0.999,  of 10-6, and weight de-
+hensive dataset that encompasses a rich tapestry of    cay of 10-3. And we use an exponential moving
+musical genres and diverse instrumentation.            average (EMA) with  = 0.995 and power of 0.7.
+
+As for the procedure to collect the music, we first    5 Evaluation
+check with the copyright regulations, which grants
+an exemption for using copyright infringing copies     5.1 Assessment Criteria Overview
+if the purpose is scientific research (Geiger et al.,
+2018; Delacroix, 2023), according to the EU regu-      Evaluating music is a highly challenging task. We
+lation in Article 3 of the EU Directive on Copyright   survey a large number of papers, and find that pre-
+in the Digital Single Market (European Commis-         vious work adopts a variety of objective and subjec-
+sion, 2016). Then, we follow Spotify's top rec-        tive metrics,4 and the gist is that no single metric is
+ommendations to collect seven very large playlists,    perfect. After careful thinking, we design a com-
+each containing on average 7K pieces of music.         prehensive set of evaluation metrics covering three
+We iterate through every music sample in these         categories with a total of 11 metrics, including both
+playlists, for which we use the name of the music      automatic and human evaluations. In the following,
+to search and download the music from YouTube,         we will introduce the overall property analysis (Sec-
+and we use the metadata to compose its correspond-     tion 5.2), such as the sample rate, prompt type, and
+ing text description, which contains the music title,  music type; efficiency (Section 5.3); text-music rel-
+author, album name, genre, and year of release.        evance (Section 5.4); music quality (Section 5.5);
+                                                       and long-term structure of the music (Section 5.6).
+In line with our spirit to open-source the model,
+we also open-source the data collection pipeline       5.2 Property Analysis
+on GitHub,3 so future researchers can use it to
+facilitate new data collection.                        Comparing the overall properties of various models
+                                                       in Table 2, we see a set of impressive properties
+We show the statistics about the diverse set of gen-   of the Moûsai model: (1) We are among the very
+res in our TEXT2MUSIC dataset in Table 1.              few that can control music generation easily by text
+                                                       descriptions of the type of music we want, as most
+4.2 Implementation Details                             other models do not take text as input (van den
+                                                       Oord et al., 2016; Caillon and Esling, 2021; Borsos
+Our diffusion autoencoder has 185M parame-             et al., 2022), or take only lyrics or descriptions of
+ters, and text-conditional generator has 857M pa-      daily sounds (e.g., "a dog barking") (Kreuk et al.,
+rameters, with more architecture details in Ap-
+pendix A.3. We train the music autoencoder on              4The common metrics we surveyed include quality (Goel
+                                                       et al., 2022), fidelity (Goel et al., 2022; Hawthorne et al.,
+    3https://github.com/archinetai/                    2019b; Hyun et al., 2022), musicality (Goel et al., 2022; Yu
+audio-data-pytorch                                     et al., 2022a; Dhariwal et al., 2020), diversity (Goel et al.,
+                                                       2022; Dhariwal et al., 2020), and structure (Yu et al., 2022a;
+                                                       Leng et al., 2022; Dhariwal et al., 2020).
+Model  Sample Rate Len. Input (Text )                  Music (Diverse) Example Infer. Time Data
+
+WaveNet (2016) 16kHz@1    Secs None                    Piano or speech Piano       = Audio len. 260
+Jukebox (2020) 44.1kHz@1  Mins Lyrics, author, etc.    Song with the lyrics Song
+RAVE (2021) 48kHz@2       Secs Latent                  Single-genre Music Strings  Hours               70K
+AudioLM (2022) 16kHz@1    Secs Beginning of the music  Piano or speech Piano
+Musika (2022) 22.5kHz@2                                Single-genre Music Piano    = Audio len. 100
+                          Secs Context vector
+                                                                                   Mins                40K
+
+                                                                                   = Audio len. 1K
+
+Riffusion (2022) 44.1kHz@1 5s Text (genre, author, etc.) Music of any genre Jazzy clarinet Mins        ­
+
+AudioGen (2022) 16kHz@1 Secs Text (a phrase/sentence) Daily sounds  Dog barks Hours                    4K
+
+Moûsai (Ours) 48kHz@2 Mins Text (genre, author, etc.) Music of any genre African drums = Audio len. 2.5K
+
+Table 2: Comparison of our Moûsai model with previous music/audio generation models. We compare the followings
+aspects: (1) audio sample rate@the number of channels (Sample Rate, where the higher the better), (2) context
+length of the generated music (Len., where the higher the more capable the model is to generate structural music; 
+indicates variable length, where we assume that autoregressive methods are variable by default, with an upper-bound
+imposed by attention), (3) input type (Input, where we feature using Text as the condition for the generation), (4)
+type of the generate music (Music, where the more Diverse genre, the better), (5) an example of the generated
+music type (Example), (6) inference time (Infer. Time, where the shorter the better, and since the music length is
+seconds or minutes, the inference time equivalent to the audio length is the shortest, and we use  to show models
+that can run inference fast on CPU), and (7) total length of the music in the training data in hours (Data).
+
+2022; Dhariwal et al., 2020). The only other text-    synthesized in less than 50s using a consumer GPU
+to-music model is the Riffusion model (Forsgren       with a DDIM sampler and a high step count (100
+and Martiros, 2022), which only works with very       generation steps and 100 decoding steps).
+short length of 5 seconds.
+                                                      We also calculate the exact inference statistics for
+(2) Our model is also among the very few that         our Moûsai vs. Riffusion models in Table 4, and
+enables long-context music generation for several     find that our model needs less than 1/5 the inference
+minutes, among all others that can only gener-        time, and almost half of the inference memory than
+ate seconds (van den Oord et al., 2016; Forsgren      Riffusion does.
+and Martiros, 2022; Kreuk et al., 2022; Pasini
+and Schlüter, 2022), except for Jukebox (Dhari-        Model Inf. Time (s) () Mem. (G) () RTF ()
+wal et al., 2020) which generates songs given lyrics
+and takes very long to run inference.                  Riffusion    218.0          8.85          5.07
+                                                       Moûsai       49.2
+(3) Moreover, we also highlight the diversity of                                   5.04          1.14
+music we generate, as our model design enables
+multi-genre music training, instead of single-genre   Table 3: Efficiency evaluation of our Moûsai and Rif-
+ones in previous models (Caillon and Esling, 2021;    fusion in terms of the inference time (Inf. Time) by
+Pasini and Schlüter, 2022), and we can find rhythm,   seconds, inference memory (Mem.) by Gigabytes , and
+loops, riffs, and occasionally even entire choruses   the real-time factor (RTF) to generate a single 43-second
+in our generated music.                               music clip.
+
+5.3 Efficiency of Our Model                           5.4 Evaluating the Text-Music Relevance
+
+Efficiency is another highlight of our model, where   To assess how much the generated music corre-
+we only need an inference time similar to the audio   sponds to the given text prompt, we deploy both
+length on a consumer GPU, which is several min-       human and automatic evaluations.
+utes, while many other text-to-audio models take
+many GPU hours (Dhariwal et al., 2020; Kreuk          Relevance & Distinctiveness by Human Evalua-
+et al., 2022), as in Table 2. Our model is very       tion We design a listener test where the annotators
+friendly for research at university labs, as each     need to infer some coarse information of the text
+model can be trained on a single A100 GPU in 1        prompt behind a given piece of generated music.
+week of training using a batch size of 32. This is    Since it is too challenging to infer the exact text
+equivalent to around 1M steps for both the diffusion  prompt, we only ask annotators to infer the music
+autoencoder and latent generator. For inference, as   genre indicated in the prompt.
+an example, a novel audio source of 43s can be
+                                                      To prepare the ground-truth prompts, we com-
+                                                      pose a list of 40 random text prompts spanning
+                                                      across the four most common music genres in our
+                                         30                                          30  5.5 Evaluating the Music Quality
+
+Electronic                               25 Electronic                               25  We first introduce the four evaluation metrics for
+                                                                                         music quality, and then describe the results.
+Hip Hop                                  20  Hip Hop                                 20
+                                                                                         5.5.1 Metrics for Music Quality
+                                         15                                          15
+                                                                                         To evaluate the quality of the generated music, we
+Metal                                    10  Metal                                   10  adopt four metrics: the automatic score by FAD, a
+                                                                                         music Turing test, and human evaluation on musi-
+Pop                                      5   Pop                                     5   cality and audio clarity.
+
+            ElectronicHip Hop Metal Pop  0              ElectronicHip Hop Metal Pop  0   For automatic evaluation, we deploy the widely
+                                                                                         adopted Fréchet Audio Distance (FAD) (Kilgour
+(a) Confusion matrix for the (b) Confusion matrix for the                                et al., 2019) to assess the fidelity of the generated
+music pieces generated by music pieces generated by                                      music distribution in comparison to the real music
+Moûsai. (y-axis: true genre; the Riffusion model.                                        distribution (i.e., how similar the generated music
+x-axis: inferred genre.)                                                                 is to the authentic music). To facilitate the com-
+                                                                                         putation of FAD, we employ the commonly used
+Figure 5: For the text-music relevance check, we ask                                     PANN model (Kong et al., 2020)6 as a means to
+the annotators to infer the ground-truth genres of the                                   effectively encode the music.
+generated music by (a) our model and (b) the Riffusion
+model. The darker diagonal means better results. Note                                    Then, we also set up three human evaluations, all
+that each matrix adds up to 120, corresponding to 40                                     on a scale of 1 (the worst) to 5 (the best). First,
+samples per model annotated by three perceivers each.                                    we let human annotators to assess the authentic-
+                                                                                         ity/fidelity of the generated music via a music Tur-
+TEXT2MUSIC dataset: electronic, hip hop, metal,                                          ing test (Goel et al., 2022; Hawthorne et al., 2019b;
+and pop. See Appendix C.1 for the entire list of                                         Hyun et al., 2022). Specifically, we ask the an-
+prompts. Inspired by the two-alternative forced                                          notators to listen to a pair of music samples at a
+choice (2AFC) experiment design, we design a                                             time, and judge which one is real and which is
+four-alternative forced choice (4AFC) paradigm,                                          generated. To provide a more fine-grained score,
+where the annotators need to categorize each mu-                                         we also ask them how much the generated music
+sic sample into exactly one of the four provided                                         they identified sounds like real music, on a scale
+categories. See annotation details in Appendix C.1.                                      of 1 (not similar at all) to 5 (highly similar). We
+                                                                                         keep their annotation score if they identify the gen-
+In Figure 5, we can see that our Moûsai model has                                        erated music correctly, and otherwise we rate the
+the most mass on the diagonal (i.e., correctly iden-                                     music as 5, which means that the music perfectly
+tified), while the Riffusion model tends to generate                                     passes the Turing test. See more evaluation details
+generic samples that are mostly identified as pop                                        in Appendix C.2.
+for all ground-truth genres. This shows that the
+music generated by our model is both relevant to                                         The other two metrics we deploy are musicality and
+the test and distinct enough with the given genre                                        audio clarity. For musicality, we let human anno-
+against others.                                                                          tators rate the melodiousness and harmoniousness
+                                                                                         (Seitz, 2005) of the given music. And for audio
+Relevance by CLAP For automatic evaluation, we                                           clarity, or quality (Goel et al., 2022), we let them
+adopt the commonly used CLAP score (Wu et al.,                                           judge how close the quality is to a walkie-talkie
+2023) to quantify the alignment between the gen-                                         (worst) or a high-quality studio sound system (best).
+erated audio and the corresponding text. From                                            The detailed setup of all our human evaluations are
+Table 4, we can see that our model is two times                                          in Appendix C.2 and Appendix C.3.
+better than Riffusion in terms of the CLAP score,
+and also much faster in inference time. Specifically,                                    5.5.2 Results
+we apply the pretrained CLAP model (Wu et al.,
+2023)5 to get the embeddings of each music sample                                        We show the evaluation results on all five metrics
+and its corresponding text prompt, and then report                                       in Table 5. We can see that, on the automatic evalu-
+their cosine similarity as the CLAP score.
+                                                                                             6https://github.com/gudgud96/
+Model CLAP Score for Text-Music Relevance ()                                             frechet-audio-distance
+
+Riffusion                                    0.06
+
+Moûsai                                       0.13
+
+Table 4: CLAP scores of our Moûsai and Riffusion.
+
+5https://github.com/LAION-AI/CLAP
+ation of FAD, our model has the best score, which                      attention blocks, the context provided by the U-
+is one magnitude smaller than previous models.                         Net is not large enough to learn any meaningful
+Moreover, it also shows strong performance across                      long-term structure. We describe other variations
+the human evaluation metrics, outperforming the                        of hyperparameters and findings in Appendix D.
+other two models on the music Turing test, har-
+moniousness, and sound clarity, as well as being                       6 Conclusion
+comparable on the melodiousness metric.
+                                                                       In this work, we presented Moûsai, a novel text-
+ Model FAD () Fidelity Melody Harmony Clarity                          to-music generation model using latent diffusion.
+ Riffusion 0.0018 2.8 2.66 2.48 2.37                                   We show that, in contrast to earlier approaches,
+ Musika 0.0020 3.04 3.21 3.04 2.88                                     our model can generate minutes of music in real-
+ Moûsai 0.00015 3.17 3.15 3.08 2.92                                    time on a consumer GPU, with good music quality
+                                                                       and text-audio binding. In addition, we provide
+Table 5: Music quality scores for the three models.                    a collection of open-source libraries to facilitate
+                                                                       future work in the field. The work helps pave the
+5.6 Long-Term Structure of the Music                                   way towards higher-quality, longer-context text-to-
+                                                                       music generation for future applications.
+                        Average Amplitude of various segments  1 of 4
+                                                                       Limitations and Future Work
+Average Amplitude  0.3                                         2 of 4
+                                                               3 of 4  Data Scale Enhancing the scale of both data and
+                                                               4 of 4  the model holds promising potential for yielding
+                   0.2                                                 significant improvements in quality. Following
+                                                                       (Dhariwal et al., 2020; Borsos et al., 2022), we
+                   0.1                                                 suggest training with 50K-100K hours instead of
+                                                                       2.5K. Computer Vision studies like Saharia et al.
+                   0.0                                                 (2022) show that utilizing larger pretrained lan-
+                            2 4 6 8 10 12 14 16                        guage models for text embeddings plays an im-
+                                           Subsegment                  portant role in achieving better quality outcomes.
+                                                                       Drawing upon this, we hypothesize that the ap-
+Figure 6: The average amplitude and variation of 1K                    plication of a larger pretrained language model to
+random music samples spanning different segments.                      our second-stage model can similarly contribute to
+                                                                       enhanced quality outcomes.
+In music composition, the arrangement of a piece
+typically follows a gradual introduction, a main                       Models Some promising future modelling ap-
+body with the core content, and a gradual conclu-                      proaches that can be explored in future work in-
+sion, also called the sonata form (Webster, 2001).                     clude: (1) training diffusion models using percep-
+Accordingly, we look into whether our generated                        tual losses on the waveforms instead of L2 -- this
+music also shows such a long-term structure. Us-                       might help decrease the initial size of the U-Net,
+ing the same text prompt, we can generate different                    as we would not have to process non-perceivable
+segments/intervals of it by attaching the expression                   sounds, (2) improving the quality of the diffusion
+"1/2/3/4 out of 4" at the end of the text prompt, such                 autoencoder by using mel-spectrograms instead of
+as "Italian Hip Hop 2022, 3 of 4." We randomly                         magnitude spectrograms as input, (3) other types of
+generate 1,000 music pieces, where the prompts                         conditioning which are not text-based might be use-
+are from a uniform distribution of the four segment                    ful to navigate the audio latent space, which is often
+tags. We visualize the results in Figure 6, where                      hard to describe in words -- DreamBooth-like mod-
+we see the first segment shows a gradual increase                      els (Ruiz et al., 2022), and (4) more sophisticated
+in both the average amplitude and variance, fol-                       diffusion samplers to achieve higher quality for the
+lowed by continuously high average amplitude and                       same number of sampling steps, or similarly more
+variance throughout Segments 2 and 3, and finally                      advanced distillation techniques (Salimans and Ho,
+concluding with a gradual decline in the last seg-                     2022).
+ment.
+
+5.7 Effect of Hyperparameters
+
+We also explore the effect of different hyperparam-
+eters, and find that increasing the number of atten-
+tion blocks (e.g., from a total of 4­8 to a total of
+32+) in the latent diffusion model can improve the
+general structure of the songs, thanks to the long-
+context view. Also, if the model is trained without
+Author Contributions                                   travel support from ELISE (GA no 951847) for the
+                                                       ELLIS program.
+Flavio Schneider came up with the idea, made
+many architecture innovations, trained the model,      Ethical Considerations
+and wrote a significant portion of the paper. This
+model is one of the several models he proposed as      Our work aims to bridge the gap between text and
+part of his Master's thesis at ETH Zürich (Schnei-     music generation, enabling the creation of expres-
+der, 2023).                                            sive and high-quality music from textual descrip-
+                                                       tions. While this research has the potential to ben-
+Ojasv Kamal deployed our models on the clas-           efit various applications, such as music therapy,
+sical music data, set up the baseline models, and      entertainment, and education, we recognize that
+conducted most of the analyses for the automatic       it may also raise concerns in terms of copyright,
+evaluation and human evaluation.                       cultural appropriation, and the potential misuse of
+                                                       generated content.
+Zhijing Jin co-supervised this work and Flavio's
+Master's thesis, conducted weekly meetings,            Copyright and Intellectual Property: Our model
+helped designed the structure of the paper, led a set  may generate music that resembles existing copy-
+of human evaluation of the models, and contributed     righted works, which could lead to potential legal
+significantly to the writing.                          disputes. First of all, for research-only use, it is
+                                                       exempted from copyright infringement, as we men-
+Bernhard Schölkopf supervised the work and pro-        tioned in the data collection section previously. For
+vided precious suggestions during the design pro-      other purposes, we suggest incorporating mecha-
+cess of this work, as well as extensive suggestions    nisms to detect and avoid generating music that
+on the writing.                                        closely resembles copyrighted material.
+
+Acknowledgment                                         Economic Impact on Musicians and Composers:
+                                                       The widespread adoption of text-to-music genera-
+Our project would not have been made possible          tion models may have economic implications for
+without the GPU resources from various parties:        musicians and composers, potentially affecting
+We thank Shehzaad Dhuliawala for helping us set        their livelihoods. We believe that our model should
+up GPU access at ETH Zürich. We thank Vincent          be used as a tool to augment and inspire human
+Berenz and Lidia Pavel for setting up our GPU ac-      creativity, rather than replace it. We encourage col-
+cess at Max Planck Institute. We thank Stability       laboration between AI researchers, musicians, and
+AI for their generous support for the computational    composers to explore new ways of integrating AI-
+resources for our first version of the model. We       generated music into the creative process, ensuring
+appreciate the writing help from Rada Mihalcea to      that the technology benefits all stakeholders.
+polish this paper with the idea that text and music
+are both a form of language. We are also grateful      In conclusion, we are committed to conducting
+for the generous help by our annotators including      our research responsibly and ethically. We encour-
+Yuen Chen, Andrew Lee, Aylin Gunal, Fernando           age the research community to engage in open dis-
+Gonzalez, and Yiwen Ding. We thank Nasim Ra-           cussions about the ethical implications of text-to-
+haman for early-stage discussions to improve the       music generation models and to develop guidelines
+model design and contributions. We thank Fer-          and best practices for their responsible use. By
+nando Gonzalez and Zhiheng Lyu for helping to          addressing these concerns, we hope to contribute
+improve the format of the paper.                       to the development of AI technologies that benefit
+                                                       society and promote creativity, while respecting the
+This material is based in part upon works sup-         rights and values of all stakeholders.
+ported by the German Federal Ministry of Edu-
+cation and Research (BMBF): Tübingen AI Cen-           References
+ter, FKZ: 01IS18039B; and by the Machine Learn-
+ing Cluster of Excellence, EXC number 2064/1           BBC Music Magazine. 2022. Classical music: 50 great-
+­ Project number 390727645. Zhijing Jin is sup-        est composers of all time. BBC Music Magazine.
+ported by PhD fellowships from the Future of Life
+Institute and Open Philanthropy, as well as the        Michele Berlingerio and Francesca Bonin. 2018. To-
+                                                       wards a music-language mapping. In Proceedings of
+the Eleventh International Conference on Language Re-     lis, Minnesota. Association for Computational Linguis-
+sources and Evaluation (LREC 2018), Miyazaki, Japan.      tics.
+European Language Resources Association (ELRA).
+                                                          Prafulla Dhariwal, Heewoo Jun, Christine Payne,
+Jeanette Bicknell. 2002. Can music convey semantic        Jong Wook Kim, Alec Radford, and Ilya Sutskever.
+content? a kantian approach. The Journal of Aesthetics    2020. Jukebox: A generative model for music. CoRR,
+and Art Criticism, 60(3):253­261.                         abs/2005.00341.
+
+Zalán Borsos, Raphaël Marinier, Damien Vincent,           Sander Dieleman, Aäron van den Oord, and Karen Si-
+Eugene Kharitonov, Olivier Pietquin, Matthew Shar-        monyan. 2018. The challenge of realistic music gen-
+ifi, Olivier Teboul, David Grangier, Marco Tagliasac-     eration: Modelling raw audio at scale. In Advances
+chi, and Neil Zeghidour. 2022. AudioLM: A lan-            in Neural Information Processing Systems 31: Annual
+guage modeling approach to audio generation. CoRR,        Conference on Neural Information Processing Systems
+abs/2209.03143.                                           2018, NeurIPS 2018, December 3-8, 2018, Montréal,
+                                                          Canada, pages 8000­8010.
+Nicolas Boulanger-Lewandowski, Yoshua Bengio, and
+Pascal Vincent. 2012. Modeling temporal dependencies      Benjamin Elizalde, Soham Deshmukh, Mahmoud Al
+in high-dimensional sequences: Application to poly-       Ismail, and Huaming Wang. 2022. CLAP: learning au-
+phonic music generation and transcription.                dio concepts from natural language supervision. CoRR,
+                                                          abs/2206.04769.
+Tom Brown, Benjamin Mann, Nick Ryder, Melanie
+Subbiah, Jared D Kaplan, Prafulla Dhariwal, Arvind        Jesse Engel, Cinjon Resnick, Adam Roberts, Sander
+Neelakantan, Pranav Shyam, Girish Sastry, Amanda          Dieleman, Douglas Eck, Karen Simonyan, and Moham-
+Askell, Sandhini Agarwal, Ariel Herbert-Voss, Gretchen    mad Norouzi. 2017. Neural audio synthesis of musical
+Krueger, Tom Henighan, Rewon Child, Aditya Ramesh,        notes with wavenet autoencoders.
+Daniel Ziegler, Jeffrey Wu, Clemens Winter, Chris
+Hesse, Mark Chen, Eric Sigler, Mateusz Litwin, Scott      Jesse H. Engel, Kumar Krishna Agrawal, Shuo Chen,
+Gray, Benjamin Chess, Jack Clark, Christopher Berner,     Ishaan Gulrajani, Chris Donahue, and Adam Roberts.
+Sam McCandlish, Alec Radford, Ilya Sutskever, and         2019. Gansynth: Adversarial neural audio synthesis.
+Dario Amodei. 2020. Language models are few-shot          In 7th International Conference on Learning Represen-
+learners. In Advances in Neural Information Processing    tations, ICLR 2019, New Orleans, LA, USA, May 6-9,
+Systems, volume 33, pages 1877­1901. Curran Asso-         2019. OpenReview.net.
+ciates, Inc.
+                                                          Patrick Esser, Robin Rombach, and Björn Ommer. 2021.
+Antoine Caillon and Philippe Esling. 2021. RAVE: A        Taming transformers for high-resolution image synthe-
+variational autoencoder for fast and high-quality neural  sis. In IEEE Conference on Computer Vision and Pat-
+audio synthesis. CoRR, abs/2111.05011.                    tern Recognition, CVPR 2021, virtual, June 19-25, 2021,
+                                                          pages 12873­12883. Computer Vision Foundation /
+Huiwen Chang, Han Zhang, Jarred Barber, Aaron             IEEE.
+Maschinot, José Lezama, Lu Jiang, Ming-Hsuan Yang,
+Kevin Murphy, William T. Freeman, Michael Rubin-          European Commission. 2016. Proposal for a directive of
+stein, Yuanzhen Li, and Dilip Krishnan. 2023. Muse:       the European parliament and of the council on copyright
+Text-to-image generation via masked generative trans-     in the digital single market.
+formers. CoRR, abs/2301.00704.
+                                                          Seth* Forsgren and Hayk* Martiros. 2022. Riffusion -
+Sheng-Kuan Chung. 2006. Digital storytelling in inte-     Stable diffusion for real-time music generation.
+grated arts education. The International Journal of Arts
+Education, 4(1):33­50.                                    Christophe Geiger, Giancarlo Frosio, and Oleksandr Bu-
+                                                          layenko. 2018. The exception for text and data mining
+Sylvie Delacroix. 2023. Data rivers: Carving out the      (tdm) in the proposed directive on copyright in the digi-
+public domain in the age of Chat-GPT. Available at        tal single market-legal aspects. Centre for International
+SSRN.                                                     Intellectual Property Studies (CEIPI) Research Paper,
+                                                          (2018-02).
+Kangle Deng, Aayush Bansal, and Deva Ramanan. 2021.
+Unsupervised audiovisual synthesis via exemplar au-       Mark Germer. 2011. Notes, 67(4):760­765.
+toencoders. In 9th International Conference on Learn-
+ing Representations, ICLR 2021, Virtual Event, Austria,   Daniel Gillick, Sayali Kulkarni, Larry Lansing, Alessan-
+May 3-7, 2021. OpenReview.net.                            dro Presta, Jason Baldridge, Eugene Ie, and Diego
+                                                          Garcia-Olano. 2019. Learning dense representations for
+Jacob Devlin, Ming-Wei Chang, Kenton Lee, and             entity retrieval. In Computational Natural Language
+Kristina Toutanova. 2019. BERT: Pre-training of deep      Learning (CoNLL).
+bidirectional transformers for language understanding.
+In Proceedings of the 2019 Conference of the North        Karan Goel, Albert Gu, Chris Donahue, and Christopher
+American Chapter of the Association for Computational     Ré. 2022. It's raw! audio generation with state-space
+Linguistics: Human Language Technologies, Volume 1        models. In International Conference on Machine Learn-
+(Long and Short Papers), pages 4171­4186, Minneapo-       ing, ICML 2022, 17-23 July 2022, Baltimore, Maryland,
+                                                          USA, volume 162 of Proceedings of Machine Learning
+                                                          Research, pages 7616­7633. PMLR.
+Gal Greshler, Tamar Rott Shaham, and Tomer Michaeli.     model for audio synthesis. In 9th International Confer-
+2021. Catch-a-waveform: Learning to generate audio       ence on Learning Representations, ICLR 2021, Virtual
+from a single short example. In Advances in Neural       Event, Austria, May 3-7, 2021. OpenReview.net.
+Information Processing Systems 34: Annual Confer-
+ence on Neural Information Processing Systems 2021,      Felix Kreuk, Gabriel Synnaeve, Adam Polyak, Uriel
+NeurIPS 2021, December 6-14, 2021, virtual, pages        Singer, Alexandre Défossez, Jade Copet, Devi Parikh,
+20916­20928.                                             Yaniv Taigman, and Yossi Adi. 2022. AudioGen: Tex-
+                                                         tually guided audio generation. CoRR, abs/2209.15352.
+Curtis Hawthorne, Andriy Stasyuk, Adam Roberts, Ian
+Simon, Cheng-Zhi Anna Huang, Sander Dieleman,            Kundan Kumar, Rithesh Kumar, Thibault de Boissiere,
+Erich Elsen, Jesse Engel, and Douglas Eck. 2019a. En-    Lucas Gestin, Wei Zhen Teoh, Jose Sotelo, Alexandre
+abling factorized piano music modeling and generation    de Brébisson, Yoshua Bengio, and Aaron C. Courville.
+with the MAESTRO dataset. In International Confer-       2019. Melgan: Generative adversarial networks for con-
+ence on Learning Representations.                        ditional waveform synthesis. In Advances in Neural
+                                                         Information Processing Systems 32: Annual Confer-
+Curtis Hawthorne, Andriy Stasyuk, Adam Roberts, Ian      ence on Neural Information Processing Systems 2019,
+Simon, Cheng-Zhi Anna Huang, Sander Dieleman,            NeurIPS 2019, December 8-14, 2019, Vancouver, BC,
+Erich Elsen, Jesse H. Engel, and Douglas Eck. 2019b.     Canada, pages 14881­14892.
+Enabling factorized piano music modeling and gen-
+eration with the MAESTRO dataset. In 7th Interna-        Max W. Y. Lam, Jun Wang, Dan Su, and Dong Yu.
+tional Conference on Learning Representations, ICLR      2022. BDDM: bilateral denoising diffusion models for
+2019, New Orleans, LA, USA, May 6-9, 2019. OpenRe-       fast and high-quality speech synthesis. In The Tenth
+view.net.                                                International Conference on Learning Representations,
+                                                         ICLR 2022, Virtual Event, April 25-29, 2022. OpenRe-
+Geoffrey E Hinton and Ruslan R Salakhutdinov. 2006.      view.net.
+Reducing the dimensionality of data with neural net-
+works. science, 313(5786):504­507.                       Doyup Lee, Chiheon Kim, Saehoon Kim, Minsu Cho,
+                                                         and Wook-Shin Han. 2022. Autoregressive image gen-
+Jonathan Ho, William Chan, Chitwan Saharia, Jay          eration using residual quantization. In IEEE/CVF Con-
+Whang, Ruiqi Gao, Alexey A. Gritsenko, Diederik P.       ference on Computer Vision and Pattern Recognition,
+Kingma, Ben Poole, Mohammad Norouzi, David J.            CVPR 2022, New Orleans, LA, USA, June 18-24, 2022,
+Fleet, and Tim Salimans. 2022. Imagen video: High def-   pages 11513­11522. IEEE.
+inition video generation with diffusion models. CoRR,
+abs/2210.02303.                                          Yichong Leng, Zehua Chen, Junliang Guo, Haohe Liu,
+                                                         Jiawei Chen, Xu Tan, Danilo P. Mandic, Lei He, Xiang-
+Jonathan Ho and Tim Salimans. 2022. Classifier-free      Yang Li, Tao Qin, Sheng Zhao, and Tie-Yan Liu. 2022.
+diffusion guidance. CoRR, abs/2207.12598.                Binauralgrad: A two-stage conditional diffusion prob-
+                                                         abilistic model for binaural audio synthesis. CoRR,
+Lee Hyun, Taehyun Kim, Hyolim Kang, Minjoo Ki,           abs/2205.14807.
+Hyeonchan Hwang, Kwanho Park, Sharang Han, and
+Seon Joo Kim. 2022. Commu: Dataset for combinato-        Manling Li, Ruochen Xu, Shuohang Wang, Luowei
+rial music generation. CoRR, abs/2211.09385.             Zhou, Xudong Lin, Chenguang Zhu, Michael Zeng,
+                                                         Heng Ji, and Shih-Fu Chang. 2022. Clip-event: Con-
+Kevin Kilgour, Mauricio Zuluaga, Dominik Roblek,         necting text and images with event structures. In
+and Matthew Sharifi. 2019. Fréchet audio distance: A     IEEE/CVF Conference on Computer Vision and Pat-
+metric for evaluating music enhancement algorithms.      tern Recognition, CVPR 2022, New Orleans, LA, USA,
+                                                         June 18-24, 2022, pages 16399­16408. IEEE.
+Minsu Kim, Joanna Hong, and Yong Man Ro. 2021.
+Lip to speech synthesis with visual context attentional  Ilya Loshchilov and Frank Hutter. 2019. Decoupled
+GAN. In Advances in Neural Information Processing        weight decay regularization. In 7th International Con-
+Systems 34: Annual Conference on Neural Information      ference on Learning Representations, ICLR 2019, New
+Processing Systems 2021, NeurIPS 2021, December          Orleans, LA, USA, May 6-9, 2019. OpenReview.net.
+6-14, 2021, virtual, pages 2758­2770.
+                                                         Soroush Mehri, Kundan Kumar, Ishaan Gulrajani,
+Diederik P. Kingma and Max Welling. 2014. Auto-          Rithesh Kumar, Shubham Jain, Jose Sotelo, Aaron C.
+encoding variational bayes. In 2nd International Con-    Courville, and Yoshua Bengio. 2017. SampleRNN: An
+ference on Learning Representations, ICLR 2014, Banff,   unconditional end-to-end neural audio generation model.
+AB, Canada, April 14-16, 2014, Conference Track Pro-     In 5th International Conference on Learning Represen-
+ceedings.                                                tations, ICLR 2017, Toulon, France, April 24-26, 2017,
+                                                         Conference Track Proceedings. OpenReview.net.
+Qiuqiang Kong, Yin Cao, Turab Iqbal, Yuxuan Wang,
+Wenwu Wang, and Mark D. Plumbley. 2020. Panns:           Rada Mihalcea and Carlo Strapparava. 2012. Lyrics,
+Large-scale pretrained audio neural networks for audio   music, and emotions. In Proceedings of the 2012
+pattern recognition.                                     Joint Conference on Empirical Methods in Natural
+                                                         Language Processing and Computational Natural Lan-
+Zhifeng Kong, Wei Ping, Jiaji Huang, Kexin Zhao, and     guage Learning, pages 590­599, Jeju Island, Korea.
+Bryan Catanzaro. 2021. Diffwave: A versatile diffusion   Association for Computational Linguistics.
+Max Morrison, Rithesh Kumar, Kundan Kumar, Prem             David J. Fleet, and Mohammad Norouzi. 2022. Photo-
+Seetharaman, Aaron C. Courville, and Yoshua Bengio.         realistic text-to-image diffusion models with deep lan-
+2022. Chunked autoregressive GAN for conditional            guage understanding. CoRR, abs/2205.11487.
+waveform synthesis. In The Tenth International Confer-
+ence on Learning Representations, ICLR 2022, Virtual        Tim Salimans and Jonathan Ho. 2022. Progressive dis-
+Event, April 25-29, 2022. OpenReview.net.                   tillation for fast sampling of diffusion models. In The
+                                                            Tenth International Conference on Learning Represen-
+Isabel Papadimitriou and Dan Jurafsky. 2020. Learning       tations, ICLR 2022, Virtual Event, April 25-29, 2022.
+Music Helps You Read: Using transfer to study linguis-      OpenReview.net.
+tic structure in language models. In Proceedings of the
+2020 Conference on Empirical Methods in Natural Lan-        Flavio Schneider. 2023. ArchiSound: Audio generation
+guage Processing (EMNLP), pages 6829­6839, Online.          with diffusion.
+Association for Computational Linguistics.
+                                                            Jay A Seitz. 2005. Dalcroze, the body, movement and
+Marco Pasini and Jan Schlüter. 2022. Musika!                musicality. Psychology of music, 33(4):419­435.
+fast infinite waveform music generation. CoRR,
+abs/2208.08706.                                             Jiaming Song, Chenlin Meng, and Stefano Ermon. 2021.
+                                                            Denoising diffusion implicit models. In 9th Interna-
+Konpat Preechakul, Nattanat Chatthee, Suttisak Wizad-       tional Conference on Learning Representations, ICLR
+wongsa, and Supasorn Suwajanakorn. 2022. Diffusion          2021, Virtual Event, Austria, May 3-7, 2021. OpenRe-
+autoencoders: Toward a meaningful and decodable rep-        view.net.
+resentation. In IEEE/CVF Conference on Computer
+Vision and Pattern Recognition, CVPR 2022, New Or-          Joseph P Swain. 1995. The concept of musical syntax.
+leans, LA, USA, June 18-24, 2022, pages 10609­10619.        The Musical Quarterly, 79(2):281­308.
+IEEE.
+                                                            Alan M. Turing. 1950. I.--COMPUTING MACHIN-
+Alec Radford, Karthik Narasimhan, Tim Salimans, and         ERY AND INTELLIGENCE. Mind, LIX(236):433­
+Ilya Sutskever. 2018. Improving language understand-        460.
+ing by generative pre-training. Technical report, Ope-
+nAI.                                                        Aäron van den Oord, Sander Dieleman, Heiga
+                                                            Zen, Karen Simonyan, Oriol Vinyals, Alex Graves,
+Colin Raffel, Noam Shazeer, Adam Roberts, Katherine         Nal Kalchbrenner, Andrew W. Senior, and Koray
+Lee, Sharan Narang, Michael Matena, Yanqi Zhou, Wei         Kavukcuoglu. 2016. Wavenet: A generative model for
+Li, and Peter J. Liu. 2020. Exploring the limits of         raw audio. In The 9th ISCA Speech Synthesis Workshop,
+transfer learning with a unified text-to-text transformer.  Sunnyvale, CA, USA, 13-15 September 2016, page 125.
+J. Mach. Learn. Res., 21:140:1­140:67.                      ISCA.
+
+Aditya Ramesh, Prafulla Dhariwal, Alex Nichol, Casey        Aäron van den Oord, Oriol Vinyals, and Koray
+Chu, and Mark Chen. 2022. Hierarchical text-                Kavukcuoglu. 2017. Neural discrete representation
+conditional image generation with CLIP latents. CoRR,       learning. In Advances in Neural Information Processing
+abs/2204.06125.                                             Systems 30: Annual Conference on Neural Information
+                                                            Processing Systems 2017, December 4-9, 2017, Long
+Robin Rombach, Andreas Blattmann, Dominik Lorenz,           Beach, CA, USA, pages 6306­6315.
+Patrick Esser, and Björn Ommer. 2022. High-resolution
+image synthesis with latent diffusion models. In            Ruben Villegas, Mohammad Babaeizadeh, Pieter-Jan
+IEEE/CVF Conference on Computer Vision and Pat-             Kindermans, Hernan Moraldo, Han Zhang, Moham-
+tern Recognition, CVPR 2022, New Orleans, LA, USA,          mad Taghi Saffar, Santiago Castro, Julius Kunze, and
+June 18-24, 2022, pages 10674­10685. IEEE.                  Dumitru Erhan. 2022. Phenaki: Variable length
+                                                            video generation from open domain textual description.
+Olaf Ronneberger, Philipp Fischer, and Thomas Brox.         CoRR, abs/2210.02399.
+2015. U-net: Convolutional networks for biomedical
+image segmentation. In Medical Image Computing and          James Webster. 2001. Sonata form. The new Grove
+Computer-Assisted Intervention - MICCAI 2015 - 18th         dictionary of music and musicians, 23:687­698.
+International Conference Munich, Germany, October 5
+- 9, 2015, Proceedings, Part III, volume 9351 of Lecture    Yusong Wu, Ke Chen, Tianyu Zhang, Yuchen Hui, Tay-
+Notes in Computer Science, pages 234­241. Springer.         lor Berg-Kirkpatrick, and Shlomo Dubnov. 2023. Large-
+                                                            scale contrastive language-audio pretraining with fea-
+Nataniel Ruiz, Yuanzhen Li, Varun Jampani, Yael Pritch,     ture fusion and keyword-to-caption augmentation.
+Michael Rubinstein, and Kfir Aberman. 2022. Dream-
+booth: Fine tuning text-to-image diffusion models for       Dongchao Yang, Jianwei Yu, Helin Wang, Wen Wang,
+subject-driven generation. ArXiv, abs/2208.12242.           Chao Weng, Yuexian Zou, and Dong Yu. 2022. Diff-
+                                                            sound: Discrete diffusion model for text-to-sound gen-
+Chitwan Saharia, William Chan, Saurabh Saxena, Lala         eration. CoRR, abs/2207.09983.
+Li, Jay Whang, Emily Denton, Seyed Kamyar Seyed
+Ghasemipour, Burcu Karagol Ayan, S. Sara Mahdavi,           Botao Yu, Peiling Lu, Rui Wang, Wei Hu, Xu Tan, Wei
+Rapha Gontijo Lopes, Tim Salimans, Jonathan Ho,             Ye, Shikun Zhang, Tao Qin, and Tie-Yan Liu. 2022a.
+                                                            Museformer: Transformer with fine- and coarse-grained
+                                                            attention for music generation. CoRR, abs/2210.10349.
+Jiahui Yu, Yuanzhong Xu, Jing Yu Koh, Thang Luong,
+Gunjan Baid, Zirui Wang, Vijay Vasudevan, Alexander
+Ku, Yinfei Yang, Burcu Karagol Ayan, Ben Hutchinson,
+Wei Han, Zarana Parekh, Xin Li, Han Zhang, Jason
+Baldridge, and Yonghui Wu. 2022b. Scaling autoregres-
+sive models for content-rich text-to-image generation.
+CoRR, abs/2206.10789.
+A More Data Details                                           a reduced representation. We discuss more about
+                                                              this tradeoff in Appendix D.5. The diffusion au-
+A.1 Data Collection Rationale                                 toencoder only uses ResNet and modulation items
+                                                              with the repetitions [1, 2, 2, 2, 2, 2, 2]. We do not
+We have several desiderata when collecting the                use attention, to allow decoding of variable and
+dataset. The data must (1) have text data paired              possibly very long latent representations. Channel
+with the music piece, and (2) consistitute a large            injection only happens at depth 4, which matches
+size, which means that our data crawling procedure            the output of the magnitude encoder latent, after
+needs to be scalable, without tedious manual efforts          applying the tanh function.
+to curate. Note that it is crucial to get a large-sized
+dataset in order to unleash the performance of audio          Our text-conditional generator has 857M parame-
+generation diffusion models.                                  ters (including the parameters of the frozen T5-base
+                                                              model) with 6 nested U-Net blocks of increasing
+A.2 Training Setup for the Text-Music Pairs                   channel counts ([128, 256, 512, 512, 1024, 1024]),
+                                                              and again downsampling each time by 2, except for
+For the textual description, we use metadata such             the first block ([1, 2, 2, 2, 2, 2]). We use attention
+as the title, author, album, genre, and year of re-           blocks at the depths [0, 0, 1, 1, 1, 1], skipping the
+lease. Given that a song could span longer than               first two blocks to allow for further downsampling
+44s, we append a string indicating which chunk is             before sharing information over the entire latent,
+currently being trained on, together with the total           instead use cross-attention blocks at all resolutions
+chunks the song is made of (e.g., 1 of 4). This               ([1, 1, 1, 1, 1, 1]). For both attention and cross-
+allows to select the region of interest during infer-         attention, we use 64 head features and 12 heads per
+ence. Hence, an example prompt is like "Egyptian              layer. We repeat items with an increasing count
+Darbuka, Drums, Rythm, (Deluxe Edition), 2 of 4."             towards the inner U-Net low-resolution and large-
+To make the conditioning more robust, we shuffle              context blocks ([2, 2, 2, 4, 8, 8]), this allows good
+the list of metadata and drop each element with a             structural learning over minutes of audio.
+probability of 0.1. Furthermore, for 50% of the
+times we concatenate the list with spaces and the             B More Experimental Details
+other 50% of the times we use commas to make
+the interface more robust during inference. Some              B.1 Hardware Requirements
+example prompts in our dataset can be seen in Ta-
+ble 6.                                                        We use limited computational resources as avail-
+                                                              able in a university lab. Efficiency is a highlight
+  Example Text Prompts in Our Dataset                         of our model, where we only need an inference
+  Nr. 415 (Premium Edition), german hip hop, 2 of 7, 2012,    time equivalent to the audio length on a consumer
+  XATAR, Konnekt                                              GPU, which is several minutes, while many other
+  30 Años de Exitos, Mundanzas, 2 of 6, latin pop, Lupita     text-to-audio models take many GPU hours (Dhari-
+  D'Alessio, 2011                                             wal et al., 2020; Kreuk et al., 2022). Our model
+  emo rap 2018 Runaway Lil Peep 4 of 5                        is very friendly for research at university labs, as
+  Alone, Pt. II (Remixes) 2020 electro house Alone, Pt. II -  each of our models can be trained on a single A100
+  Da Tweekaz Remix Alan Walker                                GPU in 1 week of training using a batch size of
+                                                              32; this is equivalent to around 1M steps for both
+     Table 6: Example text prompts in our dataset.            the diffusion autoencoder and latent generator. For
+                                                              inference, as an example, a novel audio source of
+A.3 Model Architecture and Parameters                         43s can be synthesized in less than 50s using a
+                                                              consumer GPU with a DDIM sampler and a high
+Our diffusion autoencoder has 185M parameters,                step count (100 generation steps and 100 decoding
+with 7 nested U-Net blocks of increasing channel              steps).
+count ([256, 512, 512, 512, 1024, 1024, 1024]), for
+which we downsample each time by 2, except for
+the first block ([1, 2, 2, 2, 2, 2, 2]). This makes the
+compression factor for our autoencoder to be 64x.
+Depending on the desired speed/quality tradeoff,
+more or less compression can be applied in this
+first stage. Following our single GPU constraint,
+we find that 64x compression factor is a good bal-
+ance to make sure the second stage can work on
+C More Evaluation Details                              the model when it comes to correctly performing
+                                                       text-conditional music generation.
+C.1 Annotation Details for the Genre
+       Identification Test                             C.2 Annotation Details for Turing Test
+
+Prompts We design a listener test to illustrate the    We conduct an evaluation employing an experiment
+diversity and text relevance of Moûsai. Specifi-       with a similar spirit to the Turing test (Turing, 1950)
+cally, we compose a list of 40 text prompts span-      for natural language, but commonly called as the
+ning across the four most common music genres          fidelity test in audio evaluation (Hyun et al., 2022)
+in our dataset: electronic, hip hop, metal, and pop.   or speaker test (Greshler et al., 2021; Hawthorne
+The four genres are the most prevalent ones in our     et al., 2019b) in audio evaluation.
+TEXT2MUSIC dataset, which is collected from var-
+ious top playlists on Spotify. Among the 50K music     We let the annotators listen to a pair of music sam-
+samples, we identify the genre of them and report      ples at a time, and judge which one is real and
+the distribution of genre in Table 1. The four genres  which is generated. To provide a more fine-grained
+that we select for the evaluation are top in the data  score, we also ask them how much the generated
+distribution of different genres.                      music they identified sounds like real music, on a
+                                                       scale of 1 (almost not similar at all) to 5 (highly
+When composing the test samples, we also make          similar). We keep their annotation score if they
+efforts to ensure comprehensive coverage. We first     identify the generated music correctly, and other-
+read through the text samples in the dataset and       wise we rate the music as 5, which means that the
+then compose samples that are reasonable music         music perfectly passes the Turing test.
+descriptions but do not exist in the data. The text
+prompts comprehensively cover all genres that we       As for the details, we create 90 music samples, in-
+evaluate and incorporate essential metadata such       cluding 15 generated samples paired with 15 real
+as song title, album, artist, and year. Combining      music samples for each of the three models (Rif-
+these elements allows us to generate diverse and       fusion, Musika, and Moûsai). We recruit two un-
+comprehensive test prompts. We list all the text       dergraduate annotators who have pursued playing
+prompts composed for the four common music             music as a hobby for the past 10 years. The an-
+genres in Table 7.                                     notators were compensated with 500 rupees (6.5
+                                                       dollars) for this 3 hour task (which is well above
+Using these prompts, we generate music with both       daily minimum wage in India).
+Moûsai and the Riffusion model (Forsgren and Mar-
+tiros, 2022), with a total of 80 pieces of music, two  We presented a group of expert annotators with a to-
+for each prompt.                                       tal of 60 distinct folders, 15 corresponding to each
+                                                       of Mousai, Mousai (classical-only), Riffusion, and
+Annotation To validate this quantitatively, we con-    Musika models. Each folder contains two music
+ducted a listener test with three perceivers (annota-  files, one being the original and the other generated
+tors) with diverse demographic backgrounds (both       using a given model prompted with its correspond-
+female and male, all with at least a Bachelor's de-    ing metadata.
+gree of education). Each annotator listens to all
+80 music samples we provide, and is instructed to      Following are the exact instructions provided to the
+categorize each sample into exactly one of the four    annotators:
+provided genres.
+                                                         1. You will be presented with batches of two au-
+We record how many times the perceiver correctly             dio samples in subfolders of this folder named
+identifies the genre which the respective model was          from 1 to 60. Each subfolder contains two
+generating from. A large number (or score) means             audios named a.wav and b.wav.
+that the model often generated music that, accord-
+ing to the human perceiver, plausibly belonged to        2. Listen to each sample carefully.
+the correct category (when compared to the other         3. It's best to use headphones in a quiet environ-
+three categories). To achieve a good score, the
+model needs to generate diverse and genre-specific           ment if you can.
+music. We take the score as a quality score of           4. Some files may be loud, so it's recommended
+
+                                                             to keep the volume moderate.
+                                                         5. One of the audio samples in each pair is a
+
+                                                             real recording, while the other is a generated
+   (synthetic) audio.
+6. Listen to each pair of audio samples carefully.
+7. Pay attention to the quality, characteristics,
+
+   and nuances of each audio sample.
+8. This folder contains a spreadsheet file called
+
+   `Response_Task_2.xlsx'. Compare the sam-
+   ples to each other and provide a relative rating
+   to the fake audio only out of 5, where 1 being
+   the most fake and 5 being most real.
+
+C.3 Annotation Details for Musicality                  Figure 7: Mel spectrogram comparison between the true
+                                                       samples (top) and the auto-encoded samples (bottom);
+In order to ascertain the quality and artistic merit   cf. text.
+of the generated musical output, we conduct a hu-
+man evaluation. First, we prepare a total of 50              effect of the melody. Higher scores should be
+folders, each containing three distinct audio files,         given for good harmony and lower for poor
+and present them to the human evaluators. We de-             harmony.
+sign the prompts in Table 8 , and run our model          8. It is recommended view youtube videos: this
+and all the baseline models on them. We recruit              or this short video explaining melody and har-
+two undergraduate annotators in India, who have              mony
+pursued playing music as a hobby for the past 10         9. This folder also contains a spreadsheet by the
+years. The annotators were compensated with 500              name "Response_Task_1.xlsx". Remember
+rupees (6.5 dollars) for this 3 hour task (which is          to provide ratings (out of 5) for each aspect
+well above daily minimum wage in India).                     of your evaluation in the file against appropri-
+                                                             ate folder number. Feel free to listen to each
+Following are the exact instructions provided to the         sample as many times before rating them.
+annotators:
+                                                       D Exploring Variations of the Model
+  1. Listen to the music and rate it based on three         Architecture and Training Setup
+      aspects: Quality, Melody, and Harmony.
+                                                       D.1 High-Frequency Sounds
+  2. It's best to use headphones in a quiet environ-
+      ment if you can.                                 We observe that our model is good at handling
+                                                       low-frequency sounds. From the mel spectrograms
+  3. Some files may be loud, so it's recommended       Figure 7, and also the music samples we provide,
+      to keep the volume moderate.                     we notice that our model performs well with drum-
+                                                       like sounds as frequently found in electronic, house,
+  4. This folder contains folders subfolders           dubstep, techno, EDM, and metal music. This is
+      through 1-50. Each subfolders contains three     likely a consequence of the lower amount of infor-
+      audio files named A.wav, B.wav, and C.wav.       mation required to represent low-frequency sounds.
+     You need to listen to each of them and rate
+      them (relative to each other) based on quality,  D.2 Improving the Structure
+      melody, and harmony.
+                                                       We find that increasing the number of attention
+  5. For Quality, consider how clear the audio         blocks (e.g., from a total of 4 ­ 8 to a total of
+      sounds. Does it resemble a walkie-talkie (bad    32+) in the latent diffusion model can improve
+      quality) or a high-quality studio sound system   the general structure of the songs, thanks to the
+      (good quality)?                                  long-context view. If the model is trained without
+                                                       attention blocks, the context provided by the U-
+  6. Melodiousness refers to the main pitch or note    Net is not large enough to learn any meaningful
+      in the music. Pay attention to the rhythm and    long-term structure.
+      repetitiveness of the melody. A more rhyth-
+      mic and repetitive melody is considered better,
+      while the opposite is true for a less rhythmic
+      melody.
+
+  7. Harmoniousness involves multiple notes
+      played together to support the melody. Evalu-
+      ate if these notes are in sync and enhance the
+D.3 Text-Audio Binding                                 music collected from albums of top classical com-
+                                                       posers (BBC Music Magazine, 2022) and other
+We find that the text-audio binding works well with    popular Spotify playlists. We notice a drop of 9.5%
+CFG higher than 3.0. Since the model is trained        in the fidelity score of the generated music samples
+with metadata such as title, album, artist, genre,     compared to those produced by our original model.
+year, and chunk, the best keywords to control the      Further, qualitative analysis reveals that melodic
+generation appear to be frequent descriptive names,    elements of these samples demonstrated commend-
+such as the genre of the music, or descriptions com-   able accuracy, the harmony notes appeared to be
+monly found in titles, such as "remix", "(Deluxe       convoluted and disorganized. This finding high-
+Edition)", and possibly many more. A similar be-       lights the significance of harmonization challenges
+havior has been observed and exploited in text-to-     when generating high-frequency audio and under-
+image models to generate better looking results.       scores the need for developing improved models in
+                                                       future research.
+D.4 Trade-Off between Speed and Quality
+
+We find that 10 sampling steps in both stages can
+be enough to generate reasonable audio. We can
+achieve improved quality and reduced noise for
+high-frequency sounds by trading off the speed,
+i.e., increasing the number of sampling steps in
+the diffusion decoder, e.g., 50 ­ 100 steps) will
+similarly improve the quality, likely due to the more
+detailed generated latents, and at the same time
+result in an overall better structured music. To
+make sure the results are comparable when varying
+the number of sampling steps, we use the same
+starting noise in both stages. In both cases, this
+suggests that using more advanced samplers could
+be helpful to improve on the speed-quality trade-
+off.
+
+D.5 Trade-Off between Compression Ratio
+       and Quality
+
+We find that decreasing the compression ratio of
+the first stage (e.g., to 32x) can improve the qual-
+ity of low-frequency sounds, but in turn will slow
+down the model, as the second stage has to work
+on higher dimensional data. As proposed later in
+Section 6, we hypothesize that using perceptually
+weighted loss functions instead of L2 loss during
+diffusion could help this trade-off, giving a more
+balanced importance to high frequency sounds even
+at high compression ratios.
+
+D.6 High-Frequency Audio Generation
+
+We have encountered challenges in achieving satis-
+factory results when dealing with high-frequency
+audio signals, as detailed in Appendix D.1. To
+gain deeper insights into the underlying issues, we
+conducted an ablation experiment by exclusively
+training our model on classical music, a genre
+known for its prominent high-frequency charac-
+teristics. We train this model using 500 hours of
+  Genre = Electronic                                           Prompt
+  ­ Drops, Kanine Remix, Darkzy, Drops Remixes, bass
+  house, (Deluxe) (Remix) 3 of 4                               ­ Aerials, System Of A Down, Toxicity, 2001, 2 of 4
+  ­ Electronic, Dance, EDM (Deluxe) (Remix) 3 of 4             ­ Aloo Gobi, Weezer, OK Human, 2021, 1 of 4
+  ­ Electro House (Remix), 2023, 3 of 4                        ­ Bananas and Blow, Ween, White Pepper, 3 of 4
+  ­ Electro Swing Remix 2030 (Deluxe Edition) 3 of 4           ­ Blue Light, Bloc Party, Silent Alarm, 2005, 1 of 4
+  ­ Future Bass, EDM (Remix) 3 of 4, Remix                     ­ Break-Thru, Dirty Projectors, Lamp Lit Prose, 2018, 3 of
+  ­ EDM (Deluxe) (Remix) 3 of 4                                4
+  ­ EDM, Vocal, Relax, Remix, 2023, 8D Audio                   ­ B:/ Start Up, Blank Banshee, Blank Banshee 0, Future
+  ­ Hardstyle, Drop, 8D, Remix, High Quality, 2 of 4           Funk, 4 of 4
+  ­ Dubstep Insane Drop Remix (Deluxe Edition), 2 of 4         ­ Carrion Crawler, Thee Oh Sees, Carrion Crawler / The
+  ­ Drop, French 79, BPM Artist, Vol. 4, Electronica, 2016     Dream, 2011, 4 of 4
+                                                               ­ Change, Tears For Fears, The Hurting, 1983, 3 of 4
+  Genre = Hip Hop                                              ­ Comic, Bo Burnham, INSIDE (DELUXE), 4 of 4
+  ­ Real Hip Hop, 2012, Lil B, Gods Father, escape room, 3     ­ Eaten by Worms, Nothing, 2016, 2 of 4
+  of 4                                                         ­ Effect and Cause, The White Stripes, Icky Thump, 2007, 4
+  ­ C'est toujours pour ceux qui savent, French Hip Hop,       of 4
+  2018 (Deluxe), 3 of 4                                        ­ Feeling Good, Muse, 2001, 4 of 4
+  ­ Dejando Claro, Latin Hip Hop 2022 (Deluxe Edition) 3       ­ Hip Hop, Tyler, The Creator, IGOR, 2019, 3 of 4
+  of 4                                                         ­ Ice, The Microphones, It Was Hot, We Stayed in the Water,
+  ­ Latin Hip Hop 2022 (Deluxe Edition) 3 of 4                 2000, 2 of 4
+  ­ Alternative Hip Hop Oh-My, 2016, (Deluxe), 3 of 4          ­ In My Pocket, Temples, 2 of 4
+  ­ Es Geht Mir Gut, German Hip Hop, 2016, (Deluxe), 3 of      ­ Liquid State, Muse, 2012, 4 of 4
+  4                                                            ­ Moonlight, Death From Above 1979, Outrage! Is Now,
+  ­ Italian Hip Hop 2022 (Deluxe Edition) 3 of 4               2017, 2 of 4
+  ­ RUN, Alternative Hip Hop, 2016, (Deluxe), 3 of 4           ­ Mutilated Lips, Ween, The Mollusk, 1997, 2 of 4
+  ­ Hip Hop, Rap Battle, 2018 (High Quality) (Deluxe Edi-      ­ My Kind of Woman, Mac DeMarco, 2, 2012, 2 of 4
+  tion) 3 of 4                                                 ­ Night Shop, Optiganally Yours, O.Y. in Hi-Fi, 2018, 3 of 4
+  ­ Hip Hop Tech, Bandlez, Hot Pursuit, brostep, 3 of 4        ­ Red Eye Flashes Twice, Jeffery Dallas, 2010, 3 of 4
+                                                               ­ Reflektor, Arcade Fire, Reflektor, 2013, 2 of 4
+  Genre = Metal                                                ­ Some Thing's Coming, I Monster, Neveroddoreven, 2005,
+  ­ Death Metal, 2012, 3 of 4                                  3 of 4
+  ­ Heavy Death Metal (Deluxe Edition), 3 of 4                 ­ Spaceship, Kanye West/GLC/Consequence, The College
+  ­ Black Alternative Metal, The Pick of Death (Deluxe),       Dropout, 1 of 4
+  2006, 3 of 4                                                 ­ Superfast Jellyfish (feat. Gruff Rhys and De La Soul),
+  ­ Kill For Metal, Iron Fire, To The Grave, melodic metal, 3  Gorillaz/Gruff Rhys/De La Soul, Plastic Beach, 2010, 2 of 4
+  of 4                                                         ­ The Well and the Lighthouse, Arcade Fire, Neon Bible,
+  ­ Melodic Metal, Iron Dust (Deluxe), 2006, 3 of 4            2007, 4 of 4
+  ­ Possessed Death Metal Stones (Deluxe), 2006, 3 of 4        ­ Well, You Can Do It Without Me, Fear Fun, 4 of 4
+  ­ Black Metal Venom, 2006, 3 of 4                            ­ Upgrade (A Baymar College College), Deltron 3030/Del
+  ­ The Heavy Death Metal War (Deluxe), 2006, 3 of 4           The Funky Homosapien/Dan The Automator/Kid Koala, Del-
+  ­ Heavy metal (Deluxe Edition), 3 of 4                       tron 3030, 2000, 4 of 4
+  ­ Viking Heavy Death Metal (Deluxe), 2006, 3 of 4            ­ Way We Won't, Grandaddy, Last Place, 2017, 3 of 4
+                                                               ­ Safe From Heartbreak (if you never fall in love), Wolf
+  Genre = Pop                                                  Alice, 2 of 4
+  ­ (Everything I Do), I Do It For You, Bryan Adams, The       ­ Black Alternative Metal, The Pick of Death (Deluxe), 2006,
+  Best Of Me, canadian pop, 3 of 4                             3 of 4
+  ­ Payphone, Maroon 5, Overexposed, Pop, 2021, 3 of 4         ­ Death Metal, 2012, 3 of 4
+  ­ 24K Magic, Bruno Mars, 24K Magic, dance pop, 3 of 4        ­ Drops, Kanine Remix, Darkzy, Drops Remixes, bass house,
+  ­ Who Is It, Michael Jackson, Dangerous, Pop (Deluxe), 3     (Deluxe) (Remix), 3 of 4
+  of 4                                                         ­ EDM (Deluxe) (Remix), 3 of 4
+  ­ Forget Me, Lewis Capaldi, Forget Me, Pop Pop, 2022, 3      ­ Electro House (Remix), 2023, 3 of 4
+  of 4                                                         ­ Electro Swing Remix 2030 (Deluxe Edition), 3 of 4
+  ­ Pop, Speak Now, Taylor Swift, 2014, (Deluxe), 3 of 4       ­ Future Bass, EDM (Remix), Remix, 3 of 4
+  ­ Pop Pop, Maroon 5, Overexposed, 2016, 3 of 4               ­ Hip Hop Tech, Bandlez, Hot Pursuit, brostep, 3 of 4
+  ­ Pointless, Lewis Capaldi, Pointless, Pop, 2022, 3 of 4     ­ Italian Hip Hop 2022 (Deluxe Edition), 3 of 4
+  ­ Saved, Khalid, American Teen, Pop, 2022, 3 of 4            ­ Heavy metal (Deluxe Edition), 3 of 4
+  ­ Deja vu, Fearless, Pop, 2020, (Deluxe), 3 of 4             ­ The Heavy Death Metal War (Deluxe), 2006, 3 of 4
+                                                               ­ Pop, Taylor Swift, Speak Now, 2014, (Deluxe), 3 of 4
+Table 7: Text prompts composed for the four common             ­ Melodic Metal, Iron Dust (Deluxe), 2006, 3 of 4
+                                                               ­ Electronic, Dance, EDM (Deluxe) (Remix), 3 of 4
+music genres: electronic, hip hop, metal, and pop.             ­ Alternative Hip Hop Oh-My, 2016, (Deluxe), 3 of 4
+                                                               ­ Viking Heavy Death Metal (Deluxe), 2006, 3 of 4
+                                                               ­ Possessed Death Metal Stones (Deluxe), 2006, 3 of 4
+                                                               ­ Hardstyle, Drop, 8D, Remix, High Quality, 2 of 4
+                                                               ­ Drop, French 79, BPM Artist, Vol. 4, Electronica, 2016
+                                                               ­ Dubstep Insane Drop Remix (Deluxe Edition), 2 of 4
+
+                                                               Table 8: Text prompts used to generate music for the
+                                                               musicality test.
+

@@ -1,0 +1,968 @@
+                                        MAGIC: Multimodal Alignment & Grounding-aware Instruction Coreset
+                                                                     for Vision-Language Models
+
+                                                                        Shristi Das Biswas and Kaushik Roy
+                                                                                      Purdue University
+
+                                                                                      sdasbisw@purdue.edu, kaushik@purdue.edu
+
+                                        Abstract
+
+arXiv:2605.26004v1 [cs.CV] 25 May 2026  Instruction tuning of large vision-language          Figure 1: MAGIC characterizes each training sample
+                                        models (LVLMs) increasingly depends on mas-          using three complementary signals: Multimodal Gain;
+                                        sive multimodal corpora, yet these datasets con-     Bridging Relevance; and Skill Signature. These sig-
+                                        tain samples with substantial redundancy, low        nals are combined to prioritize samples that are visually
+                                        visual dependency, and highly imbalanced cov-        useful, strongly grounded, and behaviorally diverse for
+                                        erage of multimodal reasoning behaviors. As          visual-language coreset selection.
+                                        a result, uniform subsampling or naive score-
+                                        based selection often yields suboptimal train-       1 Introduction
+                                        ing subsets. We introduce MAGIC, a training-
+                                        free, forward-only coreset selection method de-      Large vision-language models (LVLMs) have re-
+                                        signed to construct compact yet behaviorally         cently achieved strong performance across a wide
+                                        faithful subsets for multimodal instruction tun-     range of multimodal tasks (Dai et al., 2023; Alayrac
+                                        ing. MAGIC is built on three intrinsic sig-          et al., 2022; Yu et al., 2023a; Radford et al., 2021;
+                                        nals extracted from a pretrained VLM: Mul-           Zhu et al., 2023). A standard LVLM pipeline typ-
+                                        timodal Gain, which measures the likelihood          ically consists of large-scale image-text pretrain-
+                                        improvement obtained from visual input; Bridg-       ing followed by visual instruction tuning, where
+                                        ing Relevance, which captures the sharpness          the model is adapted to follow task-oriented in-
+                                        of answer-token grounding over visual tokens;        structions. While this second stage is crucial for
+                                        and Skill-Neuron Signatures, which character-        instruction-following ability, it has become increas-
+                                        ize the functional computation elicited by each      ingly expensive due to the rapid growth of vi-
+                                        sample via top-activated feed-forward neurons.       sual instruction datasets. Moreover, these corpora
+                                        MAGIC combines these signals in a three-stage        are often highly redundant, contain many weakly
+                                        pipeline: filtering low-gain examples, ranking       grounded samples that require limited visual under-
+                                        candidates by a normalized quality objective,        standing, and exhibit severely imbalanced coverage
+                                        and performing bucket-wise budget allocation         of latent multimodal behaviors, making full-data
+                                        over discrete neuron signatures to preserve la-      tuning both costly and inefficient. Consequently,
+                                        tent multimodal skill coverage. This formula-        there is growing interest in multimodal data selec-
+                                        tion avoids backpropagation, auxiliary selector      tion methods that can construct compact training
+                                        training, and expensive clustering in contin-        subsets while preserving downstream performance.
+                                        uous activation spaces, while remaining effi-
+                                        cient and easily deployable in existing VLMs.           Existing multimodal data selection methods
+                                        Across LLaVA-665K and Vision-Flan datasets,          largely inherit ideas from the broader coreset and
+                                        and transfer settings to large target models,        instruction-tuning literature, including scalar score-
+                                        LLaVA-1.5-7B and -13B, MAGIC consistently            based ranking (Paul et al., 2021; Chen et al., 2024;
+                                        improves over strong baselines under matched         Du et al., 2023; Zhou et al., 2023), redundancy
+                                        20% budgets: it achieves 100.3% relative per-
+                                        formance to full finetuning on LLaVA-665K
+                                        and 101.6% relative performance on Vision-
+                                        Flan-186K, while yielding a 73.7% reduction
+                                        in wall-clock run time. Overall, our results es-
+                                        tablish that activation-aware behavioral cover-
+                                        age, when coupled with multimodal utility and
+                                        grounding strength, provides a principled and
+                                        practical foundation for VLM coreset selection.
+
+                                                                                          1
+pruning (Abbas et al., 2023), gradient-based se-          tuning corpora, LLaVA-665K (Liu et al., 2024a)
+lection (Wu et al., 2024; Liu et al., 2025; Tan           and Vision-Flan (Xu et al., 2024), using LLaVA-
+et al., 2023), and clustering-based diversity pro-        1.5-7B as the primary target model and further
+motion (Lee et al., 2024; Yu et al., 2025). However,      assessing transfer to the larger LLaVA-1.5-13B.
+these approaches face two major limitations in the        Under matched 20% selection budgets, MAGIC
+visual instruction setting. First, single-score meth-     achieves 100.3% relative performance with respect
+ods often over-select narrow modes of the dataset,        to full-data finetuning on LLaVA-665K and 101.6%
+since highly ranked samples may repeatedly reflect        on Vision-Flan-186K, while retaining 99.3% rela-
+the same task pattern, concept type, or response          tive performance when transferred to LLaVA-1.5-
+style. Second, stronger selection methods often           13B. Moreover, MAGIC not only reduces end-
+incur substantial overhead by relying on backward         to-end wall-clock runtime by 73.7% relative to
+passes, auxiliary selector training, or expensive         full-data finetuning, yielding a substantially im-
+clustering in continuous activation spaces. Prior         proved compute-performance trade-off, but also
+work has shown that overlooking sample relation-          improves generalization to unseen tasks. These re-
+ships and latent data structure can lead to poor sam-     sults show that activation-aware behavioral cover-
+ple uniqueness or representativeness, ultimately          age, combined with multimodal utility and ground-
+limiting generalization (Yu et al., 2025).                ing strength, provides a principled and efficient
+                                                          foundation for multimodal coreset selection. Over-
+   In this paper, we argue that effective multimodal      all, our contributions are threefold: (i) we pro-
+coreset selection should satisfy three desiderata:        pose MAGIC, a training-free, and scalable coreset
+selected samples should exhibit strong multimodal         selection framework for visual instruction tuning
+utility, be strongly grounded in visual evidence, and     that unifies multimodal utility, visual grounding,
+sufficiently diverse in the latent computations they      and activation-aware behavioral diversity; (ii) we
+induce. Existing methods typically address only           introduce Multimodal Gain, Bridging Relevance,
+part of this problem. Utility-based ranking captures      and Skill-Neuron Signature bucketing as intrinsic
+sample quality but not coverage, while diversity-         sample-level criteria for coreset construction, with-
+oriented methods improve spread but do not ensure         out any backward passes, proxy selector training,
+that selected examples are both informative and           or expensive continuous activation-space cluster-
+visually grounded.                                        ing; and (iii) we demonstrate that MAGIC deliv-
+                                                          ers consistent improvements in data efficiency at
+   To address these limitations, we introduce             just 20% coreset selection and yields end-to-end
+MAGIC, a training-free, forward-only coreset              compute-performance trade-offs across two distinct
+selection method for visual instruction tuning.           VIT datasets, LLaVA-665K and Vision-Flan, and
+MAGIC is built on three intrinsic signals extracted       different VLM target models, while substantially
+from a pretrained VLM, as seen in Fig. 1: Mul-            reducing total wall-clock run time by 74%. We
+timodal Gain, which measures improvement in               further demonstrate improved generalization to un-
+the model's response likelihood when multimodal           seen tasks, despite a 5× reduction in training data.
+inputs are present relative to a unimodal text-only
+forward pass; Bridging Relevance, which mea-              2 Related Works
+sures the concentration of answer-token attention
+over visual tokens; and a Skill-Neuron Signature,         Coreset selection aims to form a smaller training
+a discrete fingerprint formed from top-activated          set whose optimization behavior and downstream
+feed-forward neurons induced by a sample. To-             performance closely match those obtained from the
+gether, these signals characterize not only whether       complete data corpus. Data selection methods can
+a sample is useful for multimodal learning, but also      be categorized based on the types of information
+what latent computation it elicits inside the model.      they utilize for selection (Hammoudeh and Lowd,
+MAGIC combines these signals in a three-stage             2024). Representation-based approaches (Abbas
+pipeline. It first filters weakly multimodal samples,     et al., 2023; Lee et al., 2024; Yu et al., 2025) lever-
+then ranks the remaining candidates with a normal-        age embeddings or latent features to capture sample
+ized quality score combining Multimodal Gain and          structure and similarity. In particular, (Lee et al.,
+Bridging Relevance scores, and finally allocates          2024) clusters data based on representations asso-
+budget across discrete Skill-Signature buckets to         ciated with concept-skill compositions, while (Yu
+preserve behavioral coverage.
+
+   We evaluate MAGIC on two visual instruction
+
+                                                       2
+et al., 2025) proposes a collaborative framework           from the instruction-response sequence (Dai et al.,
+combining spectral analysis and clustering-derived
+sample relationships for multimodal data valuation.        2023; Liu et al., 2023). Here, we focus on the com-
+Loss-trajectory-based methods (Mindermann et al.,
+2022) prioritize data points that contribute most          mon setting where visual information is injected
+significantly to reducing generalization error over
+training. Gradient-based techniques (Xia et al.,           into a transformer-based LLM as input tokens.
+2024; Wu et al., 2024; Paul et al., 2021; Deng et al.,
+2024; Liu et al., 2025) select data based on gradi-        At transformer layer , let
+ent information or estimated downstream influence.
+Recent work has explored various approaches to se-         Xi() = [Xv(,i); Xt(,i)]  R(Nv+Nt)×D                  (1)
+lect optimal visual instruction tuning datasets. On
+the other hand, authors in Chen et al. (2024) score        denote the concatenated hidden states, where D
+VIT data using an external scoring model trained
+with the target model. More recently, works such           is the hidden dimension. The multi-head self-
+as Yan et al. (2025) introduce a lightweight scorer
+that jointly optimizes importance and diversity us-        attention (MSA) block produces
+ing a coupled objective trained on a sampled subset
+of data. In contrast, MAGIC is entirely training-          Zi() = MSA() LN()(Xi()) + Xi(), (2)
+free and forward-only. Instead of depending on
+gradient computation, auxiliary scorer optimiza-           where LN denotes layer normalization, and Zi() =
+tion, or clustering in continuous feature spaces, it       [Zv(,i); Zt(,i)] are the output visual and textual fea-
+selects samples using intrinsic signals that directly      tures, respectively. Let
+capture multimodal utility, grounding strength, and
+activation-aware behavioral coverage.                             Ai()  Rnh×(Nv+Nt)×(Nv+Nt)                     (3)
+
+                                                           denote the corresponding head-wise attention
+                                                           weights induced by MSA(), where nh is the num-
+
+                                                           ber of attention heads. We further denote by
+
+                                                                           Hi()  RNt×Dff                        (4)
+
+                                                           the token-wise textual FFN activations at layer ,
+
+                                                           where Dff is the FFN width.
+                                                              Under this notation, MAGIC derives three intrin-
+
+                                                           sic forward-pass signals from a pretrained LVLM.
+
+3 Methodology                                              3.3 MAGIC Score Extraction
+
+In this section, we formalize the MAGIC frame-             Multimodal Gain. To quantify the extent to
+work. We begin by introducing the VLM setting              which a training sample genuinely benefits from
+and the internal representations accessible from a         multimodal evidence, we compare the model's
+pretrained model under a forward pass. These quan-         answer-token prediction error under full multi-
+tities form the basis for the three intrinsic signals      modal conditioning and under a unimodal text-only
+used by MAGIC, as seen in Fig. 2.                          setting (Ii = ). Let Tia denote the set of answer-
+                                                           token positions for sample i. We define the Multi-
+3.1 Problem Formulation                                    modal Gain score as
+Let D = {(Ii, Ti, Yi)}iN=1 be a visual instruction
+tuning dataset, where Ii is an image, Ti is a tex-                  i(t) = CE(yi,t; yi,<t, , Ti; )
+tual instruction, and Yi is the target response. The                         - CE(yi,t; yi,<t, Ii, Ti; ). (5)
+goal of multimodal coreset selection is to construct
+a subset C  D,, where, |C| = M  N , such                   where       gi  =de|nTo1iate|stTthiaei(pte) r-token     (6)
+that finetuning a VLM on C retains the utility of                 CE(·)                                         cross-
+finetuning on the full dataset D across multiple
+downstream tasks, whilst reducing visual instruc-          entropy, Ii is the image, Ti is the textual context,
+tion tuning costs.
+                                                           and  denotes the absence of visual input. Thus,
+3.2 Preliminaries
+                                                           gi quantifies the average reduction in answer-token
+We consider a pretrained LVLM M composed
+of a visual encoder, a modality projector, and a           prediction error attributable to the presence of the
+transformer-based language model. For a sample
+xi = (Ii, Ti, Yi), the image Ii is encoded into Nv         image. Samples with large gi are those for which vi-
+visual tokens, projected into the language model
+space, and concatenated with Nt textual tokens             sual information materially improves target predic-
+
+                                                           tion, indicating high multimodal utility. In contrast,
+
+                                                           samples with small or near-zero values are largely
+
+                                                           recoverable from textual context alone and thus
+
+                                                           provide limited additional supervision for learning
+
+                                                           image-grounded behavior.
+
+                                                        3
+Figure 2: Overview of MAGIC. The method first extracts three forward-only intrinsic score signals from a pretrained
+VLM. It then filters weakly multimodal samples, builds a quality-based shortlist, partitions shortlisted samples into
+skill-signature buckets, and allocates the budget across buckets to construct the final coreset.
+
+Bridging Relevance. Multimodal gain measures                        function as key-value memories and that individual
+
+whether vision is useful, but not whether the re-                   neurons can encode interpretable concepts or local-
+
+sponse is strongly grounded in visual evidence. To                  ized knowledge (Geva et al., 2021, 2022; Dai et al.,
+                                                                    2022). Let Hi() denote the token-wise textual FFN
+capture this, we use the attention maps from se-                    activations at layer . We aggregate them over the
+
+lected transformer layers L. For each   L, let                      supervised answer-token positions:
+Ai() denote the head-wise attention tensor, and let
+A¯i() be the average over heads. We consider the                              h(i)  =   1           Hi(,t)    RDff .  (9)
+submatrix corresponding to answer-token queries                                        |Tia|
+                                                                                              tTia
+t attending to visual-token keys v. To character-
+                                                                    We then retain the indices of the top-k activated
+ize how this attention mass is distributed within
+                                                                    neurons,
+the visual-token block, we define the normalized                              si() = TopKIdxk hi() ,
+                                                                                                                      (10)
+
+image-token attention as  A¯(i,t)v                                  and form the multi-layer skill signature by layer-
+
+   A~(i,t)v =                            .                (7)       neuron pairs as follows:
+
+                          Nv   A¯(i,t)u                                       i = {(, c) : c  si(),   L}.             (11)
+                          u=1
+
+This induces a distribution over visual tokens condi-               This discrete signature serves as a compact behav-
+                                                                    ioral fingerprint of the sample. The resulting triplet
+tioned on answer-token query t. We then define its                  (gi, bi, i), as seen in Alg. 1, forms the basis of the
+                                                                    subsequent coreset selection procedure.
+entropy as e(i,t) = -  Nv   A~(i,t)v    log  A~(i,t)v  .  Lower
+                       v=1
+
+entropy corresponds to attention concentrating on
+
+more localized visual evidence, while high entropy
+
+indicates diffused attention on the entire image in-                3.4 MAGIC Data Selection
+
+put. Hence, we define Bridging Relevance as                         Given the extracted sample descriptors (gi, bi, i),
+                                                                    MAGIC constructs the coreset through quality scor-
+1  1                      Nv                1 - e(i,t)              ing, shortlist formation, and behavior-aware budget
+bi = |L| L |Tia| tTia                            log Nv             allocation, as shown in Alg. 2.
+                              A¯i(,t)v
+
+                          v=1
+
+                                                          (8)
+Thus, bi is high when answer tokens attend strongly
+
+to the visual input and concentrate this attention on               Quality scoring and Eligibility Filtering. Since
+                                                                    multimodal gain and bridging relevance have dif-
+a small set of evidence-bearing visual tokens.                      ferent scales, we first apply robust normalization:
+
+Skill-Neuron Signature. To characterize the la-                          g^i = Norm(gi), ^bi = Norm(bi). (12)
+tent computation induced by a sample, we extract                    We then define a joint quality score qi = g^i + ^bi,
+FFN activations from selected transformer layers,                   where ,   0 control the relative contribution
+following prior work suggesting that these layers
+
+                                                                 4
+Algorithm 1 MAGIC Score Extraction
+
+Input: dataset D = {(Ii, Ti, Yi)}iN=1, pretrained LVLM M, selected layers L, per-layer signature sizes {k}L
+Output: multimodal gain {gi}iN=1, bridging relevance {bi}Ni=1, skill signatures {i}iN=1
+
+1: for i = 1, . . . , N do
+
+2: Compute answer-token set Tia from Yi
+3: for each t  Tia do
+
+4:       i(t)  CE(yi,t; yi,<t, , Ti; ) - CE(yi,t; yi,<t, Ii, Ti; )                                     per-token multimodal gain
+                                                                                                                  multimodal gain
+5: end for          tTia (it)
+                                                                                                       head-wise attention tensor
+6:   gi       1                                                                                                average over heads
+            |Tia |
+
+7: for each   L do
+         Ai()  Attn()(M(Ii, Ti, Yi))
+8:
+
+9:       A¯i()  MeanHead Ai()
+
+10:      Hi()  FFNAct()(M(Ii, Ti, Yi))                                                                token-wise FFN activations
+                                                                                                   mean answer-token activation
+11:      hi()         1       tTia Hi(,t)
+                    |Tia |                                                                                top-k neurons at layer 
+
+12:      s(i)  TopKIdxk hi()                                                                   normalized image-token attention
+                                                                                                                   attention entropy
+13: end for         A¯i(,t)v
+                                                                                                                 bridging relevance
+14:  A~(i,t)v =     Nv   A¯(i,t)u
+                    u=1
+
+15:  e(i,t) = -     Nv      A~i(,t)v  log  A~i(,t)v
+                    v=1
+
+16:  bi  =   1                 1      tTia           Nv   A¯i(,t)v  1 - e(i,t)
+            |L|     L |Tia|                          v=1                    log Nv
+
+17: i  {(, c) : c  s(i),   L}                                                                          multi-layer skill signature
+
+18: end for
+19: return {gi}iN=1, {bi}Ni=1, {i}Ni=1
+
+of multimodal utility and grounding strength. To                                    pj =              mj       .           (16)
+
+suppress weakly multimodal examples, we first                                                         K    mr
+                                                                                                      r=1
+
+retain only the top N  examples ranked by gi:                                The initial quota for bucket Bj is then
+
+                 E = TopN({gi}iN=1).                                (13)            nj = min(|Bj|, M  , M pj) , (17)
+
+From this eligible set, we form a quality shortlist                          where  caps over-allocation to dominant buck-
+
+           S = Topmin(M,|E|)({qi}iE ), (14)                                  ets. Any remaining budget M -        K    nj  is  re-
+                                                                                                                  j=1
+where   1 is a shortlist expansion factor. This
+stage ensures that the final selection is drawn from                         distributed by descending fractional remainder of
+candidates with both strong multimodal utility and
+high overall quality.                                                        M pj. Finally, we select the top-nj samples in each
+
+                                                                             bucket according to qi:
+
+                                                                                           K
+
+Behavior-Aware Grouping. To preserve latent                                         C = Topnj ({qi}iBj ).                  (18)
+behavioral diversity, we partition the shortlist S
+into discrete buckets according to the skill-neuron                                 j=1
+signatures i. Let
+                                                                             If |C| < M , we backfill from S \ C, and then from
+                    B = {B1, . . . , BK }                           (15)     E \ C, in descending order of qi, until the target bud-
+                                                                             get is reached. Here, A \ B denotes the elements in
+denote the resulting partition, where samples shar-                          A that are not already contained in B. Overall, this
+ing the same multi-layer signature are assigned to                           procedure retains high-quality, strongly grounded,
+the same bucket. Unlike continuous clustering ap-                            and multimodally useful samples while preserving
+proaches (Yu et al., 2025), this discrete grouping                           coverage over distinct latent computation patterns.
+is computationally lightweight and directly cap-
+tures sample-induced behavioral similarity through                           4 Evaluation
+shared skill-neuron activation patterns.
+                                                                             4.1 Experimental Setup
+Final Selection. We allocate the coreset budget
+across buckets using a temperature-scaled qual-                              Datasets. We conduct 20% coreset selection ex-
+ity mass. For each bucket Bj, we define mj =                                 periments on two visual instruction tuning datasets:
+                                                                             LLaVA-665K (Liu et al., 2024a) and Vision-Flan-
+   iBj exp(qi/ ), and normalize across buckets:                              186K (Xu et al., 2024). LLaVA-665K contains ap-
+                                                                             proximately 665K multimodal instruction samples
+
+                                                                          5
+Method        MME     SQA-I  POPE   VQAv2   LLaVA-W Bench  TextVQA  MMBench en  MMBench cn  GQA   VizWiz  MM-Vet  Rel. (%)
+
+Full          1476.9   68.4   86.4    79.1          67.9      58.2        66.1        58.9  63.0    47.8    30.9    100.0
+
+Random        1483.0   68.5   84.7    75.7          65.0      55.3        62.2        54.8  58.9    44.3    29.5    95.8
+CLIP-Score    1331.6   65.0   85.3    73.4          66.2      54.7        55.2        52.0  51.4    43.0      -     91.2
+EL2N          1439.5   65.5   84.3    76.2          64.9      53.0        53.2        47.4  58.7    43.7            89.8
+Perplexity    1341.4   65.1   82.6    75.8          68.3      52.8        52.0        45.8  57.0    47.8    21.1    91.6
+SemDeDup      1376.9   65.8   84.7    74.2          70.0      55.5        52.2        48.5  54.5    46.9      -     92.6
+D2-Pruning    1391.2   69.3   85.7    73.0          63.9      51.8        65.7        57.6  58.4    41.9      -     94.8
+Self-Sep      1335.9   67.8   83.5    74.9          63.3      49.3        61.4        53.8  59.5    46.0      -     93.4
+Self-Filter   1306.2   61.4   83.8    73.7          64.9      52.9        48.8        45.3  58.3    53.2      -     90.5
+COINCIDE      1495.6   69.2   86.1    76.5          67.3      55.6        63.1        54.5  59.8    46.8            97.4
+RDS           1093.8   68.0   86.3    75.1          63.7      54.9        61.2        52.7  57.9    48.6    26.6    93.2
+DataTailor    1476.1          85.3                                                          49.5    31.8      -     85.9
+COIDO         1450.2     -    85.4      -             -         -           -           -   60.4    47.1      -     98.2
+ICONS         1485.7   69.4   87.5    77.2          70.1      55.6        63.8        56.7  60.7    50.1      -     98.4
+MAGIC (ours)  1657.9   70.8   87.1    76.3          66.1      55.6        63.1        55.8  60.4    50.2      -     100.3
+                       72.3           76.8          69.0      56.4        65.1        56.8
+                                                                                                            29.7
+                                                                                                            29.8
+
+Table 1: Performance comparison of different data selection approaches when trained on 20% of the LLaVA-
+665K dataset. The best and second-best results for each benchmark are shown in bold and underlined, respectively.
+Our method MAGIC achieves the highest overall Rel. (100.3%), consistently outperforming existing approaches
+including ICONS (98.4%) and COIDO (98.2%).
+
+Dataset       #Data Method                                                      MMBench MMBench LLaVA-W Bench     Rel. (%)
+                                    VQAv2 GQA SQA-I TextVQA POPE MME            en          cn    Bench
+
+              186k Full-Finetune 68.0 49.2 60.8 50.4 83.4 1263.2 52.6                       45.9          63.3    100.0
+
+Vision-Flan-186K 37k Random         64.1 45.8 58.7 45.3 82.9 1079.8 46.5                    39.6          58.7    91.8
+
+              37k MAGIC (ours) 67.5 50.7 65.6 45.7 84.8 1351.6 52.0                         46.5          63.2    101.6
+
+Table 2: Selection results on Vision-Flan-186K. Performance comparison of different data selection approaches
+when trained on 20% of the Vision-Flan-186K. MAGIC achieves strong performance (101.6%) while using only
+20% of the training data, significantly outperforming random selection and full performance.
+
+collected from diverse vision-language tasks, while           et al., 2017), GQA (Hudson and Manning, 2019),
+Vision-Flan-186K comprises 191 vision-language                VizWiz (Gurari et al., 2018), TextVQA (Singh et al.,
+tasks with roughly 1K expert-annotated instruction            2019), ScienceQA (Saikh et al., 2022), LLaVA-W
+examples per task, totaling 186K samples.                     Bench (Lu et al., 2022), MM-Vet (Yu et al., 2023b),
+                                                              and POPE (Li et al., 2023b).
+   Models for Selection and Target Finetuning.
+Following prior work (Lee et al., 2024), we use                  Baselines. We compare MAGIC against sev-
+TinyLLaVA-2B (Zhou et al., 2024) as our ref-                  eral strong baselines spanning different data selec-
+erence model for efficient data selection, from               tion paradigms. These include random selection,
+which MAGIC extracts its scores. Unless other-                CLIP-Score (Radford et al., 2021) for measuring
+wise specified, our primary target model is LLaVA-            image-text alignment, EL2N (Paul et al., 2021)
+1.5-7B (Liu et al., 2024a). To evaluate transferabil-         based on prediction difficulty, and Perplexity (Mar-
+ity of the selected coreset to larger backbones, we           ion et al., 2023) using language modeling uncer-
+additionally evaluate performance on LLaVA-1.5-               tainty. We also compare against SemDeDup (Ab-
+13B. Following the standard LLaVA-1.5 finetuning              bas et al., 2023) for semantic deduplication, D2-
+recipe, we finetune using LoRA (Hu et al., 2022)              Pruning (Maharana et al., 2023) for distribution-
+for one epoch with the official hyperparameter set-           aware data pruning, Self-Sup (Sorscher et al.,
+tings, using 4 NVIDIA A100 GPUs. The joint                    2022), which leverages self-supervised signals, and
+quality score uses weights (, ) = (0.5, 0.5) for              Self-Filter (Chen et al., 2024), which uses self-
+MG and BR, respectively, and we extracted scores              filtering to remove less informative samples. Addi-
+from 4 uniformly spaced layers from TinyLLaVA-                tional baselines include methods designed specif-
+2B, inspired by prior work (Lee et al., 2024). More           ically for vision-language coresets, such as CO-
+details on experimental settings is in App. Sec. A.3.         INCIDE (Lee et al., 2024), DataTailor (Yu et al.,
+                                                              2025), COIDO (Yan et al., 2025), ICONS (Wu
+   Evaluation Benchmarks. We evaluate on a                    et al., 2024), and representation-based selection
+diverse benchmark suite covering key VLM ca-                  (RDS) (Xia et al., 2024; Ivison et al., 2025).
+pabilities, including multiple-choice understand-
+ing, visual question answering, text understanding            4.2 Results and Discussion
+in images, scientific reasoning, open-ended gen-
+eration, and factual consistency. Concretely, our             Main results on LLaVA-665K. Table 1 sum-
+evaluation suite includes MMBench (Liu et al.,                marizes coreset selection results on LLaVA-665K.
+2024b), MME (Fu et al., 2023), VQAv2 (Goyal                   MAGIC achieves the best overall relative score
+
+                                                           6
+Method             VQAv2   GQA    SQA-I  TextVQA  POPE   MME     MMBench    LLaVA-       MM-Vet    Rel. (%)
+Full-Finetune        80.0  63.3    71.2     60.2   86.7  1541.7    en cn    W Bench        36.1      100.0
+Random               76.7  60.5    68.8     57.7   84.8  1484.9                            35.5      95.7
+CLIP-Score           75.3  52.6    69.7     57.3   85.4  1426.3  68.5 61.5     69.5          -       92.8
+EL2N                 77.2  59.6    69.9     56.1   84.1  1531.0  62.8 55.2     68.6          -       93.8
+Perplexity           77.0  58.5    68.7     54.8   83.1  1508.8  60.4 54.0     68.1          -       92.7
+SemDedup             75.6  57.5    70.5     57.7   85.3  1397.6  59.3 52.3     65.8          -       93.0
+D2-Pruning           73.9  60.5    70.4     55.2   84.9  1463.0  57.5 50.3     68.7          -       95.9
+Self-Sup             76.3  60.5    70.2     52.7   85.4  1463.8  59.0 51.1     68.7          -       94.5
+Self-Filter          75.0  59.8    69.5     55.8   84.5  1446.9  67.3 59.9     66.5          -       93.3
+COINCIDE             77.8  60.4    70.0     58.6   87.1  1516.8  63.7 57.6     64.9          -       96.8
+MAGIC (Ours)         78.9  60.4    73.5     58.8   86.4  1551.5  58.8 51.8     69.1        36.3      99.3
+                                                                 64.0 57.7     67.4
+                                                                 67.4 61.3     69.0
+
+Table 3: Transferring to the larger target model. We validate if the coresets selected from TinyLLaVA-2B are
+transferable to LLaVA-1.5-13B finetuning, and measure performance on various multimodal benchmarks.
+
+Full-Finetune      AI2D  ChartQA  DocVQA   InfoVQA    MMVet   Naturalbench  RealworldQA  CMMMU     Rel. (%)
+Random             55.4     17.5     28.9     26.5      31.1        12.4          52.4      22.1     100.0
+CLIP-Score         50.2     15.1     25.2     24.3      29.6        11.1          49.8      21.9     91.8
+EL2N               52.0     16.4     27.1     24.9      29.2        11.6          49.3      20.8     93.9
+Perplexity         52.1     17.9     26.9     26.4      29.6        12.5          51.9      21.7     97.8
+SemDeDup           53.0     16.4     27.1     27.1      29.4        11.4          50.3      23.9     97.0
+D2-Pruning         53.2     16.4     26.4     26.6      29.1        13.2          51.1      22.8     97.8
+Self-Sup           52.1     17.3     26.5     24.7      33.1        11.3          52.0      21.9     96.7
+Self-Filter        52.7     16.6     27.4     25.2      29.6        11.8          50.1      21.0     95.0
+COINCIDE           52.1     16.0     27.1     25.0      29.3        11.5          49.5      20.6     94.0
+RDS                53.7     17.0     27.9     26.0      30.2        12.1          50.9      21.4     97.2
+ICONS              53.0     16.8     27.5     25.4      29.8        12.0          50.3      21.3     95.6
+MAGIC (ours)       53.9     17.1     27.9     27.5      29.7        12.8          55.0      25.2     101.6
+Per-task Rel. (%)  54.9     17.1     27.2     26.9      29.8        13.2          54.5      25.3     101.7
+                   99.1     97.7     94.1    101.5      95.8       106.5         104.0      114.5       -
+
+Table 4: Detailed results of unseen task generalization. Performance comparison on unseen benchmarks when
+trained on selected 20% subsets. Notably, we observe improvements on InfoVQA (101.5%), RealWorldQA
+(104.0%), and CMMMU (114.5%), highlighting strong generalization to unseen tasks.
+
+of 100.3%, outperforming all baselines, including        I, POPE, MME, and MMBench-cn, indicating that
+ICONS (98.4%) and COIDO (98.2%). It also de-             the selected subset preserves not only overall util-
+livers the strongest results on several benchmarks,      ity but also strong cross-task generalization. This
+including MME, SQA-I, TextVQA, and MM-Vet,               result suggests that the combination of multimodal
+while remaining highly competitive across the re-        utility, grounding strength, and behavioral coverage
+maining evaluation suite. Notably, MAGIC slightly        can identify compact training subsets that match or
+surpasses full-data finetuning in aggregate relative     exceed the effectiveness of the full dataset.
+performance despite using only 20% of the training
+data, suggesting that it effectively removes redun-         Transfer to a Larger Target Model. To test
+dant or weakly informative samples while retaining       whether the selected coresets transfer when the tar-
+high-value multimodal supervision. Overall, these        get model has a much larger backbone than the
+results show that MAGIC provides a superior core-        reference model, we finetune LLaVA-1.5-13B on
+set construction strategy among both score-based         the 20% subsets selected from TinyLLaVA-2B. As
+and model-involved baselines. We further visualize       shown in Table 3, MAGIC achieves the strongest
+top selected and bottom rejected samples in Fig. 4       overall transfer performance, reaching 99.3% rel-
+to show the data qualitative preference induced by       ative performance to full-finetuning. MAGIC at-
+MAGIC, highlighting that the method favors sam-          tains the best or second-best performance across
+ples with stronger multimodal utility and ground-        all benchmarks, showing that the proposed criteria
+ing while rejecting samples that are less visually       identify samples whose value is not tied to a single
+informative or behaviorally redundant.                   model scale and that MAGIC captures broadly use-
+                                                         ful multimodal training signals rather than overfit-
+   Main results on Vision-Flan. Table 2 reports          ting to the inductive biases of the reference model.
+coreset selection results on Vision-Flan-186K un-
+der a 20% budget. MAGIC achieves a relative                 Generalization to Unseen Tasks. We further
+score of 101.6%, outperforming random selection          evaluate whether the selected subsets support gener-
+by a large margin (+9.8 points), even exceeding          alization beyond the benchmarks seen during core-
+full-data finetuning. These gains are consistent         set construction. More details on these datasets
+across several benchmarks, including GQA, SQA-           are provided in App. Sec. A.5. Tab. 4 shows that
+                                                         MAGIC achieves the best overall unseen-task rel-
+
+                                                      7
+Method         End-to-End Cost (GPU-hr)  Selection Cost (GPU-hr)  Finetuning Cost (GPU-hr)  External API Rel. Perf. (%) 
+
+Full-Finetune         76.0                     ­           68.0  No   100.0
+
+COIDO                 35.0                     25.0        10.0  Yes  98.2
+
+Self-Filter           81.0                     71.0        10.0  No   90.5
+
+ICONS                 66.0                     50.0        10.0  No   98.4
+
+DataTailor            33.5                     23.5        10.0  No   85.9
+
+COINCIDE              66.5                     55.5        10.0  No   97.4
+
+MAGIC (Ours)          20.0                     10.0        10.0  No   100.3
+
+Table 5: End-to-end efficiency comparison. MAGIC achieves the best trade-off between compute cost and
+performance, matching or exceeding full-data performance while requiring the lowest overall compute.
+
+Variant        Rel. (%)  POPE  GQA                         moving either the BR signal, the multimodal-gain
+                                                           eligibility filter, or the SN-based behavioral buck-
+MAGIC (full)   100.0        87.0 59.9                      eting consistently degrades performance. These
+w/o BR Score   98.4         86.7 58.3                      results confirm that the three components are com-
+w/o MG Score   98.1         86.7 58.1                      plementary: multimodal gain filters out weakly
+w/o SN Score   98.3         86.8 57.6                      visual examples, bridging relevance favors strongly
+                                                           grounded samples, and skill-signature bucketing
+Table 6: Ablation study of MAGIC. Removing any             preserves coverage over distinct behavioral modes.
+component degrades performance.
+                                                              Hyperparameter Sensitivity. Table 7 evaluates
+Hyperparameter Setting SQA  POPE                           sensitivity to the MG/BR weighting and the per-
+                                                           layer signature size k, which specifies how many
+MG/BR weights (1.0, 0.0) 69.8 86.7                         top-activated neurons are retained from each se-
+                         (0.7, 0.3) 71.8 87.0              lected layer. A balanced (, ) weighting works
+                         (0.5, 0.5) 72.3 87.1              best: (0.5, 0.5) achieves the strongest performance,
+                         (0.3, 0.7) 70.9 86.9              indicating that multimodal utility and grounding
+                         (0.0, 1.0) 71.2 86.8              strength are most effective when combined. For
+                                                           the signature design, intermediate granularity per-
+top-(k)        [1,1,1,1] 71.8 86.8                         forms best: [1, 1, 2, 3], which retains 1, 1, 2, and
+               [1,1,2,2] 71.1 86.9                         3 neurons from the four selected layers, yields the
+               [1,1,2,3] 73.5 87.0                         strongest overall score, which aligns with the exper-
+               [2,3,4,6] 70.2 85.5                         imental settings MAGIC uses. Smaller signatures
+                                                           under-represent latent behavior, while larger ones
+Table 7: Hyperparameter sensitivity of MAGIC.              make buckets overly specific and less robust by
+                                                           fragmenting samples into overly fine groups.
+ative score (101.7%), surpassing prior baselines.
+In particular, MAGIC yields strong relative im-            6 Conclusion
+provements on InfoVQA (101.5%), NaturalBench
+(106.5%), RealWorldQA (104.0%), and CMMMU                  We presented MAGIC, a training-free and forward-
+(114.5%). While performance on a few tasks re-             only coreset selection method for visual instruc-
+mains slightly below full-data finetuning, the over-       tion tuning. MAGIC combines three intrinsic sig-
+all pattern suggests that preserving activation-level      nals from a pretrained VLM ­ Multimodal Gain,
+behavioral diversity improves robustness to task           Bridging Relevance, and Skill-Neuron Signatures
+shift. This supports our central hypothesis that           ­ to jointly model multimodal utility, grounding
+coreset construction should account not only for           strength, and activation-level behavioral diversity.
+sample quality, but also for diversity in the latent       Comprehensive experiments on the LLaVA-1.5 and
+computations induced by the selected data.                 Vision-Flan datasets demonstrate that MAGIC con-
+                                                           sistently achieves stronger or comparable perfor-
+5 Ablations                                                mance to full-data finetuning while using only 20%
+                                                           of the data, with the lowest data selection cost,
+Cost of Coreset Selection Table 5 compares                 showcasing its effectiveness and efficiency. These
+end-to-end efficiency across data selection meth-          results show that high-value multimodal coresets
+ods. MAGIC achieves the strongest compute-                 should not be defined solely by scalar difficulty
+performance trade-off, amongst all baselines. At           or redundancy, but also by the diversity of latent
+the same time, MAGIC attains the highest rela-             computations they elicit.
+tive performance (100.3%). Notably, MAGIC also
+avoids external API usage, unlike COIDO. These
+results highlight the scalability and effectiveness of
+our proposed design.
+
+   Component Analysis. Table 6 evaluates the
+contribution of each component in MAGIC. Re-
+
+                                                        8
+7 Limitations                                             9 AI Writing Statement
+
+MAGIC has a few limitations. First, like most             This paper utilized AI assistance for language pol-
+VLM coreset selection methods, our score extrac-          ishing of the manuscript, including vocabulary cor-
+tion depends on a pretrained reference LVLM, so           rection and spell checking.
+selection quality may vary with the choice of refer-
+ence model. That said, our transfer results suggest       References
+that the extracted signals remain useful beyond the
+exact model used for scoring. Second, MAGIC               Amro Abbas, Kushal Tirumala, Dániel Simig, Surya
+requires dataset-wide forward passes to extract se-          Ganguli, and Ari S Morcos. 2023. Semdedup: Data-
+lection signals. However, this cost is very modest           efficient learning at web-scale through semantic dedu-
+compared to gradient-based or auxiliary-training             plication. arXiv preprint arXiv:2303.09540.
+methods, since MAGIC avoids backpropagation,
+scorer training, and iterative optimization. In prac-     Jean-Baptiste Alayrac, Jeff Donahue, Pauline Luc,
+tice, this yields a favorable efficiency-performance         Antoine Miech, Iain Barr, Yana Hasson, Karel
+trade-off: MAGIC remains simple, training-free,              Lenc, Arthur Mensch, Katherine Millican, Malcolm
+and consistently effective across datasets and trans-        Reynolds, and 1 others. 2022. Flamingo: a visual
+fer settings.                                                language model for few-shot learning. Advances in
+                                                             neural information processing systems, 35:23716­
+8 Ethical Considerations and Broader                         23736.
+    Impact
+                                                          Ruibo Chen, Yihan Wu, Lichang Chen, Guodong Liu,
+MAGIC is designed to improve the efficiency of               Qi He, Tianyi Xiong, Chenxi Liu, Junfeng Guo, and
+multimodal instruction tuning by selecting compact           Heng Huang. 2024. Your vision-language model it-
+yet behaviorally representative coresets for large           self is a strong filter: Towards high-quality instruction
+vision-language models. By reducing the amount               tuning with data selection. In Findings of the Asso-
+of training data required for finetuning, MAGIC              ciation for Computational Linguistics: ACL 2024,
+can lower computational cost, energy consumption,            pages 4156­4172.
+and environmental impact, enabling more sustain-
+able multimodal model development.                        Damai Dai, Li Dong, Yaru Hao, Zhifang Sui, Baobao
+                                                             Chang, and Furu Wei. 2022. Knowledge neurons in
+   Because MAGIC operates on large-scale web-                pretrained transformers. In Proceedings of the 60th
+derived multimodal datasets, the selected subsets            Annual Meeting of the Association for Computational
+may still reflect demographic biases, unsafe con-            Linguistics (Volume 1: Long Papers), pages 8493­
+tent, or skewed visual-textual associations present          8502.
+in the original data. Although our bucket-aware bal-
+ancing strategy improves coverage across diverse          Wenliang Dai, Junnan Li, Dongxu Li, Anthony Tiong,
+latent behaviors and reduces over-concentration              Junqi Zhao, Weisheng Wang, Boyang Li, Pascale N
+on dominant modes, it does not explicitly enforce            Fung, and Steven Hoi. 2023. Instructblip: Towards
+fairness or safety constraints. Nevertheless, the            general-purpose vision-language models with instruc-
+structured and diversity-aware design of MAGIC               tion tuning. Advances in neural information process-
+provides a promising foundation for incorporating            ing systems, 36:49250­49267.
+fairness-aware or safety-aware objectives, which
+are beyond the scope of this work, into future core-      Zhiwei Deng, Tao Li, and Yang Li. 2024. Influential
+set selection methods.                                       language data selection via gradient trajectory pursuit.
+                                                             arXiv preprint arXiv:2410.16710.
+   Finally, while more efficient coreset selection
+can broaden access to multimodal model training,          Qianlong Du, Chengqing Zong, and Jiajun Zhang. 2023.
+responsible deployment remains important. We en-             Mods: Model-oriented data selection for instruction
+courage practitioners to combine methods such as             tuning. arXiv preprint arXiv:2311.15653.
+MAGIC with dataset auditing, safety filtering, and
+appropriate governance practices to support reli-         Chaoyou Fu, Peixian Chen, Yunhang Shen, Yulei
+able and responsible use of large vision-language            Qin, Mengdan Zhang, Xu Lin, Jinrui Yang, Xi-
+models.                                                      awu Zheng, Ke Li, Xing Sun, and 1 others. 2023.
+                                                             Mme: A comprehensive evaluation benchmark for
+                                                             multimodal large language models. arXiv preprint
+                                                             arXiv:2306.13394.
+
+                                                          Mor Geva, Avi Caciularu, Kevin Wang, and Yoav Gold-
+                                                             berg. 2022. Transformer feed-forward layers build
+                                                             predictions by promoting concepts in the vocabulary
+                                                             space. In Proceedings of the 2022 conference on
+                                                             empirical methods in natural language processing,
+                                                             pages 30­45.
+
+                                                       9
+Mor Geva, Roei Schuster, Jonathan Berant, and Omer             Yifan Li, Yifan Du, Kun Zhou, Jinpeng Wang,
+   Levy. 2021. Transformer feed-forward layers are                Wayne Xin Zhao, and Ji-Rong Wen. 2023b. Eval-
+   key-value memories. In Proceedings of the 2021                 uating object hallucination in large vision-language
+   Conference on Empirical Methods in Natural Lan-                models. In Proceedings of the 2023 conference on
+   guage Processing, pages 5484­5495.                             empirical methods in natural language processing,
+                                                                  pages 292­305.
+Yash Goyal, Tejas Khot, Douglas Summers-Stay, Dhruv
+   Batra, and Devi Parikh. 2017. Making the v in vqa           Haotian Liu, Chunyuan Li, Yuheng Li, and Yong Jae
+   matter: Elevating the role of image understanding              Lee. 2024a. Improved baselines with visual instruc-
+   in visual question answering. In Proceedings of the            tion tuning. In Proceedings of the IEEE/CVF con-
+   IEEE conference on computer vision and pattern                 ference on computer vision and pattern recognition,
+   recognition, pages 6904­6913.                                  pages 26296­26306.
+
+Danna Gurari, Qing Li, Abigale J Stangl, Anhong Guo,           Haotian Liu, Chunyuan Li, Qingyang Wu, and Yong Jae
+   Chi Lin, Kristen Grauman, Jiebo Luo, and Jeffrey P             Lee. 2023. Visual instruction tuning. Advances in
+   Bigham. 2018. Vizwiz grand challenge: Answering                neural information processing systems, 36:34892­
+   visual questions from blind people. In Proceedings of          34916.
+   the IEEE conference on computer vision and pattern
+   recognition, pages 3608­3617.                               Yuan Liu, Haodong Duan, Yuanhan Zhang, Bo Li,
+                                                                  Songyang Zhang, Wangbo Zhao, Yike Yuan, Jiaqi
+Zayd Hammoudeh and Daniel Lowd. 2024. Training                    Wang, Conghui He, Ziwei Liu, and 1 others. 2024b.
+   data influence analysis and estimation: A survey. Ma-          Mmbench: Is your multi-modal model an all-around
+   chine Learning, 113(5):2351­2403.                              player? In European conference on computer vision,
+                                                                  pages 216­233. Springer.
+Edward J Hu, Yelong Shen, Phillip Wallis, Zeyuan
+   Allen-Zhu, Yuanzhi Li, Shean Wang, Liang Wang,              Zikang Liu, Kun Zhou, Wayne Xin Zhao, Dawei Gao,
+   Weizhu Chen, and 1 others. 2022. Lora: Low-rank                Yaliang Li, and Ji-Rong Wen. 2025. Less is more:
+   adaptation of large language models. Iclr, 1(2):3.             High-value data selection for visual instruction tun-
+                                                                  ing. In Proceedings of the 33rd ACM International
+Drew A Hudson and Christopher D Manning. 2019.                    Conference on Multimedia, pages 3712­3721.
+   Gqa: A new dataset for real-world visual reasoning
+   and compositional question answering. In Proceed-           Pan Lu, Swaroop Mishra, Tanglin Xia, Liang Qiu, Kai-
+   ings of the IEEE/CVF conference on computer vision             Wei Chang, Song-Chun Zhu, Oyvind Tafjord, Peter
+   and pattern recognition, pages 6700­6709.                      Clark, and Ashwin Kalyan. 2022. Learn to explain:
+                                                                  Multimodal reasoning via thought chains for science
+Hamish Ivison, Muru Zhang, Faeze Brahman, Pang Wei                question answering. Advances in neural information
+   Koh, and Pradeep Dasigi. 2025. Large-scale data                processing systems, 35:2507­2521.
+   selection for instruction tuning. arXiv preprint
+   arXiv:2503.01807.                                           Adyasha Maharana, Prateek Yadav, and Mohit Bansal.
+                                                                  2023. D2 pruning: Message passing for balancing di-
+Aniruddha Kembhavi, Mike Salvato, Eric Kolve, Min-                versity and difficulty in data pruning. arXiv preprint
+   joon Seo, Hannaneh Hajishirzi, and Ali Farhadi.                arXiv:2310.07931.
+   2016. A diagram is worth a dozen images. In Euro-
+   pean conference on computer vision, pages 235­251.          Max Marion, Ahmet Üstün, Luiza Pozzobon, Alex
+   Springer.                                                      Wang, Marzieh Fadaee, and Sara Hooker. 2023.
+                                                                  When less is more: Investigating data pruning
+Jaewoo Lee, Boyang Li, and Sung Ju Hwang. 2024.                   for pretraining llms at scale. arXiv preprint
+   Concept-skill transferability-based data selection for         arXiv:2309.04564.
+   large vision-language models. In Proceedings of the
+   2024 Conference on Empirical Methods in Natural             Ahmed Masry, Xuan Long Do, Jia Qing Tan, Shafiq Joty,
+   Language Processing, pages 5060­5080.                          and Enamul Hoque. 2022. Chartqa: A benchmark
+                                                                  for question answering about charts with visual and
+Baiqi Li, Zhiqiu Lin, Wenxuan Peng, Jean de Dieu                  logical reasoning. In Findings of the association for
+   Nyandwi, Daniel Jiang, Zixian Ma, Simran Khanuja,              computational linguistics: ACL 2022, pages 2263­
+   Ranjay Krishna, Graham Neubig, and Deva Ramanan.               2279.
+   2024. Naturalbench: Evaluating vision-language
+   models on natural adversarial samples. Advances in          Minesh Mathew, Viraj Bagal, Rubèn Tito, Dimosthe-
+   Neural Information Processing Systems, 37:17044­               nis Karatzas, Ernest Valveny, and CV Jawahar. 2022.
+   17068.                                                         Infographicvqa. In Proceedings of the IEEE/CVF
+                                                                  Winter Conference on Applications of Computer Vi-
+Junnan Li, Dongxu Li, Silvio Savarese, and Steven Hoi.            sion, pages 1697­1706.
+   2023a. Blip-2: Bootstrapping language-image pre-
+   training with frozen image encoders and large lan-          Minesh Mathew, Dimosthenis Karatzas, and CV Jawa-
+   guage models. In International conference on ma-               har. 2021. Docvqa: A dataset for vqa on document
+   chine learning, pages 19730­19742. PMLR.                       images. In Proceedings of the IEEE/CVF winter con-
+                                                                  ference on applications of computer vision, pages
+                                                                  2200­2209.
+
+                                                           10
+Sören Mindermann, Jan M Brauner, Muhammed T Raz-                  Zhiyang Xu, Chao Feng, Rulin Shao, Trevor Ashby,
+   zak, Mrinank Sharma, Andreas Kirsch, Winnie Xu,                   Ying Shen, Di Jin, Yu Cheng, Qifan Wang, and Lifu
+   Benedikt Höltgen, Aidan N Gomez, Adrien Morisot,                  Huang. 2024. Vision-flan: Scaling human-labeled
+   Sebastian Farquhar, and 1 others. 2022. Prioritized               tasks in visual instruction tuning. In Findings of
+   training on points that are learnable, worth learning,            the Association for Computational Linguistics: ACL
+   and not yet learnt. In International Conference on                2024, pages 15271­15342.
+   Machine Learning, pages 15630­15649. PMLR.
+                                                                  Yichen Yan, Ming Zhong, Qi Zhu, Xiaoling Gu, Jinpeng
+Mansheej Paul, Surya Ganguli, and Gintare Karolina                   Chen, and Huan Li. 2025. Coido: Efficient data
+   Dziugaite. 2021. Deep learning on a data diet: Find-              selection for visual instruction tuning via coupled
+   ing important examples early in training. Advances                importance-diversity optimization. arXiv preprint
+   in neural information processing systems, 34:20596­               arXiv:2510.17847.
+   20607.
+                                                                  Qifan Yu, Juncheng Li, Yu Wu, Siliang Tang, Wei Ji,
+Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya                   and Yueting Zhuang. 2023a. Visually-prompted lan-
+   Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sas-                guage model for fine-grained scene graph generation
+   try, Amanda Askell, Pamela Mishkin, Jack Clark, and               in an open world. In Proceedings of the IEEE/CVF
+   1 others. 2021. Learning transferable visual models               International Conference on Computer Vision, pages
+   from natural language supervision. In International               21560­21571.
+   conference on machine learning, pages 8748­8763.
+   PmLR.                                                          Qifan Yu, Zhebei Shen, Zhongqi Yue, Yang Wu,
+                                                                     Bosheng Qin, Wenqiao Zhang, Yunfei Li, Juncheng
+Tanik Saikh, Tirthankar Ghosal, Amish Mittal, Asif                   Li, Siliang Tang, and Yueting Zhuang. 2025. Master-
+   Ekbal, and Pushpak Bhattacharyya. 2022. Scienceqa:                ing collaborative multi-modal data selection: A focus
+   A novel resource for question answering on scholarly              on informativeness, uniqueness, and representative-
+   articles. International Journal on Digital Libraries,             ness. In Proceedings of the IEEE/CVF International
+   23(3):289­301.                                                    Conference on Computer Vision, pages 155­165.
+
+Amanpreet Singh, Vivek Natarajan, Meet Shah,                      Weihao Yu, Zhengyuan Yang, Linjie Li, Jianfeng Wang,
+   Yu Jiang, Xinlei Chen, Dhruv Batra, Devi Parikh,                  Kevin Lin, Zicheng Liu, Xinchao Wang, and Lijuan
+   and Marcus Rohrbach. 2019. Towards vqa models                     Wang. 2023b. Mm-vet: Evaluating large multimodal
+   that can read. In Proceedings of the IEEE/CVF con-                models for integrated capabilities. arXiv preprint
+   ference on computer vision and pattern recognition,               arXiv:2308.02490.
+   pages 8317­8326.
+                                                                  Ge Zhang, Xinrun Du, Bei Chen, Yiming Liang, Tongxu
+Ben Sorscher, Robert Geirhos, Shashank Shekhar, Surya                Luo, Tianyu Zheng, Kang Zhu, Yuyang Cheng,
+   Ganguli, and Ari Morcos. 2022. Beyond neural scal-                Chunpu Xu, Shuyue Guo, and 1 others. 2024. Cm-
+   ing laws: beating power law scaling via data pruning.             mmu: A chinese massive multi-discipline multi-
+   Advances in Neural Information Processing Systems,                modal understanding benchmark. arXiv preprint
+   35:19523­19536.                                                   arXiv:2401.11944.
+
+Haoru Tan, Sitong Wu, Fei Du, Yukang Chen, Zhibin                 Baichuan Zhou, Ying Hu, Xi Weng, Junlong Jia, Jie Luo,
+   Wang, Fan Wang, and Xiaojuan Qi. 2023. Data prun-                 Xien Liu, Ji Wu, and Lei Huang. 2024. Tinyllava: A
+   ing via moving-one-sample-out. Advances in neural                 framework of small-scale large multimodal models.
+   information processing systems, 36:18251­18262.                   arXiv preprint arXiv:2402.14289.
+
+Shengbang Tong, Ellis Brown, Penghao Wu, Sanghyun                 Chunting Zhou, Pengfei Liu, Puxin Xu, Srinivasan Iyer,
+   Woo, Manoj Middepogu, Sai C Akula, Jihan Yang,                    Jiao Sun, Yuning Mao, Xuezhe Ma, Avia Efrat, Ping
+   Shusheng Yang, Adithya Iyer, Xichen Pan, and 1                    Yu, Lili Yu, and 1 others. 2023. Lima: Less is more
+   others. 2024. Cambrian-1: A fully open, vision-                   for alignment. Advances in Neural Information Pro-
+   centric exploration of multimodal llms. Advances in               cessing Systems, 36:55006­55021.
+   Neural Information Processing Systems, 37:87310­
+   87356.                                                         Deyao Zhu, Jun Chen, Xiaoqian Shen, Xiang Li, and
+                                                                     Mohamed Elhoseiny. 2023. Minigpt-4: Enhancing
+Xindi Wu, Mengzhou Xia, Rulin Shao, Zhiwei Deng,                     vision-language understanding with advanced large
+   Pang Wei Koh, and Olga Russakovsky. 2024. Icons:                  language models. arXiv preprint arXiv:2304.10592.
+   Influence consensus for vision-language data selec-
+   tion. arXiv preprint arXiv:2501.00654.
+
+xAI. 2024. Grok-1.5 vision preview. https://x.ai/
+   news/grok-1.5v. Online; accessed 14-November-
+   2024.
+
+Mengzhou Xia, Sadhika Malladi, Suchin Gururangan,
+   Sanjeev Arora, and Danqi Chen. 2024. Less: Se-
+   lecting influential data for targeted instruction tuning.
+   arXiv preprint arXiv:2402.04333.
+
+                                                              11
+A Appendix                                                A.3 Details on Experimental Settings
+
+This appendix provides supplementary details for          Unless otherwise specified, all coreset selection
+the main paper. We introduce the task of visual           methods use a fixed selection budget of 20% of
+instruction-tuning, include implementation and ex-        the original training set. For LLaVA-665K, this
+perimental details, benchmark descriptions and            corresponds to 133,059 selected samples, while
+task statistics, the full MAGIC data selection algo-      for Vision-Flan-186K it corresponds to approxi-
+rithm, additional coverage analysis in the MAGIC          mately 37K samples. For all experiments, we use
+feature space, and qualitative examples of selected       TinyLLaVA-2B as the reference model for score
+and rejected samples. These materials complement          extraction and LLaVA-1.5-7B as the primary target
+the main results by offering further detail on the        model for finetuning; transfer experiments further
+methodology and additional evidence for the effec-        evaluate the selected coresets on LLaVA-1.5-13B.
+tiveness of MAGIC.
+                                                             For score extraction in MAGIC, we use the pre-
+A.1 Visual Instruction Tuning                             trained LLaVA-v1.5 checkpoint after Stage 1 fea-
+                                                          ture alignment, before any visual instruction tuning,
+Recent vision-language models (VLMs), such as             so that the reference model has not previously seen
+Flamingo (Alayrac et al., 2022), LLaVA (Liu               the downstream VIT training data. We extract both
+et al., 2024a), BLIP-2 (Li et al., 2023a), and Cam-       Bridging Relevance and Skill-Neuron signals from
+brian (Tong et al., 2024), have substantially ad-         the same four uniformly spaced transformer layers,
+vanced multimodal intelligence by coupling vi-
+sual perception with large language reasoning.                       LBR = LSN = {8, 12, 16, 20},
+Their downstream effectiveness relies heavily on
+visual instruction tuning (VIT) (Liu et al., 2023),       taking inspiration from prior work (Lee et al.,
+a post-pretraining adaptation stage that finetunes        2024). We choose these layers to capture a broad
+the model on image-grounded instruction-response          spectrum of multimodal computations across early,
+tuples. By exposing the model to diverse multi-           middle, and late stages of the model, while keeping
+modal task formulations under natural language            feature extraction efficient. Earlier layers tend to
+supervision, VIT improves instruction adherence,          reflect lower-level alignment and local grounding
+strengthens cross-modal alignment, and enables            signals, middle layers capture richer cross-modal
+the model to operate as a general-purpose multi-          interaction patterns, and higher layers encode more
+modal assistant (Liu et al., 2023). In parallel with      task-specific semantic reasoning. Using multiple
+the expansion of multimodal application domains,          layers distributed from lower to upper depths there-
+VIT datasets have grown to massive scale, now             fore provides a more stable view of both answer-to-
+routinely comprising hundreds of thousands to mil-        vision grounding and latent behavioral activation
+lions of annotated instruction examples (Liu et al.,      than relying on a single layer alone. At the same
+2024a; Tong et al., 2024).                                time, restricting extraction to four layers keeps the
+                                                          procedure efficient and avoids the redundancy and
+A.2 Datasets & model                                      overhead of using the entire network. Score ex-
+                                                          traction is performed with a per-device batch size
+For our experiments, we use the LLaVA-v1.5                of 2, and the raw SN extraction retains the top 64
+checkpoint after Stage 1 pre-training for feature         activated neurons per selected layer before the later
+alignment, following the original LLaVA training          signature compression step used in data selection.
+pipeline, with the 7B model size and LLaVA-665K
+setting unless otherwise specified. Concretely, we           For data selection, we use a target coreset size of
+use the checkpoint1, which represents the model           133,059, corresponding to a 20% subset of LLaVA-
+after projector training and before any Stage 2 vi-       665K. We first apply a multimodal-gain eligibility
+sual instruction tuning. Therefore, the checkpoint        filter with keep ratio  = 0.6, then form a qual-
+has no prior exposure to the LLaVA-665K visual            ity shortlist with factor  = 2.0. Unless other-
+instruction tuning data before data selection.            wise specified, the joint quality score uses weights
+                                                          (, ) = (0.5, 0.5) for MG and BR, respectively.
+    1https://huggingface.co/liuhaotian/llava-v1.          For skill-signature bucketing, we use the per-layer
+5-mlp2x-336px-pretrain-vicuna-7b-v1.5                     signature configuration
+
+                                                                            [k]L = [1, 1, 2, 3],
+
+                                                      12
+meaning that we retain 1, 1, 2, and 3 neurons from         Task     MME POPE SQA-I       MMBench
+the four selected layers, respectively. Bucket allo-
+cation uses temperature  = 0.2 and a maximum                                             en     cn
+bucket fraction of  = 0.05. We then perform
+bucket-wise top-score selection followed by quota          |Dval|   986     500    424   1,164  1,164
+correction and backfilling as described in Algo-                           8,910  4,241  1,784  1,784
+rithm 2.                                                   |Dtest|  2,374  Y/N    MCQ    MCQ    MCQ
+
+   For target-model finetuning, we follow the offi-        Task Type Y/N
+cial LLaVA-1.5 recipe and train with LoRA for one
+epoch using the standard hyperparameter settings.          Task     VQAv2 GQA VizWiz TextVQA LLaVA-W
+All experiments are conducted on 4 NVIDIA A100
+GPUs for a single run.                                     |Dval|   1,000 398 800         84     84
+                                                                                         5,000   84
+A.4 Details on Evaluation Benchmarks.                      |Dtest|  36,807 12,578 8,000  VQA    VQA
+
+We evaluate on a diverse collection of multimodal          Task Type VQA VQA VQA
+benchmarks that capture complementary capabil-
+ities of VLMs, including multiple-choice reason-           Table 8: Statistics of Target Tasks. Our target tasks in-
+ing, visual question answering, text understand-           clude diverse benchmarks and answer formats, covering
+ing in images, scientific reasoning, open-ended            different vision-language capabilities. Task types in-
+generation, and factual consistency. Specifically,         clude Multiple-Choice Questions (MCQ), Visual Ques-
+VQAv2 (Goyal et al., 2017) measures open-ended             tion Answering (VQA), and Yes/No Questions (Y/N).
+question answering over natural images, while
+GQA (Hudson and Manning, 2019) emphasizes                  models to interpret visualized quantitative informa-
+compositional reasoning over object attributes and         tion. DocVQA (Mathew et al., 2021) tests docu-
+relations. VizWiz (Gurari et al., 2018) evaluates ro-      ment understanding from visually rich document
+bustness on real-world images captured by visually         images, while InfoVQA (Mathew et al., 2022) fo-
+impaired users, and TextVQA (Singh et al., 2019)           cuses on question answering over infographics that
+focuses on reading and reasoning over scene text.          combine text, layout, and graphical elements. Nat-
+ScienceQA (Saikh et al., 2022) assesses science-           uralBench (Li et al., 2024) is designed to assess
+oriented reasoning grounded in visual content.             robust multimodal reasoning under more natural
+POPE (Li et al., 2023b) is used to quantify object         and diverse real-world inputs. RealWorldQA (xAI,
+hallucination, whereas MME (Fu et al., 2023) eval-         2024) further examines practical visual question an-
+uates perception and cognition through a collection        swering ability on real-world images. Finally, CM-
+of binary-choice subtasks. MMBench (Liu et al.,            MMU (Zhang et al., 2024) extends evaluation to
+2024b) provides a broad testbed covering abilities         a broad, college-level multimodal benchmark that
+such as recognition, OCR, and relational reason-           tests knowledge-intensive reasoning across diverse
+ing. In addition, LLaVA-W Bench (Lu et al., 2022)          subjects. Together, these unseen tasks provide a
+evaluates open-ended visual instruction-following          complementary measure of out-of-distribution gen-
+behavior, and MM-Vet (Yu et al., 2023b) measures           eralization and task transfer.
+a wide range of vision-language skills, including
+recognition, OCR, knowledge, spatial reasoning,            A.6 Coverage in the MAGIC Feature Space
+and mathematical understanding. More details on
+the task statistics are shown in Tab. 8.                   To examine whether MAGIC preserves broad cov-
+                                                           erage of the training distribution, we visualize the
+A.5 Unseen Tasks                                           joint MAGIC feature space using UMAP in Fig-
+                                                           ure 3. Each point corresponds to one training sam-
+We additionally evaluate generalization to unseen-         ple embedded from its combined MAGIC descrip-
+task benchmarks that probe transfer beyond the             tor, formed from Multimodal Gain (MG), Bridging
+training-aligned evaluation suite. AI2D (Kemb-             Relevance (BR), and the processed Skill-Neuron
+havi et al., 2016) measures diagram understand-            (SN) signature. The orange points denote the full
+ing and visual reasoning over structured scientific        dataset, while the green points denote the selected
+illustrations. ChartQA (Masry et al., 2022) eval-          coreset.
+uates reasoning over charts and plots, requiring
+                                                              Two observations are notable. First, the selected
+                                                           coreset remains well distributed across the global
+                                                           support of the full dataset rather than collapsing
+                                                           onto a small number of dense regions. This sug-
+                                                           gests that MAGIC does not behave like a purely
+                                                           score-based filter that concentrates only on a nar-
+                                                           row subset of samples. Second, the coreset also
+                                                           preserves many of the local structures present in
+
+                                                       13
+Algorithm 2 MAGIC Data Selection
+
+Input: dataset D = {xi}Ni=1, multimodal gain {gi}Ni=1, bridging relevance {bi}Ni=1, skill signatures {i}iN=1, target budget M ,
+keep ratio , shortlist factor , weights (, ), temperature  , bucket cap  Output: coreset C
+
+1: g^i  Norm(gi), ^bi  Norm(bi), i = 1, . . . , N                                               robust normalization
+                                                                                                   joint quality score
+2: qi  g^i + ^bi, i = 1, . . . , N
+3: E  TopN({gi}Ni=1)                                                              multimodal-gain eligibility filter
+                                                                                                      quality shortlist
+4: S  Topmin(M,|E|)({qi}iE )
+                                                                                                behavioral grouping
+5: Partition S into buckets B = {B1, . . . , BK } by i                                                    bucket mass
+
+6: mj  iBj exp(qi/ ), j = 1, . . . , K                                                   normalized bucket weight
+                                                                                                 capped initial quota
+7: pj  mj /   K      mr  ,  j = 1, . . . , K                                                       budget correction
+              r=1
+8: nj  min(|Bj|, M  , M pj) , j = 1, . . . , K                                     intra-bucket top-score selection
+                                                                                                   fill unused budget
+9: Redistribute M -  K      nj  by  descending  fractional  remainder  of  M pj
+                     j=1
+
+10: C   K     Topnj  ({qi}iBj   )
+        j=1
+
+11: Backfill from S \ C, then E \ C, by descending qi until |C| = M
+
+12: return C
+
+Figure 3: UMAP visualization of the MAGIC feature               example asks the model to infer the country from a
+space. Each point represents one training sample em-            road sign, which depends on recognizing localized
+bedded from its joint MAGIC descriptor, formed from             textual and structural cues in the image, while the
+Multimodal Gain (MG), Bridging Relevance (BR), and              second requires grounded regional description from
+the processed Skill-Neuron (SN) signature. MAGIC                a specified image crop. Such examples are visually
+preserves broad global coverage and local behavioral            informative, strongly grounded, and behaviorally
+structure while selecting a compact subset.                     non-trivial, and therefore tend to receive high mul-
+                                                                timodal gain and bridging relevance scores.
+the full dataset, indicating that the proposed skill-
+signature bucketing retains diverse latent behav-                  In contrast, the right two examples are drawn
+ioral modes while still favoring high-quality sam-              from the bottom of the ranking and illustrate the
+ples. Together, these results provide qualitative               types of samples that MAGIC deprioritizes. These
+evidence that MAGIC preserves feature coverage                  examples are either largely recoverable from lan-
+in the multimodal training space while constructing             guage priors or only weakly dependent on the im-
+a substantially smaller subset.                                 age content. For instance, the question about the
+                                                                "scientific name for the area protected by the pads"
+                                                                can be answered primarily from textual world
+                                                                knowledge, while the question about the Children's
+                                                                Online Privacy Protection Act is unrelated to the
+                                                                visual evidence altogether. Such samples provide
+                                                                limited multimodal supervision and are therefore
+                                                                less useful for efficient visual instruction tuning.
+
+                                                                   Overall, these examples highlight that MAGIC
+                                                                favors samples where the image materially con-
+                                                                tributes to the answer and where the required com-
+                                                                putation is both grounded and behaviorally distinc-
+                                                                tive.
+
+A.7 Qualitative Examples of Selected and
+       Rejected Samples
+
+Figure 4 provides qualitative examples of the
+samples prioritized and rejected by MAGIC. The
+left two examples are drawn from the top of the
+MAGIC ranking and illustrate the types of training
+instances favored by our selection criterion. These
+samples require genuine visual reasoning: the first
+
+                                                            14
+Figure 4: Qualitative examples of MAGIC selection. The left two examples are highly ranked samples selected by
+MAGIC, while the right two are low-ranked samples rejected by the method. MAGIC prioritizes instances that
+require genuine visual grounding and multimodal reasoning, and deprioritizes samples that are largely answerable
+from language priors or provide weak visual supervision.
+
+                                                             15
+

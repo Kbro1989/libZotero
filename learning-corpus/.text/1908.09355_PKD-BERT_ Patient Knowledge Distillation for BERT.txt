@@ -1,0 +1,610 @@
+                                        Patient Knowledge Distillation for BERT Model Compression
+
+                                                           Siqi Sun, Yu Cheng, Zhe Gan, Jingjing Liu
+                                                                 Microsoft Dynamics 365 AI Research
+
+                                                             {Siqi.Sun,Yu.Cheng,Zhe.Gan,jingjl}@microsoft.com
+
+arXiv:1908.09355v1 [cs.CL] 25 Aug 2019                        Abstract                            Despite its empirical success, BERT's compu-
+                                                                                               tational efficiency is a widely recognized issue be-
+                                             Pre-trained language models such as BERT          cause of its large number of parameters. For exam-
+                                             have proven to be highly effective for natu-      ple, the original BERT-Base model has 12 layers
+                                             ral language processing (NLP) tasks. How-         and 110 million parameters. Training from scratch
+                                             ever, the high demand for computing resources     typically takes four days on 4 to 16 Cloud TPUs.
+                                             in training such models hinders their applica-    Even fine-tuning the pre-trained model with task-
+                                             tion in practice. In order to alleviate this re-  specific dataset may take several hours to finish
+                                             source hunger in large-scale model training,      one epoch. Thus, reducing computational costs for
+                                             we propose a Patient Knowledge Distillation       such models is crucial for their application in prac-
+                                             approach to compress an original large model      tice, where computational resources are limited.
+                                             (teacher) into an equally-effective lightweight
+                                             shallow network (student). Different from pre-       Motivated by this, we investigate the redun-
+                                             vious knowledge distillation methods, which       dancy issue of learned parameters in large-scale
+                                             only use the output from the last layer of the    pre-trained models, and propose a new model
+                                             teacher network for distillation, our student     compression approach, Patient Knowledge Distil-
+                                             model patiently learns from multiple interme-     lation (Patient-KD), to compress original teacher
+                                             diate layers of the teacher model for incremen-   (e.g., BERT) into a lightweight student model
+                                             tal knowledge extraction, following two strate-   without performance sacrifice. In our approach,
+                                             gies: (i) PKD-Last: learning from the last k      the teacher model outputs probability logits and
+                                             layers; and (ii) PKD-Skip: learning from ev-      predicts labels for the training samples (extend-
+                                             ery k layers. These two patient distillation      able to additional unannotated samples), and the
+                                             schemes enable the exploitation of rich infor-    student model learns from the teacher network to
+                                             mation in the teacher's hidden layers, and en-    mimic the teacher's prediction.
+                                             courage the student model to patiently learn
+                                             from and imitate the teacher through a multi-        Different from previous knowledge distillation
+                                             layer distillation process. Empirically, this     methods (Hinton et al., 2015; Sau and Balasub-
+                                             translates into improved results on multiple      ramanian, 2016; Lu et al., 2017), we adopt a pa-
+                                             NLP tasks with significant gain in training ef-   tient learning mechanism: instead of learning pa-
+                                             ficiency, without sacrificing model accuracy.1    rameters from only the last layer of the teacher,
+                                                                                               we encourage the student model to extract knowl-
+                                        1 Introduction                                         edge also from previous layers of the teacher net-
+                                                                                               work. We call this `Patient Knowledge Distilla-
+                                        Language model pre-training has proven to be           tion'. This patient learner has the advantage of dis-
+                                        highly effective in learning universal language        tilling rich information through the deep structure
+                                        representations from large-scale unlabeled data.       of the teacher network for multi-layer knowledge
+                                        ELMo (Peters et al., 2018), GPT (Radford et al.,       distillation.
+                                        2018) and BERT (Devlin et al., 2018) have
+                                        achieved great success in many NLP tasks, such as         We also propose two different strategies for the
+                                        sentiment classification (Socher et al., 2013), natu-  distillation process: (i) PKD-Last: the student
+                                        ral language inference (Williams et al., 2017), and    learns from the last k layers of the teacher, under
+                                        question answering (Lai et al., 2017).                 the assumption that the top layers of the original
+                                                                                               network contain the most informative knowledge
+                                            1Code will be avialable at https://github.com/
+                                        intersun/PKD-for-BERT-Model-Compression.
+to teach the student; and (ii) PKD-Skip: the stu-     million parameters, while BERT-Large has 24
+dent learns from every k layers of the teacher, sug-  layers of Transformer and 330 million parameters.
+gesting that the lower layers of the teacher network  By pre-training via masked language modeling
+also contain important information and should be      and next sentence prediction, BERT has achieved
+passed along for incremental distillation.            state-of-the-art performance on a wide-range of
+                                                      NLU tasks, such as the GLUE benchmark (Wang
+   We evaluate the proposed approach on sev-          et al., 2018) and SQuAD (Rajpurkar et al., 2016).
+eral NLP tasks, including Sentiment Classifi-
+cation, Paraphrase Similarity Matching, Natu-            However, these modern pre-trained language
+ral Language Inference, and Machine Reading           models contain millions of parameters, which hin-
+Comprehension. Experiments on seven datasets          ders their application in practice where computa-
+across these four tasks demonstrate that the pro-     tional resource is limited. In this paper, we aim
+posed Patient-KD approach achieves superior per-      at addressing this critical and challenging prob-
+formance and better generalization than standard      lem, taking BERT as an example, i.e., how to
+knowledge distillation methods (Hinton et al.,        compress a large BERT model into a shallower
+2015), with significant gain in training efficiency   one without sacrificing performance. Besides, the
+and storage reduction while maintaining compa-        proposed approach can also be applied to other
+rable model accuracy to original large models. To     large-scale pre-trained language models, such as
+the authors' best knowledge, this is the first known  recently proposed XLNet (Yang et al., 2019) and
+effort for BERT model compression.                    RoBERTa (Liu et al., 2019b).
+
+2 Related Work                                        Model Compression & Knowledge Distillation
+                                                      Our focus is model compression, i.e., making deep
+Language Model Pre-training Pre-training has          neural networks more compact (Han et al., 2016;
+been widely applied to universal language repre-      Cheng et al., 2015). A similar line of work has
+sentation learning. Previous work can be divided      focused on accelerating deep network inference at
+into two main categories: (i) feature-based ap-       test time (Vetrov et al., 2017) and reducing model
+proach; (ii) fine-tuning approach.                    training time (Huang et al., 2016).
+
+   Feature-based methods mainly focus on learn-          A conventional understanding is that a large
+ing: (i) context-independent word representa-         number of connections (weights) is necessary for
+tion (e.g., word2vec (Mikolov et al., 2013),          training deep networks (Denil et al., 2013; Zhai
+GloVe (Pennington et al., 2014), FastText (Bo-        et al., 2016). However, once the network has
+janowski et al., 2017)); (ii) sentence-level rep-     been trained, there will be a high degree of pa-
+resentation (e.g., Kiros et al. (2015); Conneau       rameter redundancy. Network pruning (Han et al.,
+et al. (2017); Logeswaran and Lee (2018)); and        2015; He et al., 2017), in which network con-
+(iii) contextualized word representation (e.g.,       nections are reduced or sparsified, is one com-
+Cove (McCann et al., 2017), ELMo (Peters et al.,      mon strategy for model compression. Another di-
+2018)). Specifically, ELMo (Peters et al., 2018)      rection is weight quantization (Gong et al., 2014;
+learns high-quality, deep contextualized word rep-    Polino et al., 2018), in which connection weights
+resentation using bidirectional language model,       are constrained to a set of discrete values, allowing
+which can be directly plugged into standard NLU       weights to be represented by fewer bits. However,
+models for performance boosting.                      most of these pruning and quantization approaches
+                                                      perform on convolutional networks. Only a few
+   On the other hand, fine-tuning approaches          work are designed for rich structural information
+mainly pre-train a language model (e.g.,              such as deep language models (Changpinyo et al.,
+GPT (Radford et al., 2018), BERT (Devlin              2017).
+et al., 2018)) on a large corpus with an unsu-
+pervised objective, and then fine-tune the model         Knowledge distillation (Hinton et al., 2015)
+with in-domain labeled data for downstream            aims to compress a network with a large set
+applications (Dai and Le, 2015; Howard and            of parameters into a compact and fast-to-execute
+Ruder, 2018). Specifically, BERT is a large-scale     model. This can be achieved by training a com-
+language model consisting of multiple layers          pact model to imitate the soft output of a larger
+of Transformer blocks (Vaswani et al., 2017).         model. Romero et al. (2015) further demonstrated
+BERT-Base has 12 layers of Transformer and 110        that intermediate representations learned by the
+large model can serve as hints to improve the train-  layer BERT-Base as the teacher model, the learned
+ing process and the final performance of the com-     parameters are denoted as:
+pact model. Chen et al. (2015) introduced tech-
+niques for efficiently transferring knowledge from    ^t = arg min               LCt E (xi, yi; [BERT12 , W])
+an existing network to a deeper or wider network.
+More recently, Liu et al. (2019a) used knowledge                          i[N ]
+from ensemble models to improve single model
+performance on NLU tasks. Tan et al. (2019)                                                              (1)
+tried knowledge distillation for multilingual trans-
+lation. Different from the above efforts, we inves-   where the superscript t denotes parameters in
+tigate the problem of compressing large-scale lan-
+guage models, and propose a novel patient knowl-      the teacher model, [N ] denotes set {1, 2, . . . , N },
+edge distillation approach to effectively transfer-   LtCE denotes the cross-entropy loss for the
+ring knowledge from a teacher to a student model.     teacher training, and BERT12 denotes parameters
+
+3 Patient Knowledge Distillation                      of BERT12.
+
+In this section, we first introduce a vanilla knowl-  The output probability for any given input xi
+edge distillation method for BERT compression
+(Section 3.1), then present the proposed Patient      can be formulated as:
+Knowledge Distillation (Section 3.2) in details.
+                                                      y^i = P t(yi|xi) = sof tmax      Whi
+Problem Definition The original large teacher                                            T
+network is represented by a function f (x; ),
+where x is the input to the network, and  denotes     = sof tmax W · BERT12(xi; ^t)                      (2)
+the model parameters. The goal of knowledge dis-                                    T
+tillation is to learn a new set of parameters  for
+a shallower student network g(x;  ), such that the    where P t(·|·) denotes the probability output from
+student network achieves similar performance to
+the teacher, with much lower computational cost.      the teacher. y^i is fixed as soft labels, and T
+Our strategy is to force the student model to imi-
+tate outputs from the teacher model on the training   is the temperature used in KD, which controls
+dataset with a defined objective LKD.
+                                                      how much to rely on the teacher's soft predic-
+3.1 Distillation Objective
+                                                      tions. A higher temperature produces a more di-
+In our setting, the teacher f (x; ) is defined as a
+deep bidirectional encoder, e.g., BERT, and the       verse probability distribution over classes (Hinton
+student g(x;  ) is a lightweight model with fewer     et al., 2015). Similarly, let s denote parameters
+layers. For simplicity, we use BERTk to denote        to be learned for the student model, and P s(·|·)
+a model with k layers of Transformers. Follow-
+ing the original BERT paper (Devlin et al., 2018),    denote the corresponding probability output from
+we also use BERT-Base and BERT-Large to de-
+note BERT12 and BERT24, respectively.                 the student model. Thus, the distance between the
+
+   Assume {xi, yi}Ni=1 are N training samples,        teacher's prediction and the student's prediction
+where xi is the i-th input instance for BERT,
+and yi is the corresponding ground-truth label.       can be defined as:
+BERT first computes a contextualized embedding
+hi = BERT(xi)  Rd. Then, a softmax layer              LDS = -                       P t(yi = c|xi; ^t)·
+y^i = P (yi|xi) = sof tmax(Whi) for classifica-
+tion is applied to the embedding of BERT output,                          i[N ] cC
+where W is a weight matrix to be learned.
+                                                                                 log P s(yi = c|xi; s) (3)
+   To apply knowledge distillation, first we need to
+train a teacher network. For example, to train a 12-  where c is a class label and C denotes the set of
+                                                      class labels.
+
+                                                         Besides encouraging the student model to imi-
+                                                      tate the teacher's behavior, we can also fine-tune
+                                                      the student model on target tasks, where task-
+                                                      specific cross-entropy loss is included for model
+                                                      training:
+
+                                                      LsCE = -                      1[yi = c]·
+
+                                                                i[N ] cC
+
+                                                                          log P s(yi = c|xi; s) (4)
+
+                                                      Thus, the final objective function for knowledge
+                                                      distillation can be formulated as:
+
+                                                      LKD = (1 - )LCs E + LDS                            (5)
+
+                                                      where  is the hyper-parameter that balances the
+                                                      importance of the cross-entropy loss and the dis-
+                                                      tillation loss.
+Figure 1: Model architecture of the proposed Patient     token. In some variants of BERT, like SDNet
+Knowledge Distillation approach to BERT model com-       (Zhu et al., 2018), a weighted average of all lay-
+pression. (Left) PKD-Skip: the student network learns    ers' [CLS] embeddings is applied. In general,
+the teacher's outputs in every 2 layers. (Right) PKD-    the final logit can be computed based on hfinal =
+Last: the student learns the teacher's outputs from the
+last 6 layers. Trm: Transformer.                            j[k] wjhj, where wj could be either learned pa-
+                                                         rameters or a pre-defined hyper-parameter, hj is
+3.2 Patient Teacher for Model Compression                the embedding of [CLS] from the hidden layer
+                                                         j, and k is the number of hidden layers. Derived
+Using a weighted combination of ground-truth la-         from this, if the compressed model can learn from
+bels and soft predictions from the last layer of the     the representation of [CLS] in the teacher's inter-
+teacher network, the student network can achieve         mediate layers for any given input, it has the po-
+comparable performance to the teacher model on           tential of gaining a generalization ability similar to
+the training set. However, with the number of            the teacher model.
+epochs increasing, the student model learned with
+this vanilla KD framework quickly reaches satura-           Motivated by this, in our Patient-KD frame-
+tion on the test set (see Figure 2 in Section 4).        work, the student is cultivated to imitate the repre-
+                                                         sentations only for the [CLS] token in the inter-
+   One hypothesis is that overfitting during knowl-      mediate layers, following the intuition aforemen-
+edge distillation may lead to poor generalization.       tioned that the [CLS] token is important in pre-
+To mitigate this issue, instead of forcing the stu-      dicting the final labels. For an input xi, the outputs
+dent to learn only from the logits of the last layer,    of the [CLS] tokens for all the layers are denoted
+we propose a "patient" teacher-student mecha-            as:
+nism to distill knowledge from the teacher's inter-
+mediate layers as well. Specifically, we investi-        hi = [hi,1, hi,2, . . . , hi,k] = BERTk(xi)  Rk×d
+gate two patient distillation strategies: (i) PKD-                                                               (6)
+Skip: the student learns from every k layers of the
+teacher (Figure 1: Left); and (ii) PKD-Last: the         We denote the set of intermediate layers to dis-
+student learns from the last k layers of the teacher
+(Figure 1: Right).                                       till knowledge from as Ipt. Take distilling from
+                                                         BERT12 to BERT6 as an example. For the PKD-
+   Learning from the hidden states of all the to-        Skip strategy, Ipt = {2, 4, 6, 8, 10}; and for the
+kens is computationally expensive, and may intro-        PKD-Last strategy, Ipt = {7, 8, 9, 10, 11}. Note
+duce noise. In the original BERT implementation          that k = 5 for both cases, because the output from
+(Devlin et al., 2018), prediction is performed by
+only using the output from the last layer's [CLS]        the last layer (e.g., Layer 12 for BERT-Base) is
+
+                                                         omitted since its hidden states are connected to the
+
+                                                         softmax layer, which is already included in the KD
+
+                                                         loss defined in Eqn. (5). In general, for BERT stu-
+
+                                                         dent with n layers, k always equals to n - 1.
+
+                                                         The additional training loss introduced by the
+
+                                                         patient teacher is defined as the mean-square loss
+
+                                                         between the normalized hidden states:
+
+                                                                       NM        hsi,j      -    hti,Ipt(j)     2  (7)
+                                                                               ||his,j ||2     ||hit,Ipt(j)||2  2
+                                                         LP T =
+
+                                                                      i=1 j=1
+
+                                                         where M denotes the number of layers in the stu-
+                                                         dent network, N is the number of training sam-
+                                                         ples, and the superscripts s and t in h indicate the
+                                                         student and the teacher model, respectively. Com-
+                                                         bined with the KD loss introduced in Section 3.1,
+                                                         the final objective function can be formulated as:
+
+                                                         LP KD = (1 - )LCs E + LDS + LP T (8)
+
+                                                         where  is another hyper-parameter that weights
+                                                         the importance of the features for distillation in the
+                                                         intermediate layers.
+4 Experiments                                              vided, only one of which is correct. The dataset is
+                                                           further divided into RACE-M and RACE-H, con-
+In this section, we describe our experiments on ap-        taining exam questions for middle school and high
+plying the proposed Patient-KD approach to four            school students.
+different NLP tasks. Details on the datasets and
+experimental results are provided in the following         4.2 Baselines and Training Details
+sub-sections.
+                                                           For experiments on the GLUE benchmark, since
+4.1 Datasets                                               all the tasks can be considered as sentence (or
+                                                           sentence-pair) classification, we use the same ar-
+We evaluate our proposed approach on Sentiment             chitecture in the original BERT (Devlin et al.,
+Classification, Paraphrase Similarity Matching,            2018), and fine-tune each task independently.
+Natural Language Inference, and Machine Read-
+ing Comprehension tasks. For Sentiment Clas-                  For experiments on RACE, we denote the in-
+sification, we test on Stanford Sentiment Tree-            put passage as P , the question as q, and the four
+bank (SST-2) (Socher et al., 2013). For Para-              answers as a1, . . . , a4. We first concatenate the
+phrase Similarity Matching, we use Microsoft Re-           tokens in q and each ai, and arrange the input of
+search Paraphrase Corpus (MRPC) (Dolan and                 BERT as [CLS] P [SEP] q +ai [SEP] for each
+Brockett, 2005) and Quora Question Pairs (QQP)2            input pair (P, q + ai), where [CLS] and [SEP]
+datasets. For Natural Language Inference, we               are the special tokens used in the original BERT.
+evaluate on Multi-Genre Natural Language Infer-            In this way, we can obtain a single logit value for
+ence (MNLI) (Williams et al., 2017), QNLI3 (Ra-            each ai. At last, a softmax layer is placed on top of
+jpurkar et al., 2016), and Recognizing Textual En-         these four logits to obtain the normalized probabil-
+tailment (RTE).                                            ity of each answer ai being correct, which is then
+                                                           used to compute the cross-entropy loss for model-
+   More specifically, SST-2 is a movie review              ing training.
+dataset with binary annotations, where the bi-
+nary label indicates positive and negative re-                We fine-tune BERT-Base (denoted as BERT12)
+views. MRPC contains pairs of sentences and                as the teacher model to compute soft labels for
+corresponding labels, which indicate the semantic          each task independently, where the pretrained
+equivalence relationship between each pair. QQP            model weights are obtained from Google's offi-
+is designed to predict whether a pair of questions         cial BERT's repo4, and use 3 and 6 layers of
+is duplicate or not, provided by a popular on-             Transformers as the student models (BERT3 and
+line question-answering website Quora. MNLI is             BERT6), respectively. We initialize BERTk with
+a multi-domain NLI task for predicting whether             the first k layers of parameters from pre-trained
+a given premise-hypothesis pair is entailment,             BERT-Base, where k  {3, 6}. To validate the
+contradiction or neural. Its test and develop-             effectiveness of our proposed approach, we first
+ment datasets are further divided into in-domain           conduct direct fine-tuning on each task without us-
+(MNLI-m) and cross-domain (MNLI-mm) splits                 ing any soft labels. In order to reduce the hyper-
+to evaluate the generality of tested models. QNLI          parameter search space, we fix the number of hid-
+is a task for predicting whether a question-answer         den units in the final softmax layer as 768, the
+pair is entailment or not. Finally, RTE is based           batch size as 32, and the number of epochs as 4
+on a series of textual entailment challenges, cre-         for all the experiments, with a learning rate from
+ated by General Language Understanding Evalua-             {5e-5, 2e-5, 1e-5}. The model with the best vali-
+tion (GLUE) benchmark (Wang et al., 2018).                 dation accuracy is selected for each setting.
+
+   For the Machine Reading Comprehension task,                Besides direct fine-tuning, we further imple-
+we evaluate on RACE (Lai et al., 2017), a large-           ment a vanilla KD method on all the tasks by
+scale dataset collected from English exams, con-           optimizing the objective function in Eqn. (5).
+taining 25,137 passages and 87,866 questions. For          We set the temperature T as {5, 10, 20},  =
+each question, four candidate answers are pro-             {0.2, 0.5, 0.7}, and perform grid search over T , 
+                                                           and learning rate, to select the model with the best
+    2https://data.quora.com/First-Quora-Dataset-Release-   validation accuracy. For our proposed Patient-KD
+Question-Pairs                                             approach, we conduct additional search over 
+
+    3The dataset is derived from Stanford Question Answer      4https://github.com/google-research/bert
+Dataset (SQuAD).
+       Model      SST-2   MRPC        QQP             MNLI-m   MNLI-mm   QNLI    RTE
+                  (67k)    (3.7k)    (364k)            (393k)    (393k)  (105k)  (2.5k)
+BERT12 (Google)
+BERT12 (Teacher)   93.5  88.9/84.8  71.2/89.2           84.6       83.4   90.5    66.4
+                   94.3  89.2/85.2  70.9/89.0           83.7       82.8   90.4    69.1
+    BERT6-FT       90.7  85.9/80.2  69.2/88.2           80.4       79.7   86.7    63.6
+    BERT6-KD       91.5  86.2/80.6  70.1/88.8           80.2       79.8   88.3    64.7
+   BERT6-PKD       92.0  85.0/79.9  70.7/88.9           81.5       81.0   89.0    65.5
+    BERT3-FT       86.4  80.5/72.6  65.8/86.9           74.8       74.3   84.3    55.2
+    BERT3-KD       86.9  79.5/71.1  67.3/87.6           75.4       74.8   84.0    56.2
+   BERT3-PKD       87.5  80.7/72.5  68.1/87.8           76.7       76.3   84.7    58.2
+
+Table 1: Results from the GLUE test server. The best results for 3-layer and 6-layer models are in-bold. Google's
+submission results are obtained from official GLUE leaderboard. BERT12 (Teacher) is our own implementation
+of the BERT teacher model. FT represents direct fine-tuning on each dataset without using knowledge distillation.
+KD represents using a vanilla knowledge distillation method. And PKD represents our proposed Patient-KD-Skip
+approach. Results show that PKD-Skip outperforms the baselines on almost all the datasets except for MRPC. The
+numbers under each dataset indicate the corresponding number of training samples.
+
+Figure 2: Accuracy on the training and dev sets of QNLI and MNLI datasets, by directly applying vanilla knowl-
+edge distillation (KD) and the proposed Patient-KD-Skip. The teacher and the student networks are BERT12 and
+BERT6, respectively. The student network learned with vanilla KD quickly saturates on the dev set, while the
+proposed Patient-KD starts to plateau only in a later stage.
+
+from {10, 100, 500, 1000} on all the tasks. Since     dent and the teacher models.
+there are so many hyper-parameters to learn for
+Patient KD, we fix  and T to the values used             Furthermore, in 5 tasks out of 7 (SST-2 (-2.3%
+in the model with the best performance from the       compared to BERT-Base teacher), QQP (-0.1%),
+vanilla KD experiments, and only search over          MNLI-m (-2.2%), MNLI-mm (-1.8%), and QNLI
+and learning rate.                                    (-1.4%)), the proposed 6-layer student coached by
+                                                      the patient teacher achieved similar performance
+4.3 Experimental Results                              to the original BERT-Base, demonstrating the ef-
+                                                      fectiveness of our approach. Interestingly, all
+We submitted our model predictions to the offi-       those 5 tasks have more than 60k training sam-
+cial GLUE evaluation server to obtain results on      ples, which indicates that our method tends to per-
+the test data. Results are summarized in Table 1.     form better when there is a large amount of train-
+Compared to direct fine-tuning and vanilla KD,        ing data.
+our Patient-KD models with BERT3 and BERT6
+students perform the best on almost all the tasks        For the QQP task, we can further reduce the
+except MRPC. For MNLI-m and MNLI-mm, our              model size to 3 layers, where BERT3-PKD can
+6-layer model improves 1.1% and 1.3% over fine-       still have a similar performance to the teacher
+tune (FT) baselines; for QNLI and QQP, even           model. The learning curves on the QNLI and
+though the gap between BERT6-KD and BERT12            MNLI datasets are provided in Figure 2. The stu-
+teacher is relatively small, our approach still suc-  dent model learned with vanilla KD quickly sat-
+ceeded in improving over both FT and KD base-         urated on the dev set, while the proposed Patient-
+lines and further closing the gap between the stu-    KD keeps learning from the teacher and improving
+Model  SST-2 MRPC QQP MNLI-m MNLI-mm QNLI RTE
+
+BERT6 (PKD-Last) 91.9 85.1/79.5 70.5/88.9 80.9          81.0  88.2 65.0
+BERT6 (PKD-Skip) 92.0 85.0/79.9 70.7/88.9 81.5
+                                                        81.0  89.0 65.5
+
+Table 2: Performance comparison between PKD-Last and PKD-Skip on GLUE benchmark.
+
+Model  RACE RACE-M RACE-H                                  Results on RACE are reported in Table 3, which
+                                                        shows that the Vanilla KD method outperforms di-
+BERT12 (Leaderboard) 65.00  71.70  62.30                rect fine-tuning by 4.42%, and our proposed pa-
+ BERT12 (Teacher) 65.30     71.17  62.89                tient teacher achieves further 1.6% performance
+                            61.07  51.54                lift, which again demonstrates the effectiveness of
+     BERT6-FT 54.32         64.69  56.29                Patient-KD.
+     BERT6-KD 58.74         66.57  57.78
+ BERT6-PKD-Skip 60.34                                   4.4 Analysis of Model Efficiency
+
+Table 3: Results on RACE test set. BERT12               We have demonstrated that the proposed Patient-
+(Leaderboard) denotes results extracted from the of-    KD method can effectively compress BERT12 into
+ficial leaderboard (http://www.qizhexie.com/            BERT6 models without performance sacrifice. In
+/data/RACE_leaderboard). BERT12 (Teacher)               this section, we further investigate the efficiency of
+is our own implementation. Results of BERT3 are not     Patient-KD on storage saving and inference-time
+included due to the large gap between the teacher and   speedup. Parameter statistics and inference time
+the BERT3 student.                                      are summarized in Table 4. All the models share
+                                                        the same embedding layer with 24 millon param-
+accuracy, only starting to plateau in a later stage.    eters that map a 30k-word vocabulary to a 768-
+                                                        dimensional vector, which leads to 1.64 and 2.4
+   For the MRPC dataset, one hypothesis for the         times of machine memory saving from BERT6 and
+reason on vanilla KD outperforming our model is         BERT3, respectively.
+that the lack of enough training samples may lead
+to overfitting on the dev set. To further investigate,     To test the inference speed, we ran experiments
+we repeat the experiments three times and com-          on 105k samples from QNLI training set (Ra-
+pute the average accuracy on the dev set. We ob-        jpurkar et al., 2016). Inference is performed on
+serve that fine-tuning and vanilla KD have a mean       a single Titan RTX GPU with batch size set to
+dev accuracy of 82.23% and 82.84%, respectively.        128, maximum sequence length set to 128, and
+Our proposed method has a higher mean dev accu-         FP16 activated. The inference time for the em-
+racy of 83.46%, hence indicating that our Patient-      bedding layer is negligible compared to the Trans-
+KD method slightly overfitted to the dev set of         former layers. Results in Table 4 show that the
+MRPC due to the small amount of training data.          proposed Patient-KD approach achieves an almost
+This can also be observed on the performance gap        linear speedup, 1.94 and 3.73 times for BERT6 and
+between teacher and student on RTE in Table 5,          BERT3, respectively.
+which also has a small training set.
+                                                        4.5 Does a Better Teacher Help?
+   We further investigate the performance gain
+from two different patient teacher designs: PKD-        To evaluate the effectiveness of the teacher model
+Last vs. PKD-Skip. Results of both PKD variants         in our Patient-KD framework, we conduct ad-
+on the GLUE benchmark (with BERT6 as the stu-           ditional experiments to measure the difference
+dent) are summarized in Table 2. Although both          between BERT-Base teacher and BERT-Large
+strategies achieved improvement over the vanilla        teacher for model compression.
+KD baseline (see Table 1), PKD-Skip performs
+slightly better than PKD-Last. Presumably, this            Each Transformer layer in BERT-Large has
+might be due to the fact that distilling informa-       12.6 million parameters, which is much larger
+tion across every k layers captures more diverse        than the Transformer layer used in BERT-Base.
+representations of richer semantics from low-level      For a compressed BERT model with 6 layers,
+to high-level, while focusing on the last k layers      BERT6 with BERT-Base Transformer (denoted as
+tends to capture relatively homogeneous semantic        BERT6[Base]) has only 67.0 million parameters,
+information.                                            while BERT6 with BERT-Large Transformer (de-
+          # Layers  # Param (Emb)  # Params (Trm)      Total Params  Inference Time (s)
+
+              3          23.8M          21.3M         45.7M (2.40×)    27.35 (3.73×)
+              6          23.8M          42.5M         67.0M (1.64×)    52.51 (1.94×)
+             12          23.8M          85.1M                           101.89 (1×)
+                                                        109M (1×)
+
+Table 4: The number of parameters and inference time for BERT3, BERT6 and BERT12. Parameters in Transform-
+ers (Trm) grow linearly with the increase of layers. Note that the summation of # Param (Emb) and # Param (Trm)
+does not exactly equal to Total Params, because there is another softmax layer with 0.6M parameters.
+
+Setting Teacher     Student        SST-2 MRPC         QQP MNLI-m MNLI-mm QNLI RTE
+
+N/A  N/A         BERT12 (Teacher) 94.3 89.2/85.2 70.9/89.0 83.7      82.8                90.4 69.1
+
+N/A  N/A         BERT24 (Teacher) 94.3 88.2/84.3 71.9/89.4 85.7      84.8                92.2 72.8
+
+#1 BERT12 BERT6[Base]-KD 91.5 86.2/80.6 70.1/88.8 79.7               79.1                88.3 64.7
+
+#2 BERT24 BERT6[Base]-KD 91.2 86.1/80.7 69.4/88.6 80.2               79.7                87.5 65.7
+
+#3 BERT24 BERT6[Large]-KD 89.6 79.0/70.0 65.0/86.7 75.3              74.6                83.4 53.7
+
+#4 BERT24 BERT6[Large]-PKD 89.8 77.8/68.3 67.1/87.9 77.2             76.7                83.8 53.2
+
+Table 5: Performance comparison with different teacher and student models. BERT6[Base]/[Large] denotes a
+BERT6 model with a BERT-Base/Large Transformer in each layer. For PKD, we use the PKD-Skip architecture.
+
+noted as BERT6[Large]) has 108.4 million param-       used, BERT6[Large] still performs worse than
+eters. Since the size of the [CLS] token embed-       BERT6[Base]. Presumably, this may be due
+ding is different between BERT-Large and BERT-        to initialization mismatch. Ideally, we should
+Base, we cannot directly compute the patient          pre-train BERT6[Large] and BERT6[Base] from
+teacher loss (7) for BERT6[Base] when BERT-           scratch, and use the weights learned from the pre-
+Large is used as teacher. Hence, in the case          training step for weight initialization in KD train-
+where the teacher is BERT-Large and the student       ing. However, due to computational limits of train-
+is BERT6[Base], we only conduct experiments in        ing BERT6 from scratch, we only initialize the stu-
+the vanilla KD setting.                               dent model with the first six layers of BERT12 or
+                                                      BERT24. Therefore, the first six layers of BERT24
+   Results are summarized in Table 5. When the        may not be able to capture high-level features,
+teacher changes from BERT12 to BERT24 (i.e.,          leading to worse KD performance.
+Setting #1 vs. #2), there is not much differ-
+ence between the students' performance. Specif-          Finally, when comparing Setting #3 vs. #4,
+ically, BERT12 teacher performs better on SST-2,      where for setting #4 we use Patient-KD-Skip in-
+QQP and QNLI, while BERT24 performs better on         stead of vanilla KD, we observe a performance
+MNLI-m, MNLI-mm and RTE. Presumably, dis-             gain on almost all the tasks, which indicates
+tilling knowledge from a larger teacher requires a    Patient-KD is a generic approach independent of
+larger training dataset, thus better results are ob-  the selection of the teacher model (BERT12 or
+served on MNLI-m and MNLI-mm.                         BERT24).
+
+   We also report results on using BERT-Large         5 Conclusion
+as the teacher and BERT6[Large] as the stu-
+dent. Interestingly, when comparing Setting #1        In this paper, we propose a novel approach to
+with #3, BERT6[Large] performs much worse             compressing a large BERT model into a shal-
+than BERT6[Base] even though a better teacher         low one via Patient Knowledge Distillation. To
+is used in the former case. The BERT6[Large]          fully utilize the rich information in deep struc-
+student also has 1.6 times more parameters than       ture of the teacher network, our Patient-KD ap-
+BERT6[Base]. One intuition behind this is that the    proach encourages the student model to patiently
+compression ratio for the BERT6[Large] model is       learn from the teacher through a multi-layer distil-
+4:1 (24:6), which is larger than the ratio used for   lation process. Extensive experiments over four
+the BERT6[Base] model (2:1 (12:6)). The higher        NLP tasks demonstrate the effectiveness of our
+compression ratio renders it more challenging for     proposed model.
+the student model to absorb important weights.
+                                                         For future work, we plan to pre-train BERT
+   When comparing Setting # 2 and #3, we ob-          from scratch to address the initialization mismatch
+serve that even when the same large teacher is        issue, and potentially modify the proposed method
+such that it could also help during pre-training.          Yihui He, Xiangyu Zhang, and Jian Sun. 2017. Chan-
+Designing more sophisticated distance metrics for             nel pruning for accelerating very deep neural net-
+loss functions is another exploration direction. We           works. In ICCV.
+will also investigate Patient-KD in more com-
+plex settings such as multi-task learning and meta         Geoffrey Hinton, Oriol Vinyals, and Jeff Dean. 2015.
+learning.                                                     Distilling the knowledge in a neural network. arXiv
+                                                              preprint arXiv:1503.02531.
+References
+                                                           Jeremy Howard and Sebastian Ruder. 2018. Universal
+Piotr Bojanowski, Edouard Grave, Armand Joulin, and           language model fine-tuning for text classification. In
+   Tomas Mikolov. 2017. Enriching word vectors with           ACL.
+   subword information. TACL.
+                                                           Gao Huang, Yu Sun, Zhuang Liu, Daniel Sedra, and
+Soravit Changpinyo, Mark Sandler, and Andrey                  Kilian Q. Weinberger. 2016. Deep networks with
+   Zhmoginov. 2017. The power of sparsity in                  stochastic depth. In ECCV.
+   convolutional neural networks. arXiv preprint
+   arXiv:1702.06257.                                       Ryan Kiros, Yukun Zhu, Ruslan R Salakhutdinov,
+                                                              Richard Zemel, Raquel Urtasun, Antonio Torralba,
+Tianqi Chen, Ian J. Goodfellow, and Jonathon Shlens.          and Sanja Fidler. 2015. Skip-thought vectors. In
+   2015. Net2net: Accelerating learning via knowl-            NIPS.
+   edge transfer. arXiv preprint arXiv:1511.05641.
+                                                           Guokun Lai, Qizhe Xie, Hanxiao Liu, Yiming Yang,
+Yu Cheng, Felix X. Yu, Rogerio S. Feris, Sanjiv Kumar,        and Eduard Hovy. 2017. Race: Large-scale reading
+   Alok Choudhary, and Shi-Fu Chang. 2015. An ex-             comprehension dataset from examinations. arXiv
+   ploration of parameter redundancy in deep networks         preprint arXiv:1704.04683.
+   with circulant projections. In ICCV.
+                                                           Xiaodong Liu, Pengcheng He, Weizhu Chen, and
+Alexis Conneau, Douwe Kiela, Holger Schwenk, Loic             Jianfeng Gao. 2019a. Improving multi-task deep
+   Barrault, and Antoine Bordes. 2017. Supervised             neural networks via knowledge distillation for
+   learning of universal sentence representations from        natural language understanding. arXiv preprint
+   natural language inference data. In EMNLP.                 arXiv:1904.09482.
+
+Andrew M Dai and Quoc V Le. 2015. Semi-supervised          Yinhan Liu, Myle Ott, Naman Goyal, Jingfei Du, Man-
+   sequence learning. In NIPS.                                dar Joshi, Danqi Chen, Omer Levy, Mike Lewis,
+                                                              Luke Zettlemoyer, and Veselin Stoyanov. 2019b.
+Misha Denil, Babak Shakibi, Laurent Dinh,                     Roberta: A robustly optimized BERT pretraining
+   Marc'Aurelio Ranzato, and Nando de Freitas.                approach. arXiv preprint arXiv:1907.11692.
+   2013. Predicting parameters in deep learning. In
+   NIPS.                                                   Lajanugen Logeswaran and Honglak Lee. 2018. An
+                                                              efficient framework for learning sentence represen-
+Jacob Devlin, Ming-Wei Chang, Kenton Lee, and                 tations. In ICLR.
+   Kristina Toutanova. 2018. Bert: Pre-training of deep
+   bidirectional transformers for language understand-     Liang Lu, Michelle Guo, and Steve Renals. 2017.
+   ing. arXiv preprint arXiv:1810.04805.                      Knowledge distillation for small-footprint highway
+                                                              networks. In ICASSP.
+William B Dolan and Chris Brockett. 2005. Automati-
+   cally constructing a corpus of sentential paraphrases.  Bryan McCann, James Bradbury, Caiming Xiong, and
+   In Proceedings of the Third International Workshop         Richard Socher. 2017. Learned in translation: Con-
+   on Paraphrasing.                                           textualized word vectors. In NIPS.
+
+Yunchao Gong, Liu Liu, Ming Yang, and Lubomir D.           Tomas Mikolov, Ilya Sutskever, Kai Chen, Greg S Cor-
+   Bourdev. 2014. Compressing deep convolutional              rado, and Jeff Dean. 2013. Distributed representa-
+   networks using vector quantization. arXiv preprint         tions of words and phrases and their compositional-
+   arXiv:1412.6115.                                           ity. In NIPS.
+
+Song Han, Huizi Mao, and William J Dally. 2016.            Jeffrey Pennington, Richard Socher, and Christopher
+   Deep compression: Compressing deep neural net-             Manning. 2014. Glove: Global vectors for word
+   works with pruning, trained quantization and huff-         representation. In EMNLP.
+   man coding. In ICLR.
+                                                           Matthew E Peters, Mark Neumann, Mohit Iyyer, Matt
+Song Han, Jeff Pool, John Tran, and William J. Dally.         Gardner, Christopher Clark, Kenton Lee, and Luke
+   2015. Learning both weights and connections for            Zettlemoyer. 2018. Deep contextualized word rep-
+   efficient neural networks. In NIPS.                        resentations. In NAACL.
+
+                                                           Antonio Polino, Razvan Pascanu, and Dan Alistarh.
+                                                              2018. Model compression via distillation and quan-
+                                                              tization. arXiv preprint arXiv:1802.05668.
+Alec Radford, Karthik Narasimhan, Tim Salimans, and
+   Ilya Sutskever. 2018. Improving language under-
+   standing by generative pre-training. arXiv.
+
+Pranav Rajpurkar, Jian Zhang, Konstantin Lopyrev, and
+   Percy Liang. 2016. Squad: 100,000+ questions for
+   machine comprehension of text. In EMNLP.
+
+Adriana Romero, Nicolas Ballas, Samira Ebrahimi Ka-
+   hou, Antoine Chassang, Carlo Gatta, and Yoshua
+   Bengio. 2015. Fitnets: Hints for thin deep nets. In
+   ICLR.
+
+Bharat Bhusan Sau and Vineeth N Balasubrama-
+   nian. 2016. Deep model compression: Distilling
+   knowledge from noisy teachers. arXiv preprint
+   arXiv:1610.09650.
+
+Richard Socher, Alex Perelygin, Jean Wu, Jason
+   Chuang, Christopher D Manning, Andrew Ng, and
+   Christopher Potts. 2013. Recursive deep models
+   for semantic compositionality over a sentiment tree-
+   bank. In EMNLP.
+
+Xu Tan, Yi Ren, Di He, Tao Qin, Zhou Zhao, and Tie-
+   Yan Liu. 2019. Multilingual neural machine trans-
+   lation with knowledge distillation. In ICLR.
+
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob
+   Uszkoreit, Llion Jones, Aidan N Gomez, Lukasz
+   Kaiser, and Illia Polosukhin. 2017. Attention is all
+   you need. In NIPS.
+
+Dmitry P. Vetrov, Jonathan Huang, Li Zhang, Maxwell
+   Collins, Michael Figurnov, Ruslan Salakhutdinov,
+   and Yukun Zhu. 2017. Spatially adaptive compu-
+   tation time for residual networks. In CVPR.
+
+Alex Wang, Amapreet Singh, Julian Michael, Felix
+   Hill, Omer Levy, and Samuel R Bowman. 2018.
+   Glue: A multi-task benchmark and analysis platform
+   for natural language understanding. arXiv preprint
+   arXiv:1804.07461.
+
+Adina Williams, Nikita Nangia, and Samuel R Bow-
+   man. 2017. A broad-coverage challenge corpus for
+   sentence understanding through inference. arXiv
+   preprint arXiv:1704.05426.
+
+Zhilin Yang, Zihang Dai, Yiming Yang, Jaime Car-
+   bonell, Ruslan Salakhutdinov, and Quoc V Le.
+   2019. Xlnet: Generalized autoregressive pretrain-
+   ing for language understanding. arXiv preprint
+   arXiv:1906.08237.
+
+Shuangfei Zhai, Yu Cheng, Weining Lu, and
+   Zhongfei Mark Zhang. 2016. Doubly convolutional
+   neural networks. In NIPS.
+
+Chenguang Zhu, Michael Zeng, and Xuedong Huang.
+   2018. Sdnet: Contextualized attention-based deep
+   network for conversational question answering.
+   arXiv preprint arXiv:1812.03593.
+

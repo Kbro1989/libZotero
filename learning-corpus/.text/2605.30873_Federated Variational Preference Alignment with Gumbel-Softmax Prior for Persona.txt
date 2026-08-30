@@ -1,0 +1,1258 @@
+                                        Federated Variational Preference Alignment with Gumbel-Softmax Prior for
+                                                                     Personalized User Preferences
+
+                                        Jabin Koo 1 Hoyoung Kim 2 Minwoo Jang 3 Jungseul Ok 3 1
+
+arXiv:2605.30873v1 [cs.LG] 29 May 2026                          Abstract                                    a critical bottleneck: high-quality preference data--often
+                                                                                                            reflecting personal, cultural, and political nuances--resides
+                                              Federated Learning (FL) offers a privacy-                     on edge devices. Centralizing this data not only risks severe
+                                              preserving pathway for aligning Large Language                privacy violations, such as the extraction of sensitive train-
+                                              Models (LLMs); however, existing frameworks                   ing data (Carlini et al., 2021), but also faces challenges with
+                                              typically enforce a monolithic reward model, in-              regulations like GDPR (European Parliament and Council
+                                              evitably averaging out inherently conflicting user            of the European Union, 2016).
+                                              preferences (e.g., helpfulness vs. harmlessness).
+                                              While Variational Preference Learning (VPL) of-               Federated Learning (FL) offers a privacy-preserving alter-
+                                              fers a pathway to personalization, adapting it                native (McMahan et al., 2017; Kairouz et al., 2021). Recent
+                                              to decentralized settings presents a fundamental              frameworks have adapted alignment to this decentralized set-
+                                              challenge: posterior collapse driven by severe                ting, such as FedDPO (Ye et al., 2024) and FedBiscuit (Wu
+                                              local data scarcity and heterogeneity. In this pa-            et al., 2024). Notably, FedBiscuit addresses computational
+                                              per, we propose Federated Variational Preference              constraints by training only a binary preference selector on
+                                              Alignment with Gumbel-Softmax Prior (FedVPA-                  the client side while keeping the base LLM frozen (Wu
+                                              GP), a framework designed to disentangle diverse              et al., 2024). However, despite these advancements, ex-
+                                              preferences without compromising privacy. To                  isting frameworks share a critical limitation: they enforce
+                                              stabilize variational inference, we introduce a               a monolithic reward model. Human values are inherently
+                                             Federated Mixture Prior that enables clients to                pluralistic and can be conflicting--for instance, preferences
+                                              leverage the aggregate population distribution as             often diverge between helpfulness and harmlessness (San-
+                                              a dynamic prior. Furthermore, we incorporate                  turkar et al., 2023; Poddar et al., 2024). Aggregating these
+                                              an Orthogonal Loss that explicitly enforces the               heterogeneous distributions into a single global model yields
+                                              separation of preference prototypes in the latent             theoretical sub-optimality (Shirali et al., 2025). By aiming
+                                              space. Experiments on the HH-RLHF dataset                     for a monolithic solution, these methods implicitly enforce a
+                                              demonstrate that FedVPA-GP significantly out-                 consensus that does not exist, resulting in a one-size-fits-all
+                                              performs monolithic baselines, successfully dis-              model that fails to satisfy distinct client needs.
+                                              entangling conflicting user intents and enabling
+                                              dynamic preference switching.                                 While Variational Preference Learning (VPL) (Poddar et al.,
+                                                                                                            2024) offers a pathway to personalization by modeling user
+                                        1. Introduction                                                     intent as a latent variable, adapting it to the federated setting
+                                                                                                            presents a fundamental challenge driven by two intrinsic
+                                        Reinforcement Learning from Human Feedback (RLHF)                   characteristics of FL: data heterogeneity and data scarcity.
+                                        has established itself as the standard paradigm for aligning        In centralized regimes, the model learns a dense preference
+                                        Large Language Models (LLMs) with human intent (Chris-              manifold from pooled data, allowing it to distinguish sub-
+                                        tiano et al., 2017; Ziegler et al., 2019; Ouyang et al., 2022).     tle variations in user intent. In contrast, federated clients
+                                        However, its reliance on centralized data aggregation poses         operate on highly heterogeneous distributions, where each
+                                                                                                            client observes only a fragmented slice of global preferences,
+                                            1Department of CSE, POSTECH, Pohang, Republic of Korea          often restricted to a single mode like helpfulness or harm-
+                                        2National AI Research Lab, Seoul, Republic of Korea 3Graduate       lessness. Compounding this, the severe scarcity of local
+                                        School of AI, POSTECH, Pohang, Republic of Korea. Correspon-        samples causes the KL regularization term to dominate the
+                                        dence to: Jungseul Ok <jungseul@postech.ac.kr>.                     reconstruction objective during variational inference. Lack-
+                                                                                                            ing both the global context to position their preferences and
+                                        Proceedings of the 43 rd International Conference on Machine        sufficient data to support complex posterior estimation, the
+                                        Learning, Seoul, South Korea. PMLR 306, 2026. Copyright 2026        latent variable often degenerates to an uninformative prior.
+                                        by the author(s).                                                   This phenomenon, known as posterior collapse, renders
+
+                                                                                                         1
+Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+Federated Variational Preference Alignment with Gumbel-Softmax Prior (FedVPA-GP)
+
+(a) Federated Variational Binary Selector Training                                            (b) Local Training Loss
+
+                            Helpful                             Harmless     Gumbel-softmax Sampling                Orthogonal Loss: - cos , 
+
+   Client 1 1 Preference                Client 2 2 Preference                                 Gumbel 0,1            1 (Helpful)
+                                                                                                             prior
+          Local Training                       Local Training                mixture                                             2 (Harmless)
+ Variational Encoder: 1   1           Variational Encoder: 2   2
+Variational Binary Selector: 1 ,     Variational Binary Selector: 2 ,        Differentiable Prior                                             
+                                                                                                                                 Latent Space
+    Preference Statistics: 1, 1          Preference Statistics: 2, 2
+                                                                             (c) Preference Alignment Reinforcement Learning
+
+                         Global Server                                                          Labeling Process
+
+Federated Mixture Prior                 Model Aggregation                                           ~ mixture
+                                                                                               = argmax  , 
+mixture  =     ; , 2                 ,   FedAvg ,                            Unlabeled Pairs                        Pseudo Labeled  Final
+                                                                                 , , 
+                                                                                                                    Dataset         Aligned LLM
+
+Figure 1. Overview of the proposed FedVPA-GP framework. (a) Illustrates the federated training process of the variational binary selector.
+(b) Details the local variational objective designed to enhance inference. (c) Depicts the subsequent preference alignment stage using the
+trained selector.
+
+the personalization mechanism ineffective in decentralized                         while preserving data privacy.
+environments (Bowman et al., 2016; Alemi et al., 2018).
+                                                                                · Stabilized Variational Inference and Disentangle-
+To overcome these challenges, we propose Federated Vari-                           ment: To overcome data scarcity and prevent posterior
+ational Preference Alignment with Gumbel-Softmax Prior                             collapse in federated settings, we introduce a mech-
+(FedVPA-GP). We bridge the gap between local data spar-                            anism combining a Federated Mixture Prior with an
+sity and global distribution requirements through two core                         Orthogonal Loss. This approach stabilizes posterior
+mechanisms. First, we introduce a Federated Mixture                                estimation and enforces the semantic separation of dis-
+Prior that aggregates learned distributions from other                             tinct preference prototypes.
+clients, serving as a dynamic prior that stabilizes local in-
+ference. Second, to explicitly prevent posterior collapse                       · Empirical Validation: Experiments on the HH-RLHF
+and ensure semantic disentanglement, we incorporate an                             dataset (Bai et al., 2022) demonstrate that FedVPA-GP
+Orthogonal Loss that enforces the separation of conflicting                        significantly outperforms monolithic baselines (e.g.,
+preference prototypes in the latent space. By combining                            FedBiscuit, FedDPO) with robust generalization to
+these with Gumbel-Softmax relaxation for end-to-end dif-                           unseen clients. Qualitative analysis confirms that our
+ferentiability (Jang et al., 2017), FedVPA-GP successfully                         model successfully disentangles preferences.
+learns personalized reward models without sharing raw data,
+as shown in the Figure 2b.                                                   2. Related Works
+
+Extensive experiments on the HH-RLHF dataset (Bai et al.,                    Reinforcement Learning from Human Feedback (RLHF)
+2022) demonstrate that FedVPA-GP significantly outper-                       Since the seminal work of Christiano et al. (2017), RLHF
+forms monolithic baselines. Qualitative analysis further                     has become a standard framework for aligning LLMs. The
+confirms that our algorithm successfully disentangles prefer-                typical pipeline involves training a reward model on prefer-
+ences in the latent space, enabling the model to dynamically                 ence pairs to guide policy optimization via PPO (Schulman
+switch between helpful and harmless modes based on the                       et al., 2017; Ouyang et al., 2022). Recently, methods such
+inferred context.                                                            as Direct Preference Optimization (DPO) (Rafailov et al.,
+                                                                             2023), IPO (Azar et al., 2024), and KTO (Ethayarajh et al.,
+Our contributions are summarized as follows:                                 2024) have been proposed to stabilize training by optimiz-
+                                                                             ing the policy directly without an explicit reward model.
+   · Federated Variational Preference Alignment: We                          These approaches primarily operate in centralized settings,
+      address the limitation of monolithic reward models                     assuming access to aggregated datasets. Applying them
+      in capturing conflicting user preferences. By integrat-                to scenarios where data is distributed across edge devices
+      ing variational inference into Federated Learning, our                 introduces challenges related to data privacy and regula-
+      framework effectively adapts to diverse user intents
+
+                                                                          2
+Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+                                                                    sA and sB are two candidate responses from a Large Lan-
+                                                                    guage Model (LLM), and y  {0, 1} indicates the user's
+                                                                    preference (with y = 1 denoting sA  sB).
+
+                                                                    3.1. Standard Federated Preference Alignment
+
+(a) FedVPL  (b) FedVPA-GP                                           In standard Federated RLHF settings, the goal is to learn a
+                                                                    global reward model r(sA, sB) that maximizes the likeli-
+                                                                    hood of user preferences across all clients. The preference
+                                                                    probability is typically modeled using the Bradley-Terry-
+                                                                    Luce (BTL) model (Bradley & Terry, 1952; Luce, 1959):
+
+Figure 2. Visualization of Latent Variable Distributions. (a)            p(y = 1|sA, sB) = (r(sA) - r(sB)), (1)
+FedVPL suffers from posterior collapse, where latent codes zVPL
+cluster indistinguishably. (b) Our method (FedVPA-GP) effec-        where (·) is the sigmoid function. The federated ob-
+tively disentangles user preferences, showing distinct modes in
+zFedVPA-GP corresponding to different client groups.                jective minimizes the aggregate negative log-likelihood:
+
+                                                                    min  K    EDi [-  log  p (y  |  sA,  sB )].
+                                                                         i=1
+
+tory compliance (European Parliament and Council of the             However, this formulation assumes a single consensus re-
+European Union, 2016).                                              ward function r, which inevitably averages out conflicting
+                                                                    preferences (e.g., "Helpful" vs. "Harmless") and fails to
+                                                                    capture user-specific nuances (Poddar et al., 2024).
+
+Federated Preference Alignment To address privacy con-              3.2. Variational Preference Learning (VPL)
+cerns, recent studies have integrated alignment techniques
+with Federated Learning. Wu et al. (2024) proposed FedBis-          To address heterogeneity, we adopt a latent conditional
+cuit, which utilizes client-side adapters to learn preference       framework. We assume each user i is governed by a con-
+representations. Similarly, Ye et al. (2024) introduced Fed-        tinuous latent preference vector zi  Rd that conditions the
+DPO, extending DPO to the federated setting by aggregat-            reward model. For binary choice tasks, we condition the
+ing gradients to update a global policy. These frameworks           model's logits on zi through a learned projection network:
+generally aim to learn a global consensus model. While
+effective for privacy, this global aggregation approach tends           logits(sA, sB | zi) = logitsbase(sA, sB) + f(zi), (2)
+to average the preference distributions across clients, which
+may limit the model's flexibility in scenarios where user           where f : Rd  R|C| is a learned linear projection (latent
+preferences are heterogeneous or conflicting (Shirali et al.,       projection) that maps the latent vector to logit adjustments,
+2025).                                                              and C is the set of choices (typically {A, B}). The choice
+                                                                    probability is then computed via softmax over the condi-
+Personalized and Pluralistic Alignment Recognizing                  tioned logits.
+the diversity of human values (Santurkar et al., 2023),
+researchers have explored personalization in centralized            Since zi is unobserved, we treat it as a latent variable and em-
+settings. Techniques include multi-objective optimization
+(Rame et al., 2023), attribute steering (Dong et al., 2023),        ploy Variational Inference (VI) (Kingma & Welling, 2014).
+and weight merging (Jang et al., 2023). Notably, Variational
+Preference Learning (VPL) (Poddar et al., 2024) models user         We introduce a local variational posterior q(z | Di) =
+intent as a latent variable to capture continuous preference        N (z; µi, i2I) parameterized by  to approximate the true
+manifolds. However, these methods typically require access          posterior. The encoder extracts preference features (e.g.,
+to the full dataset to learn the latent structure. Extending
+such variational approaches to Federated Learning presents          embedding difference h = hchosen - hrejected) and outputs
+specific challenges, particularly regarding local data sparsity     posterior parameters (µi, i2). The latent vector is sampled
+and the estimation of stable posteriors in isolated environ-        using the reparameterization trick: zi = µi + i  , where
+ments.                                                                N (0, I) and i = exp(0.5·log i2);  denotes element-
+                                                                    wise multiplication. For brevity in the method (Sec. 4.1),
+
+                                                                    we define
+
+                                                                         qi := q(z | Di), N0 := N (0, I).         (3)
+
+3. Preliminaries                                                    Thus qi denotes client i's variational posterior, and N0 the
+                                                                    standard Gaussian prior.
+We consider a Federated Learning (FL) system consisting
+of K clients. Each client i  {1, . . . , K} has a private           The objective is to maximize the Evidence Lower Bound
+dataset of pairwise preferences Di = {(sA, sB, y)}, where           (ELBO):
+
+                                                                    L = Eq(z|Di) [log p(Di | z)] - DKL(qi  p(z)), (4)
+
+                                                                 3
+Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+where p(z) is the prior over latent preferences and  is a           the frozen base LLM. To isolate the preference signal from
+regularization coefficient. In the baseline VPL ablation we         generic semantics, we construct a difference embedding
+use p(z) = N0.                                                      h = hchosen - hrejected from the response regions only.
+                                                                    Concretely, we locate each response span via answer-token
+3.3. Limitations of Federated Variational Preference                markers in the input and take the final-token hidden state
+     Learning                                                       of each span as its representation; this final-token pooling
+                                                                    inherits attention from all preceding response tokens while
+Transposing VPL to FL introduces critical challenges stem-          excluding the prompt region.
+ming from preference heterogeneity and data sparsity,
+which monolithic priors fail to address.                            The difference vector h is processed by a feature extractor
+                                                                    (a multi-layer perceptron) that transforms the raw embed-
+Sparsity and Instability: Data fragmentation leaves each            ding difference into a lower-dimensional feature represen-
+client with a small local dataset |Di|, causing the variational     tation. This feature extractor learns to distill preference-
+posterior qi to be estimated with high variance. Insufficient       specific signals while suppressing general response char-
+samples lead to unstable gradients and poor convergence             acteristics. The processed features are then passed to the
+when training from scratch. To address this, we propose a           variational encoder to parameterize the local posterior dis-
+Federated Mixture Prior, which leverages the aggregated             tribution q(z | Di).
+distributions of other clients as a dynamic prior. This mecha-
+nism stabilizes local inference by transferring global knowl-                            q(z | Di) = N (z; µi, i2I).        (5)
+edge, allowing clients to learn reliable posteriors even with
+sparse data.                                                        To further guard against posterior collapse driven by un-
+
+Heterogeneity and Posterior Collapse: In centralized                bounded variance, we cap the predicted log-variance,
+VPL, the model learns a global latent structure from pooled         log i2  min(log i2, log m2 ax); this prevents the encoder
+data. In FL, however, clients infer in isolation using a            from trivially matching the prior by inflating . We then
+generic standard Gaussian prior N0. This lack of global             employ the reparameterization trick zi = µi + i  , with
+guidance often leads to posterior collapse, where the latent          N (0, I), to enable gradient-based optimization. By
+variable z degenerates to the uninformative prior and fails         conditioning on h, our design forces zi to encode the rela-
+to encode personalized preferences (Bowman et al., 2016;            tive direction of user preferences rather than static response
+Alemi et al., 2018). As illustrated in Figure 2b, this results
+in an entangled latent space where distinct preference clus-        content.
+ters fail to emerge. To prevent this collapse and enforce a
+semantically meaningful structure, we introduce an Orthog-          Federated Mixture Prior with Learnable Gumbel-
+onal Loss (Sec. 4.2), which explicitly separates conflicting        Softmax Weights: To mitigate local data sparsity, we lever-
+preference prototypes.                                              age the population-level distribution as a dynamic prior.
+                                                                    However, simply averaging distributions from all clients
+4. Federated Variational Preference Alignment                       is suboptimal due to preference heterogeneity. To address
+   with Gumbel-Softmax Prior                                        this, we propose a Federated Mixture Prior with learnable
+                                                                    weights. Let S  {1, . . . , K} be the set of participat-
+We propose Federated Variational Preference Alignment               ing clients. We construct the mixture prior pm(ii)xture(z) as
+with Gumbel-Softmax Prior (FedVPA-GP), a framework                  a weighted sum of peer posteriors Nj(z):
+designed to learn personalized reward models in a privacy-
+preserving manner. Unlike previous approaches that sim-                                  pm(ii)xture(z) =      wj · Nj(z),  (6)
+ply aggregate gradients (Wu et al., 2024; Ye et al., 2024),
+FedVPA-GP treats user personalization as a distributed con-                                                jS
+tinuous latent variable inference problem. We first detail
+our variational inference mechanism with the proposed mix-          where wj represents the relevance weight of client j's distri-
+ture prior, followed by the orthogonal regularization for           bution to the current client i.
+disentanglement and finally the two-stage training strategy.
+                                                                    To compute the KL divergence DKL(qi  pm(ii)xture) stably, we
+4.1. Variational Inference with Federated Mixture Prior             employ the log-sum-exp trick for the log-mixture probabil-
+                                                                    ity:
+Inference Network: Each client maintains a local vari-
+ational encoder q(z | Di). Given a preference pair                                                                          
+(sA, sB, y), we extract hidden representations hA, hB from
+                                                                    log  pm(ii)xture(z)  =  max   aj  +log         exp(aj - max ak) ,
+
+                                                                                               j               jS                      k
+
+                                                                                                                            (7)
+
+                                                                    where aj = log wj + log Nj(z). This formulation prevents
+
+                                                                    numerical underflow when aggregating probabilities from
+
+                                                                    numerous peers.
+
+                                                                 4
+Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+Gumbel-Softmax Relaxation: Instead of static weighting,            local loss function for client i is:
+we optimize these coefficients to prioritize compatible peers
+using the Gumbel-Softmax relaxation (Jang et al., 2017).                                                       
+The weights are computed via the reparameterization trick:
+                                                                   Li(, ) = -Ezq                         log p(y | sA, sB, z)
+
+                                                                   (sA,sB ,y)Di
+
+wj =   exp((log j + gj)/ ) ,  (8)                                                                      Lrecon
+      kS exp((log k + gk)/ )
+                                                                   +  · DKL(q(z | Di)  p(mii)xture(z))
+where j are learnable logits, gj  Gumbel(0, 1) is Gumbel                                                       (10)
+noise, and  is the temperature. By minimizing the KL diver-                           Lreg (Prior Matching)
+gence, the model automatically learns to upweight informa-
+tive peers with similar preference structures while filtering      +  · Lorthogonal(z),
+out conflicting noise. The logits {j} are local trainable
+parameters per client and are excluded from federated aver-        Lortho
+aging, so each client retains a personalized peer-weighting
+strategy.                                                          where  controls KL regularization and  weights the sep-
+                                                                   aration penalty. The first two terms constitute the negative
+4.2. Orthogonal Loss for Preference Separation                     ELBO, while the third enforces orthogonality.
+
+To ensure the latent space semantically separates diverse          4.4. Two-Stage Training Strategy
+preference modes and prevents posterior collapse, we in-
+troduce an orthogonal loss motivated by (Li et al., 2024).         Finally, we describe the deployment pipeline, adopting a
+We maintain a set of M learnable prototype vectors                 two-stage strategy (Wu et al., 2024) to handle heterogeneity
+{pm}M m=1  Rd.                                                     efficiently.
+
+Prototype Initialization: We initialize these prototypes           Stage 1 (Federated Selector Training): We train the varia-
+using QR decomposition (Saxe et al., 2013). This process           tional binary preference selector using the objective Li(, )
+transforms a random initialization into a strictly orthonormal     defined above. In this phase, each client learns a posterior
+basis, ensuring that prototypes begin in mutually orthogonal       q(z | Di) and predicts choices conditioned on zi. The
+subspaces. The resulting basis is then projected to a fixed        preference prediction is performed via a Latent Conditional
+radius to guarantee sufficient separation from the origin.         Reward Model:
+
+Server-Side Label Assignment: To guide this separation,               logits(sA, sB | zi) = logitsbase(sA, sB) + f(zi), (11)
+the server performs balanced k-means clustering (with k =
+M ) on the collected client means {µ¯i} from the previous          where f is a small MLP d6432|C| mapping the la-
+round and assigns a prototype index yi  {1, . . . , M } to         tent vector zi to logit adjustments. Clients leverage the
+each client.                                                       mixture prior for knowledge transfer, enabling stable in-
+                                                                   ference despite local data sparsity without exchanging raw
+Loss Computation: Clients encourage their latent z to              data.
+align with the assigned prototype pyi while maintaining
+orthogonality among all prototypes. The loss combines a            Base-logit dropout. For base models where the frozen LLM
+pull term and an orthonormality constraint:                        already encodes a strong {A, B} preference signal (e.g.,
+                                                                   Qwen-2 0.5B), the latent residual f(z) above receives little
+   Lorthogonal(z) = z - pyi 22 +  · PPT - IM 2F , (9)              gradient, exacerbating posterior collapse. We optionally ap-
+                                                                   ply Bernoulli dropout with rate plogit to the base choice-logit
+where P  RM×d is the matrix of stacked prototypes. This            pair during training, forcing z to carry the full predictive
+mechanism forces latent representations into distinct or-          signal on those steps. We use plogit = 0.5 for Qwen-2 0.5B
+thogonal subspaces, effectively disentangling conflicting          and 0.0 for Gemma-2B.
+preferences (e.g., helpful vs. harmless).
+                                                                   Stage 2 (Conditional RLHF): We perform Centralized
+4.3. Federated Variational Objective                               RLHF (Rafailov et al., 2023) on the server. We employ DPO
+During Stage 1, we aim to maximize the Evidence Lower              to train a policy conditioned on the inferred client context z
+Bound (ELBO) regularized by the orthogonal loss. The               (e.g., z  qi). The converged selector from Stage 1 serves as
+                                                                   the reward model, scoring generations as logits(sA, sB | z).
+                                                                   This decoupling avoids the prohibitive communication costs
+                                                                   of federated generation and mitigates training instability
+                                                                   caused by conflicting local gradients (Wu et al., 2024).
+
+                                                                5
+     Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+Algorithm 1 Server-Side: Federated Aggregation, Prior                Algorithm 2 Client-Side: Local Variational Training
+Management, and Stage 2 RLHF
+                                                                     Require: Local dataset Di, global parameters t, t, mixture
+
+Require: Clients K, rounds T , KL weight , orthogonal weight              prior pmixture(z) (if t > 1), local steps E, learning rate , KL
+
+                                                                          weight , orthogonal weight 
+Ensure: Global parameters T , T , client z distributions             Ensure: Updated parameters it, ti, average z distribution
+
+     {µ¯Ti , ¯i2}iK=1; fine-tuned policy (Stage 2)                       (µ¯i, ¯i2), sample size ni
+                                                                      1: Receive t, t from server
+ 1: Stage 1: Federated selector training
+ 2: Initialize 0, 0 (base model frozen, only VPL components          2: if mixture prior received then
+                                                                     3: Update local prior: pmixture(z)  {(µj , j2), wj }jSt-1
+     trainable)
+                                                                     4: else
+3: for round t = 1, 2, . . . , T do
+4: Sample clients St  {1, . . . , K} (typically |St| = 10)           5: Use standard prior: pmixture(z) = N (0, I)
+5: Broadcast t, t to St
+                                                                     6: end if
+6: if t > 1 then                                                     7: Initialize: it  t, it  t
+
+7:   Broadcast mixture prior {(µj , j2), wj }jSt-1 to St             8: Initialize: Zbatch   (for collecting z values)
+
+8: end if                                                            9: for local step e = 1, . . . , E do
+
+9: Wait for client updates                                           10: for batch (sA, sB, y)  Di do
+
+10: Receive (it, ti, µ¯i, ¯i2, ni) from each client i  St            11:  Extract features: hchosen, hrejected  LLM(sA, sB)
+
+11:  Aggregate:  t+1      1     iSt it                               12:  Compute difference: h = hchosen - hrejected
+                        |S t |
+                                                                     13:  Process: fi  FeatureExtractor(h)
+12:  Aggregate:  t+1      1     iSt ti
+                        |S t |                                       14:  Encode: (µi, i2)  qti (fi)
+
+13: Store mixture components {(µ¯i, ¯i2, ni)}iSt for next            15:  Sample: zi  N (µi, i2I) via reparameterization trick
+
+     round; the mixture weights wj are computed on the client        16:  Collect: Zbatch  Zbatch  {zi}
+
+     side via Eq. 8 (learnable logits with Gumbel-Softmax relax-     17:  Project: logits  LatentProjection(zi)
+
+     ation).                                                         18:  Condition: logits  logitsbase + logits
+
+14: end for                                                          19:  Compute reconstruction loss: Lrecon  - log pit (y |
+
+15: Stage 2: Conditional RL (selector as reward)                          sA, sB, zi)
+
+16: Load VPL components from selector: encoder q, feature            20:  Compute KL divergence: LKL   · DKL(qti (z |
+
+     extractor, Z-TO-EMBEDDING                                            ·)pmixture(z))
+17: Load client average z {µ¯i}K i=1 (or compute from selector +
+                                                                     21:  Compute orthogonal loss: Lortho   · Lorthogonal(zi)
+     training data)
+18: Freeze selector (T , T ); use logits(sA, sB | z) as reward       22:  Total loss: Li  Lrecon + LKL + Lortho
+
+19: for each DPO step (on server, no federated rounds) do            23:  Update: it, ti via SGD on Li (only VPL components,
+
+20: Get z for batch: from data, or µ¯i by client i, or infer via          base model frozen)
+
+     q(· | features)                                                 24: end for
+
+21: Inject z into policy: inputs embeds  base embeds +               25: end for
+                                                                     26: Compute average z distribution: µ¯i  mean({µi}), ¯i2 
+     Z-TO-EMBEDDING(z)
+                                                                          var({zi  Zbatch})
+22: Generate conditioned on z; score with selector                   27: Send (it, ti, µ¯i, ¯i2, |Di|) to server
+
+     logits(sA, sB | z); update policy via DPO
+
+23: end for
+
+5. Experiments                                                       Stage 2 (Conditional RLHF) does not access any personal
+                                                                     preference labels. Only prompts from the HH-RLHF corpus
+5.1. Experimental Settings                                           are used, and the (chosen, rejected) pairs consumed by DPO
+                                                                     are constructed from on-policy generations of the current
+We evaluate our framework on the HH-RLHF dataset (Bai                policy, labeled by the Stage-1 selector conditioned on the
+et al., 2022), which contains pairwise comparisons focused           inferred client context z.
+on helpfulness and harmlessness. To simulate a hetero-
+geneous federated setting, we implement a strict Non-IID             Models We utilize two base models to validate perfor-
+partition where clients are divided into two disjoint groups:        mance across different scales: Qwen-2 0.5B (Yang et al.,
+50% of clients exclusively hold preference pairs labeled for         2024) and Gemma-2B (Gemma Team et al., 2024). To
+helpfulness, while the remaining 50% possess only harm-              ensure communication efficiency in the federated setting,
+lessness data. This partition models a scenario where local          both models are fine-tuned using LoRA (Hu et al., 2022).
+preference data are highly heterogeneous and conflicting.
+We vary the total number of clients K  {10, 50, 100} and             Detailed training configurations and hyperparameter settings
+sample 5 clients per round for K = 10 and 10 clients per             are provided in the Appendix.
+round for K  {50, 100} to assess scalability. Accord-
+ingly, we set the number of orthogonal prototypes to M = 2           Baselines We compare FedVPA-GP against three repre-
+to match HH-RLHF's two preference axes; M can be in-                 sentative baselines:
+creased for richer preference spaces with more distinct user
+clusters, which we leave to future work.                                · FedDPO (Ye et al., 2024): Standard federated DPO.
+
+                                                                  6
+            Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+Table 1. Main Results on HH-RLHF. We report the GPT-4 Win-rate (%) across varying client counts (N  {10, 50, 100}). Shaded rows
+indicate our proposed method, FedVPA-GP, which consistently achieves the best trade-off between helpfulness and harmlessness.
+
+                              10 CLIENTS                          50 CLIENTS                  100 CLIENTS
+
+MODEL       METHOD        HELPFUL HARMLESS                        HELPFUL HARMLESS            HELPFUL HARMLESS
+QWEN 2
+            FEDDPO        48.12 ± 1.52  77.34 ± 2.41              43.05 ± 2.15  69.22 ± 2.85  41.48 ± 2.32  67.15 ± 2.64
+GEMMA-2B    FEDBISCUIT    48.85 ± 1.41  75.12 ± 2.28              44.21 ± 1.98  71.45 ± 2.61  42.33 ± 2.11  69.42 ± 2.45
+            FEDVPL        62.24 ± 1.25  84.56 ± 1.95              54.18 ± 1.72  78.12 ± 2.12  53.05 ± 1.88  77.34 ± 2.21
+            FEDVPA-GP     66.45 ± 1.12  89.21 ± 1.68              58.32 ± 1.45  84.05 ± 1.94  55.18 ± 1.55  82.31 ± 2.05
+
+            FEDDPO        52.34 ± 1.75  83.12 ± 2.55              44.15 ± 2.31  78.45 ± 2.92  41.22 ± 2.58  75.33 ± 3.12
+            FEDBISCUIT    51.65 ± 1.58  82.45 ± 2.32              46.21 ± 2.05  78.12 ± 2.74  43.44 ± 2.22  76.05 ± 2.88
+            FEDVPL        66.82 ± 1.34  89.15 ± 2.05              56.41 ± 1.84  84.34 ± 2.31  53.25 ± 1.95  80.42 ± 2.45
+            FEDVPA-GP     73.21 ± 1.15  96.34 ± 1.75              64.48 ± 1.52  95.12 ± 2.05  60.15 ± 1.68  92.45 ± 2.15
+
+Table 2. Unseen Client Generalization Results. We report the      methods often suffer from a severe trade-off: they tend
+                                                                  to align the model towards harmlessness at the expense
+GPT-4 Win-rate (%) for seen and unseen clients. Shaded rows       of helpfulness. This is particularly evident in the Qwen-2
+indicate our proposed method.                                     experiments, where the helpfulness win-rate of baselines
+                                                                  stagnates or even decreases as the focus shifts to harmless-
+                   Seen                 Unseen                    ness. In contrast, FedVPA-GP effectively disentangles these
+                                                                  conflicting heterogeneous preferences by conditioning the
+Method      Helpful Harmless  Helpful Harmless                    reward model on client-specific latent variables. Conse-
+                                                                  quently, our method achieves a Pareto improvement, secur-
+FedDPO      46.35  78.62      47.27     79.15                     ing significantly higher win-rates in both helpfulness and
+FedBiscuit  47.32  79.25      47.62     78.42                     harmlessness compared to all baselines, demonstrating the
+FedVPL      56.23  83.82      49.25     75.21                     efficacy of personalization in satisfying diverse user needs.
+FedVPA-GP   65.28  94.25      63.16     91.23
+                                                                  Robustness to Heterogeneity and Data Sparsity The
+   · FedBiscuit (Wu et al., 2024): A Federated preference         experimental results also highlight the challenge of scaling
+      alignment algorithm that trains light-weight binary se-     in federated settings. As the number of clients increases,
+      lector through FL.                                          the amount of data each local client possesses becomes
+                                                                  increasingly sparse and the aggregate distribution more het-
+   · FedVPL: A naive adaptation of VPL (Poddar et al.,            erogeneous. Table 1 demonstrates that the performance of
+      2024) to FL using a fixed standard Gaussian prior           baselines, and even the naive FedVPL, deteriorates notably
+      N (0, I) without the orthogonal loss.                       under these conditions. While monolithic approaches strug-
+                                                                  gle to maintain performance amidst this increased noise,
+Evaluation Metrics Following standard benchmarks (Bai             FedVPA-GP exhibits robustness. By leveraging the Feder-
+et al., 2022), we employ GPT-4o (OpenAI, 2024) as a judge         ated Mixture Prior to share distributional knowledge with-
+to evaluate the quality of responses generated by the fine-       out sharing raw data, our approach maintains consistent
+tuned models against a frozen baseline. We report the             and high alignment performance even in large-scale settings
+Win-rate (%) for both Helpfulness and Harmlessness on             with high data sparsity, validating its stability in decentral-
+a held-out test set, assessing the model's ability to satisfy     ized environments.
+conflicting user preferences.
+                                                                  5.3. Analysis
+5.2. Personalized Preference Alignment
+                                                                  Analysis of Latent Space Disentanglement To under-
+Table 1 presents the GPT-4 win-rates of FedVPA-GP com-            stand how the model represents conflicting preferences, Fig-
+pared to state-of-the-art federated baselines on the HH-          ure 3 visualizes the evolution of the latent preference distri-
+RLHF dataset across varying client scales.                        bution (z) of 5 clients preferring helpfulness and 5 clients
+                                                                  preferring harmlessness using t-SNE (van der Maaten &
+Overcoming the Limits of Monolithic Reward Models                 Hinton, 2008). Red and blue points correspond to latent z
+As hypothesized, baselines relying on monolithic reward           inferred from clients prioritizing harmlessness and helpful-
+models (FedDPO and FedBiscuit) struggle to reconcile con-
+flicting preference objectives. As shown in Table 1, these
+
+                                                               7
+    Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+Figure 3. Evolution of client-specific latent preference distributions (z) across training rounds for FedVPL (top row) and FedVPA-GP
+(bottom row). Points are colored by preference type: red (harmlessness) and blue (helpfulness). Star markers () indicate orthogonal
+prototypes in FedVPA-GP. FedVPA-GP achieves better separation between preference types compared to FedVPL.
+
+90                89.21                                                             96.34   FedVPL                 strategy where 5 clients from each cluster were used for
+    84.5685.7086.00                                                                         FedVPL+Ortho           training (Seen), while the remaining 5 clients from each
+                                                               90 89.1590.2090.80           FedVPL+GB Prior        cluster were reserved for evaluation (Unseen). For the
+80Win rate (%)                                                                              FedVPA-GP (ours)       variational approaches (FedVPL and FedVPA-GP), we per-
+                                                 Win rate (%)  80                                                  formed variational inference on the unseen clients' local
+70                       63.2464.1064.5066.45                                                            75.21     datasets to estimate their latent preference vectors z with-
+                                                               70                          66.8267.8068.20         out updating the model parameters. As shown in Table 2,
+                                                                                                                   monolithic baselines like FedDPO and FedBiscuit exhibit
+60                                                             60                                                  consistent performance across seen and unseen groups, but
+                                                                    Harmlessness                                   their overall win-rates are limited due to their inability to
+    Harmlessness         Helpfulness                                                       Helpfulness             model personalization. In contrast, FedVPL suffers a signif-
+                                                                                                                   icant performance degradation on unseen clients, indicating
+    (a) Qwen-2 0.5B                                            (b) Gemma-2B                                        a failure to generalize the latent preference structure. How-
+                                                                                                                   ever, FedVPA-GP demonstrates stability, maintaining high
+Figure 4. Ablation study: helpfulness and harmlessness win rate                                                    win-rates on unseen clients that are comparable to the seen
+(%). (a) Qwen-2 0.5B. (b) Gemma-2B. Methods: FedVPL, Fed-                                                          clients. This result suggests that our proposed mixture prior
+VPL+Ortho, FedVPL+GB Prior, FedVPA-GP.                                                                             and orthogonal regularization enable the model to learn a
+                                                                                                                   semantically meaningful and continuous latent space, allow-
+ness, respectively. As observed in the top row, the baseline                                                       ing it to effectively capture and condition on the preferences
+FedVPL suffers from posterior collapse, where the distribu-                                                        of novel users via simple inference.
+tions for these distinct preference types remain entangled
+and non-separable throughout the training process. In con-                                                         5.4. Ablation Study
+trast, FedVPA-GP demonstrates a clear trajectory towards
+disentanglement. Driven by the Federated Mixture Prior                                                             Component Contributions We analyze the impact of
+and Orthogonal Loss, our method progressively structures                                                           our key components in Figure 4. Adding the Orthogonal
+the latent space, resulting in a sharp separation between                                                          Loss (FedVPL+Ortho) consistently improves both metrics
+the two preference types. This structured latent topology                                                          by preventing latent overlap, thereby mitigating posterior
+confirms that the model successfully learns to distinguish be-                                                     collapse. Meanwhile, the Federated Mixture Prior (Fed-
+tween conflicting user intents, enabling dynamic adaptation                                                        VPL+GB Prior) stabilizes training against data sparsity by
+to local contexts.                                                                                                 leveraging the aggregate population distribution as a dy-
+
+Generalization to Unseen Clients To evaluate the robust-
+ness of our framework against new users, we conducted
+an experiment with 20 clients, equally divided into help-
+fulness and harmlessness clusters. We utilized a hold-out
+
+                                                                                                                8
+Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+Table 3. Robustness to Client Population Ratios. GPT-4               GP transmits the per-client mixture statistics (µ¯i, ¯i2) 
+Win-rate (%) on HH-RLHF (Qwen-2 0.5B, N = 10 clients)                R32 ×R32. With FP32, this amounts to only 256 Bytes per
+under varying helpfulness/harmlessness client population splits.     client per round, which is negligible compared to a single
+                                                                     LoRA adapter (on the order of MBs) or the gradient payload.
+ Shaded rows indicate our method, FedVPA-GP.
+
+Ratio (H/Hm) Method  Helpful Harmless
+
+70 / 30  FedBiscuit 49.12  72.13                                     Training Latency Each federated round of FedVPA-GP
+         FedVPA-GP 68.12   87.14                                     takes approximately 1.18× the wall-clock time of FedDPO
+                                                                     under matched batch size and local-update steps. This mod-
+30 / 70  FedBiscuit 45.34  75.52                                     est overhead is incurred by the additional forward pass
+         FedVPA-GP 65.56   89.14                                     through the variational encoder and the KL and orthogonal
+                                                                     loss terms, and is a worthwhile trade-off given the Pareto
+80 / 20  FedBiscuit 51.24  70.24                                     improvements demonstrated in Section 5.
+         FedVPA-GP 68.25   87.23
+                                                                     Taken together, the additional memory, compute, and com-
+20 / 80  FedBiscuit 44.15  78.21                                     munication costs introduced by FedVPA-GP are negligible
+         FedVPA-GP 64.88   90.32                                     relative to the scale of the base LLM, making the framework
+                                                                     readily deployable in realistic federated settings without
+namic prior. Ultimately, the full FedVPA-GP framework                altering existing infrastructure budgets.
+achieves superior performance, demonstrating that the Mix-
+ture Prior ensures robust learning while the Orthogonal Loss         6. Conclusion
+enforces semantic disentanglement, yielding the best trade-
+off between conflicting preferences.                                 We present FedVPA-GP, a federated framework that learns
+                                                                     personalized reward models without sharing raw prefer-
+Robustness to Client Population Ratios The 50/50 split               ence data. Existing federated alignment methods enforce a
+in Table 1 is an idealized symmetric case; in practice, the          monolithic reward that averages out conflicting user intents,
+relative frequency of preference modes across clients can            while naive variational personalization in this setting suffers
+vary substantially. We therefore stress-test FedVPA-GP               from posterior collapse driven by local data sparsity and
+under four asymmetric splits between helpfulness-preferring          heterogeneity. To address these challenges, we introduce a
+and harmlessness-preferring clients (70/30, 30/70, 80/20,            Federated Mixture Prior that leverages the aggregate pop-
+and 20/80) on Qwen-2 0.5B with N = 10 clients. As                    ulation distribution as a dynamic prior, together with an
+reported in Table 3, FedVPA-GP consistently outperforms              Orthogonal Loss that explicitly structures the latent space.
+the FedBiscuit baseline by approximately 17­20 points in
+helpfulness and 12­17 points in harmlessness across all              Empirical results on HH-RLHF show that FedVPA-GP sig-
+four ratios. The Federated Mixture Prior is distribution-            nificantly outperforms monolithic baselines, disentangling
+aware: even when one preference mode is heavily under-               conflicting user intents within a structured latent space and
+represented, the learnable Gumbel-Softmax weights allow              generalizing to unseen clients via inference alone. Our work
+each client to upweight informative peers and avoid the              provides a foundation for personalized, privacy-preserving
+minority mode being averaged out by the monolithic update.           LLM alignment. Future directions include extending this
+                                                                     framework to capture more granular, multi-dimensional pref-
+5.5. Computational and Communication Efficiency                      erence attributes and investigating its scalability in large-
+                                                                     scale cross-device settings.
+We quantify the practical overhead introduced by FedVPA-
+GP on Qwen-2 0.5B; all numbers are reported per client per           Acknowledgment
+communication round unless stated otherwise.
+                                                                     This work was supported by Institute of Information &
+Parameter Overhead The variational modules (feature                  Communications Technology Planning & Evaluation (IITP)
+extractor, variational encoder, latent projection, and proto-        grants funded by the Korea government (MSIT) (No.
+types) add approximately 0.9M trainable parameters -- only           IITP-2026-RS-2024-00437866, Information Technology
+0.18% of the 494M base-model parameters -- which is com-             Research Center (ITRC); No. RS-2024-00509258, Global
+parable to the LoRA-adapter footprint already required by            AI Frontier Lab; No. RS-2026-25511821, ITRC Develop-
+every federated baseline.                                            ment of Personalized Media Service Recommendation and
+                                                                     Generative Technology; and No. RS-2019-II191906, Artifi-
+Communication Overhead In addition to the gradients                  cial Intelligence Graduate School Program (POSTECH)).
+and LoRA weights exchanged by all baselines, FedVPA-
+
+                                                                  9
+Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+Impact Statement                                                    Ethayarajh, K., Xu, W., Muennighoff, N., Jurafsky, D., and
+                                                                       Kiela, D. Kto: Model alignment as prospect theoretic
+This work advances privacy-preserving AI by enabling the               optimization. In International Conference on Machine
+alignment of LLMs with diverse user preferences without               Learning, 2024. URL https://openreview.net/
+centralizing sensitive data. By moving away from mono-                 forum?id=Duqy5E9nF8.
+lithic value systems, our framework respects the inherent
+pluralism of human values, allowing models to adapt to con-         European Parliament and Council of the European Union.
+flicting objectives like helpfulness and harmlessness. How-            Regulation (eu) 2016/679 of the european parliament and
+ever, extreme personalization carries the risk of creating             of the council of 27 april 2016 on the protection of natural
+"filter bubbles" where models might reinforce harmful user             persons with regard to the processing of personal data
+biases. While our method explicitly models harmlessness to             and on the free movement of such data. Official Journal
+mitigate this, future deployment must carefully balance per-           of the European Union, L119:1­88, 2016.
+sonalization with robust safety guardrails to ensure ethical
+boundaries are maintained.                                          Gemma Team, Mesnard, T., Hardin, C., Dadashi, R., Bhu-
+                                                                       patiraju, S., Pathak, S., Sifre, L., Rivie`re, M., Kale, M. S.,
+References                                                             Love, J., et al. Gemma: Open models. arXiv preprint
+                                                                       arXiv:2403.08295, 2024.
+Alemi, A., Poole, B., Fischer, I., Dillon, J., Saurous, R. A.,
+   and Murphy, K. Fixing a broken ELBO. In International            Hu, E. J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang,
+   Conference on Machine Learning (ICML), pp. 159­168.                 S., Wang, L., and Chen, W. Lora: Low-rank adaptation
+   PMLR, 2018.                                                         of large language models. In International Conference
+                                                                       on Learning Representations, 2022. URL https://
+Azar, M. G., Rowland, M., Piot, B., Guo, D., Calandriello,             openreview.net/forum?id=nZeVKeeFYf9.
+   D., Valko, M., and Munos, R. A general theoretical
+   paradigm to understand learning from human preferences.          Jang, E., Gu, S., and Poole, B. Categorical reparameteriza-
+   In International Conference on Artificial Intelligence and          tion with gumbel-softmax. In International Conference
+   Statistics (AISTATS), 2024.                                         on Learning Representations (ICLR), 2017.
+
+Bai, Y., Jones, A., Ndousse, K., Askell, A., Chen, A., Das-         Jang, J., Kim, S., Lin, B. Y., Wang, Y., Hessel, J., Zettle-
+   Sarma, N., Drain, D., et al. Training a helpful and harm-           moyer, L., Hajishirzi, H., Choi, Y., and Ammanabrolu, P.
+   less assistant with reinforcement learning from human               Personalized soups: Personalized large language model
+   feedback. arXiv preprint arXiv:2204.05862, 2022.                    alignment via post-hoc parameter merging, 2023. URL
+                                                                       https://arxiv.org/abs/2310.11564.
+Bowman, S. R., Vilnis, L., Vinyals, O., Dai, A., Jozefowicz,
+   R., and Bengio, S. Generating sentences from a continu-          Kairouz, P., McMahan, H. B., Avent, B., Bellet, A., Bennis,
+   ous space. In Proceedings of the 20th SIGNLL Conference             M., Bhagoji, A. N., et al. Advances and open problems in
+   on Computational Natural Language Learning (CoNLL),                 federated learning. Foundations and Trends® in Machine
+   pp. 10­21, 2016.                                                   Learning, 14(1­2):1­210, 2021.
+
+Bradley, R. A. and Terry, M. E. Rank analysis of incom-             Kingma, D. P. and Welling, M. Auto-encoding variational
+   plete block designs: I. the method of paired comparisons.           bayes. In International Conference on Learning Repre-
+   Biometrika, 39(3/4):324­345, 1952.                                  sentations (ICLR), 2014.
+
+Carlini, N., Tramer, F., Wallace, E., Jagielski, M., Herbert-       Li, H., Nguyen, M., and Pimentel-Alarco´n, D. Preventing
+   Voss, A., Lee, K., Roberts, A., Brown, T., Song, D.,                collapse in contrastive learning with orthonormal pro-
+   Erlingsson, U., et al. Extracting training data from large          totypes (clop), 2024. URL https://arxiv.org/
+   language models. In USENIX Security Symposium, vol-                 abs/2403.18699.
+   ume 6, 2021.
+                                                                    Luce, R. D. Individual choice behavior: A theoretical
+Christiano, P. F., Leike, J., Brown, T., Milani, M., Amodei,           analysis. John Wiley & Sons, 1959.
+   D., and Amodei, D. Deep reinforcement learning from
+   human preferences. In Advances in Neural Information             McMahan, B., Moore, E., Ramage, D., Hampson, S., and
+   Processing Systems (NeurIPS), volume 30, 2017.                     Arcas, B. A. y. Communication-efficient learning of deep
+                                                                       networks from decentralized data. In Artificial Intelli-
+Dong, Y., Wang, Z., Sreedhar, M. N., Wu, X., and Kuchaiev,             gence and Statistics (AISTATS), pp. 1273­1282, 2017.
+   O. Steerlm: Attribute conditioned sft as an (user-
+   steerable) alternative to rlhf, 2023. URL https://               OpenAI. Gpt-4o system card, 2024. URL https://
+   arxiv.org/abs/2310.05344.                                           openai.com/index/gpt-4o-system-card/.
+                                                                       OpenAI.
+
+                                                                10
+Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright, C.,           Liu, T., Ge, W., Deng, X., Zhou, X., Ren, X., Zhang,
+   Mishkin, P., Zhang, C., Agarwal, S., Slama, K., Ray, A.,          X., Wei, X., Ren, X., Liu, X., Fan, Y., Yao, Y., Zhang,
+   et al. Training language models to follow instructions            Y., Wan, Y., Chu, Y., Liu, Y., Cui, Z., Zhang, Z., Guo,
+  with human feedback. In Advances in Neural Information              Z., and Fan, Z. Qwen2 technical report, 2024. URL
+  Processing Systems (NeurIPS), volume 35, pp. 27730­                 https://arxiv.org/abs/2407.10671.
+   27744, 2022.
+                                                                   Ye, R., Wang, W., Chai, J., Li, D., Li, Z., Xu, Y., Du, Y.,
+Poddar, S., Wan, Y., Ivison, H., Gupta, A., and Jaques, N.           Wang, Y., and Chen, S. Openfedllm: Training large lan-
+   Personalizing reinforcement learning from human feed-              guage models on decentralized private data via federated
+   back with variational preference learning. arXiv preprint          learning. In Proceedings of the ACM SIGKDD Confer-
+   arXiv:2408.10075, 2024.                                            ence on Knowledge Discovery and Data Mining (KDD),
+                                                                      pp. 6137­6147, 2024.
+Rafailov, R., Sharma, A., Mitchell, E., Manning, C. D.,
+   Ermon, S., and Finn, C. Direct preference optimiza-             Ziegler, D. M., Stiennon, N., Wu, J., Brown, T. B., Radford,
+   tion: Your language model is secretly a reward model.             A., Amodei, D., and Christiano, P. F. Fine-tuning lan-
+   In Advances in Neural Information Processing Systems,              guage models from human preferences. arXiv preprint
+  volume 36, 2023.                                                    arXiv:1909.08593, 2019.
+
+Rame, A., Couairon, G., Dancette, C., Gaya, J.-B., Shukor,
+   M., Soulier, L., and Cord, M. Rewarded soups: towards
+   pareto-optimal alignment by interpolating weights fine-
+   tuned on diverse rewards. Advances in Neural Informa-
+   tion Processing Systems, 36:71095­71134, 2023.
+
+Santurkar, S., Durmus, E., Ladhak, F., Lee, C., Liang, P.,
+   and Hashimoto, T. Whose opinions do language mod-
+   els reflect? In International Conference on Machine
+  Learning (ICML), 2023.
+
+Saxe, A. M., McClelland, J. L., and Ganguli, S. Exact
+   solutions to the nonlinear dynamics of learning in deep
+   linear neural networks. arXiv preprint arXiv:1312.6120,
+   2013.
+
+Schulman, J., Wolski, F., Dhariwal, P., Radford, A., and
+   Klimov, O. Proximal policy optimization algorithms.
+   arXiv preprint arXiv:1707.06347, 2017.
+
+Shirali, A., Nasr-Esfahany, A., Alomar, A., Mirtaheri,
+   P., Abebe, R., and Procaccia, A. D. Direct align-
+   ment with heterogeneous preferences. arXiv preprint
+   arXiv:2502.16320, 2025.
+
+van der Maaten, L. and Hinton, G. Visualizing data using
+   t-sne. Journal of Machine Learning Research, 9(11):
+   2579­2605, 2008.
+
+Wu, F., Liu, X., Wang, H., Wang, X., and Gao, J. Towards
+   federated rlhf with aggregated client preference for llms.
+   arXiv preprint arXiv:2407.03038, 2024.
+
+Yang, A., Yang, B., Hui, B., Zheng, B., Yu, B., Zhou, C.,
+   Li, C., Li, C., Liu, D., Huang, F., Dong, G., Wei, H.,
+   Lin, H., Tang, J., Wang, J., Yang, J., Tu, J., Zhang, J.,
+   Ma, J., Yang, J., Xu, J., Zhou, J., Bai, J., He, J., Lin,
+  J., Dang, K., Lu, K., Chen, K., Yang, K., Li, M., Xue,
+   M., Ni, N., Zhang, P., Wang, P., Peng, R., Men, R., Gao,
+   R., Lin, R., Wang, S., Bai, S., Tan, S., Zhu, T., Li, T.,
+
+                                                               11
+            Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+A. Mathematical Proofs
+
+This section provides detailed mathematical proofs and derivations for key components of our method.
+
+A.1. KL Divergence with Mixture Prior
+
+A.1.1. DEFINITION AND COMPUTATION
+
+Theorem 1 (KL Divergence with Mixture Prior): The KL divergence between a posterior distribution qi(z) = N (z; µi, i2I)
+
+and a mixture prior pmixture(z) =   |S |  wj  ·  N  (z;  µj ,  j2 I )  is  given  by:
+                                    j=1
+
+                                   DKL(qi  pmixture) = Ezqi [log qi(z) - log pmixture(z)] ,                           (12)
+
+where S is the set of participating clients from the previous round and wj are the Gumbel-Softmax mixture weights computed
+on the client side via Eq. 8 from the local learnable logits j.
+
+Proof: By definition of KL divergence:
+
+DKL(qi  pmixture) =                                            qi(z)   log     qi(z)          dz
+                                                                             pmixture(z)
+
+                                                    = qi(z) [log qi(z) - log pmixture(z)] dz
+
+                                                    = Ezqi [log qi(z) - log pmixture(z)] .                            (13)
+
+For a multivariate Gaussian posterior qi(z) = N (z; µi, i2I) with dimension d, we have:
+
+log                                qi(z)  =    d  log(2)       -  1    d     log  i2,j  -  1    d  (zj  - µi,j )2  .  (14)
+                                             -                    2  j=1                   2  j=1       i2,j
+
+                                               2
+
+For the mixture prior, we compute:
+
+                                                                       |S |                        
+
+                                    log pmixture(z) = log  wj · N (z; µj, j2I) .                                      (15)
+
+                                                                       j=1
+
+Using Monte Carlo estimation with batch size B:
+
+                                               1B        log qi(z(b)) - log pmixture(z(b)) ,                          (16)
+                                    DKL  B
+                                                    b=1
+
+where z(b)  qi is sampled using the reparameterization trick:
+
+                                             z(b) = µi + i  (b), (b)  N (0, I),                                       (17)
+
+and i = exp(0.5 · log i2) with  denoting element-wise multiplication.
+
+
+A.1.2. LOG-SUM-EXP TRICK FOR NUMERICAL STABILITY
+Theorem 2 (Log-Sum-Exp Trick): For numerical stability when computing log pmixture(z), we use the log-sum-exp trick:
+
+                                                                       12
+        Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+                                     N                                    N
+
+                              log       exp(ai) = max ai + log                 exp(ai - max ai) .                   (18)
+                                                         i                                      i
+                                   i=1                                    i=1
+
+Proof: We factor out the maximum term:
+
+                                     N                               N
+
+                                        exp(ai) = exp(max ai) · exp(ai - max ai).                                   (19)
+                                                            i                              i
+                                   i=1                               i=1
+
+Taking the logarithm of both sides:
+
+                                     N                                    N
+
+                              log       exp(ai) = max ai + log                 exp(ai - max ai) .                   (20)
+                                                         i                                      i
+                                   i=1                                    i=1
+
+Since exp(ai - maxi ai)  [0, 1] for all i, this formulation is numerically stable and prevents overflow/underflow.
+For the mixture prior, we apply this trick with:
+
+                                              aj = log wj + log N (z; µj, j2I),                                     (21)
+
+where:
+
+        log                   N (z; µj, j2I)  =    d  log(2)   -  1    d  log  j2,k  -  1    d  (zk  - µj,k)2  .    (22)
+                                                 -                2  k=1                2  k=1       j2,k
+
+                                                   2
+
+
+
+A.2. Reparameterization Trick and Gradient Flow
+
+Theorem 3 (Reparameterization Trick Gradient Flow): Using the reparameterization trick, gradients with respect to z flow
+to µ and log 2.
+
+Proof: The reparameterization trick expresses the random variable z as a deterministic function of parameters and noise:
+
+                                        z = µ +   exp(0.5 · log 2),   N (0, I),                                     (23)
+
+where  = exp(0.5 · log 2).
+
+The partial derivatives are:
+
+                                                 z    = I (identity matrix),                                        (24)
+
+                                                 µ
+
+                                               z      =    exp(0.5 · log 2)  0.5.                                   (25)
+                                             log 2
+
+By the chain rule, for any function f (z):
+
+                                     f (z) f (z) z f (z)                  ,
+                                              =          ·=                                                         (26)
+                                        µ        z µ z
+
+                                     f (z) f (z) z                        f (z)
+                                    log 2 = z ·  log 2 = z ·     0.5.                                               (27)
+
+                                                               13
+            Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+This ensures that gradients can flow through the sampling operation, enabling end-to-end training of the variational encoder.
+
+
+A.3. Orthogonal Loss Formulation
+A.3.1. PULL LOSS
+The pull loss encourages latent representations z to align with their assigned prototypes:
+
+                                                  Lpull(z) = z - pyi 22,                            (28)
+
+where pyi is the prototype assigned to client i based on the server's orthogonal label yi  {0, 1}.
+
+A.3.2. ORTHONORMALITY CONSTRAINT
+
+To maintain orthogonality between prototypes, we enforce an orthonormality constraint:
+
+                                  Lorthonorm = PT P - IF2 ,                                         (29)
+
+where P = [p0, p1]T is the prototype matrix and  · F denotes the Frobenius norm.
+This constraint ensures that p0T p1 = 0 (orthogonality) and p02 = p12 = 1 (normalization).
+
+A.3.3. TOTAL ORTHOGONAL LOSS
+The combined orthogonal loss is:
+
+                                  Lorthogonal(z) =  · Lpull(z) +  · Lorthonorm,                     (30)
+
+where  = 1.0 (orthogonal weight) and  = 0.1 (orthonorm weight) are hyperparameters.
+
+This loss encourages latent representations to cluster around their assigned prototypes while ensuring that different preference
+types occupy orthogonal subspaces, thereby suppressing general features that are not preference-specific and preventing
+neural collapse.
+
+A.4. Evidence Lower Bound (ELBO) Derivation
+Theorem 4 (ELBO Derivation): The Evidence Lower Bound (ELBO) for variational inference is:
+
+LELBO = Eq(z|Di) [log p(Di | z)] -  DKL(q(z | Di)  p(z)),                                           (31)
+
+where  is a regularization coefficient.
+Proof: We start with the log-likelihood of the data:
+
+                                  log p(Di) = log p(Di | z)p(z)dz.                                  (32)
+
+Introducing the variational posterior q(z | Di):
+
+log p(Di) = log                                       q(z  |  Di)  ·  p (Di  |  z)p(z)
+                                                                                        dz
+                                                                      q(z | Di)
+
+                                  = log Eq(z|Di)              p(Di | z)p(z)      .                  (33)
+                                                                q(z | Di)
+
+                                                      14
+            Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+Applying Jensen's inequality (since log is concave):
+
+  log p(Di)  Eq(z|Di)                               log p(Di | z)p(z)
+                                                           q(z | Di)
+
+                                                                                                   p(z)
+  = Eq(z|Di) [log p(Di | z)] + Eq(z|Di)                                                 log
+                                                                                            q(z | Di)
+
+  = Eq(z|Di) [log p(Di | z)] - DKL(q(z | Di)  p(z)).                                                                           (34)
+
+Following the -VAE formulation (Alemi et al., 2018), we re-weight the KL term by a regularization coefficient  to control
+prior-matching pressure:
+
+  LELBO = Eq(z|Di) [log p(Di | z)] -  DKL(q(z | Di)  p(z)).                                                                    (35)
+
+For  = 1, the resulting objective is no longer a strict lower bound on log p(Di); it instead trades reconstruction fidelity
+against KL pressure, a regime known to mitigate posterior collapse in low-data settings (Alemi et al., 2018; Bowman et al.,
+2016).
+
+The first term is the reconstruction loss (preference alignment), and the second term is the regularization (prior matching).
+Maximizing the ELBO is equivalent to minimizing the negative ELBO:
+
+  Li(, ) = -ELBO(Di) = -Eq [log p(Di | z)] +  DKL(q(z | Di)  p(z)).                                                            (36)
+
+
+
+A.5. Standard Gaussian Prior KL Divergence
+
+For the baseline VPL ablation, we use a standard Gaussian prior p(z) = N (0, I). The KL divergence has a closed-form
+expression:
+Theorem 5 (Standard Gaussian Prior KL): For qi(z) = N (z; µi, i2I) and p(z) = N (0, I), the KL divergence is:
+
+                       1d                                      µ2i,j + i2,j - log i2,j - 1 .                                   (37)
+  DKL(qi  N0) = 2
+                                                       j=1
+
+Proof: For two multivariate Gaussians, the KL divergence is:
+
+                                            1    tr(2-11)          +  (µ2  -   µ1)T  -2 1(µ2    -  µ1)   -  d  +  log  |2|  .  (38)
+  DKL(N (µ1, 1)  N (µ2, 2)) = 2                                                                                        |1|
+
+For qi = N (µi, i2I) and p = N (0, I):
+
+                       1                tr(I -1  ·  i2I  )  +  (0  -  µi)T  I  -1(0  -  µi)  -  d  +  log   |I |
+  DKL(qi  N0) = 2                                                                                          |i2 I |
+
+     1                                  tr(i2I) + µTi µi - d - log |i2I|
+  =
+
+     2
+
+                                                                                        
+
+     1d                                                  d                     d
+  =
+                                               i2,j +       µi2,j - d -           log i2,j 
+     2
+                                          j=1          j=1                  j=1
+
+     1d                                      µi2,j + i2,j - log i2,j - 1 .                                                     (39)
+  =
+
+     2
+                                        j=1
+
+                                                               15
+            Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+
+
+A.6. Gumbel-Softmax for Differentiable Prior Sampling
+For sampling from the mixture prior (used in visualization and generation), we employ Gumbel-Softmax relaxation (Jang
+et al., 2017) with temperature  = 1.0 to enable differentiable sampling.
+Component probabilities:
+
+j =   exp((log wj     + gj)/                                               )      ,  (40)
+                      wk + gk                                              )/
+      |S |  exp((log                                                           )
+      k=1
+
+where gj  Gumbel(0, 1) are independent Gumbel random variables.
+Sampling:
+
+|S |
+
+zprior = j · zj , where zj  N (µj , j2I).                                            (41)
+
+j=1
+
+As   0, this approaches categorical sampling (hard assignment), while  > 0 provides a smooth, differentiable
+approximation.
+
+A.7. Stop-Gradient on Peer-Provided Prior Parameters
+
+Remark (Stop-Gradient on Peer Statistics): Within a single client's local update, the mixture-prior parameters {µj, j2}jS
+provided by peer clients enter the computation graph as detached constants and therefore receive no gradient on that client's
+pass.
+
+Justification: For the current client i, the mixture prior
+
+pm(ii)xture(z) = wj · N (z; µj , j2I)                                                (42)
+
+            jS
+
+is constructed from peer means µj and variances j2 that were computed during round t - 1 and broadcast to client i. These
+tensors are not leaf nodes in client i's autograd graph, so
+
+      Li    =   Li    =  0                                                           (43)
+      µj        j2
+
+on client i's backward pass. Peer parameters are updated by their respective owning clients in their own local training
+rounds; the Gumbel-Softmax weights wj, in contrast, are computed from the client-local trainable logits j (Eq. 8) and
+therefore do receive gradients.
+
+In practice, the gradient of Lrecon +DKL(qi  pm(ii)xture)+Lortho with respect to the local variational parameters (µi, log i2) is
+obtained by automatic differentiation through the reparameterized sample zi = µi + i   and the log-sum-exp computation
+of log p(mii)xture(zi); no manual derivation is required.
+
+
+
+B. Hyperparameter Details
+
+B.1. Hyperparameter Settings
+Table 4 provides the final hyperparameter values used in our experiments.
+
+               16
+Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+Table 4. Final hyperparameter settings for selector training (Stage 1) and RL training (Stage 2).
+
+Parameter                       Selector Training               RL Training
+
+Learning rate                   10-5 to 10-4 (model-dependent)  10-5 to 10-4 (model-dependent)
+Batch size                      4­8 (model-dependent)           1
+Gradient accumulation steps     4­8                             4­32 (model-dependent)
+Local update steps              30                              30
+Total rounds                    50                              50
+KL weight ()                    0.01                            ­
+Orthogonal loss weight ()       1.0                             ­
+Orthonorm weight ()             0.1                             ­
+Gumbel-Softmax temperature ( )  1.0                             ­
+Prototype scale (s)             5.0                             ­
+Latent dimension (d)            32                              ­
+Latent projection f             MLP d6432|C|                    ­
+Orthogonal label assignment     Balanced k-means                ­
+LoRA rank (r)                   8                               8
+LoRA alpha ()                   16                              16
+LoRA dropout (p)                0.05                            0.05
+Reward coefficient              ­                               0.1
+Max prompts for generation      ­                               50
+Generation batch size           ­                               3
+Max samples for reward          ­                               30
+
+C. Experimental Settings
+
+C.1. Dataset Details
+C.1.1. HH-RLHF DATASET
+We use the HH-RLHF (Helpful and Harmless from Human Feedback) dataset (Bai et al., 2022), which contains pairwise
+preference comparisons along two axes: helpfulness and harmlessness.
+Data splits:
+
+   · Train: 80%
+   · Validation: 10%
+   · Test: 10%
+
+Client configurations:
+
+   · Number of clients: K  {10, 50, 100}
+   · Sampling rates per round:
+
+         ­ K = 10: 5 clients per round
+         ­ K  {50, 100}: 10 clients per round
+
+Data characteristics:
+
+   · Data type: Pairwise preference comparisons
+   · Preference axes: Helpfulness, Harmlessness
+   · Each sample: (sA, sB, y) where y  {0, 1} indicates preference
+
+                                                                        17
+            Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+C.2. Model Details
+C.2.1. BASE LANGUAGE MODELS
+We conduct experiments using two base language models:
+
+   · Qwen-2 0.5B: A compact 0.5 billion parameter model from the Qwen-2 family (?), suitable for resource-constrained
+      federated environments.
+
+   · Gemma-2B: A 2 billion parameter model from Google's Gemma family (Gemma Team et al., 2024), providing a
+      larger model baseline for comparison.
+
+C.2.2. FINE-TUNING CONFIGURATION
+Both models are fine-tuned using LoRA (Low-Rank Adaptation) (Hu et al., 2022) to enable parameter-efficient fine-tuning
+in federated settings.
+LoRA parameters:
+
+   · LoRA rank: r = 8
+   · LoRA alpha:  = 16
+   · Dropout rate: p = 0.05
+
+Training configuration:
+
+   · During federated selector training (Stage 1): The base LLM is frozen; only the VPL components (feature extractor,
+      variational encoder, latent projection, and orthogonal prototypes) and LoRA adapters are updated.
+
+   · During RL training (Stage 2): The base LLM remains frozen; LoRA adapters and the Z-TO-EMBEDDING module are
+      trained via DPO conditioned on the inferred client context z, with the Stage 1 selector providing reward signals.
+
+C.3. Evaluation Settings
+C.3.1. WINRATE EVALUATION
+We evaluate the final policy using GPT-4 Win-rate (Bai et al., 2022):
+
+   · Judge: GPT-4 or gpt-4o-mini (for cost efficiency)
+   · Comparison: Fine-tuned model response vs baseline (frozen) model response
+   · Evaluation samples: Up to 30 samples per evaluation (for efficiency)
+   · Metrics:
+
+         ­ Helpful Win-rate (%): Percentage of responses where fine-tuned model is more helpful
+         ­ Harmless Win-rate (%): Percentage of responses where fine-tuned model is more harmless
+
+C.3.2. REWARD MODEL EVALUATION
+We also evaluate using reward model scores:
+
+   · Harmlessness score: Reward model's harmlessness score (higher is better)
+   · Helpfulness score: Reward model's helpfulness score (higher is better)
+   · Evaluation samples: Up to 100 samples
+
+                                                                        18
+            Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+C.4. Baseline Methods
+We compare our proposed FedVPA-GP with the following baselines:
+
+   · FedDPO: Federated Direct Preference Optimization (Ye et al., 2024), which aggregates gradients for a single global
+      policy without personalized reward modeling.
+
+   · FedBiscuit: Federated learning with multiple LoRA adapters (U = 3) for coarse-grained personalization (Wu et al.,
+      2024).
+
+   · FedVPL: Our naive adaptation of VPL (Poddar et al., 2024) to FL--same latent selector with FedAvg, but using fixed
+      Gaussian prior N (0, I) and no orthogonal loss.
+
+   · FedVPA-GP (ours): Our full method with federated mixture prior, Gumbel-Softmax relaxation, difference embeddings,
+      and orthogonal loss for preference separation.
+
+D. Generation Prompts
+
+This section details all prompts used throughout our experiments for data generation, selection, and evaluation.
+
+D.1. HH-RLHF Comparison Prompt
+D.1.1. SELECTOR TRAINING (BINARY CHOICE)
+For binary selector training, we use the following prompt template to format preference comparison data:
+
+Below is a conversation between a human and an AI assistant,
+followed by two responses. Pick the response that is more
+helpful and harmless. State your choice with a single capital
+letter, i.e., "A" if RESPONSE A is better, "B" if RESPONSE B
+is better.
+
+### CONVERSATION:
+{prompt}
+
+### RESPONSE A: {output_A}
+### RESPONSE B: {output_B}
+### YOUR CHOICE:
+
+This prompt is used to train the binary preference selector, where the model learns to predict which response (A or B) is
+preferred based on helpfulness and harmlessness criteria.
+
+D.1.2. RL GENERATION (STANDARD GENERATION)
+For RL training, we generate responses using the conversation history as the prompt. The generation process uses the
+following settings:
+Generation parameters:
+
+   · top p: 1.0
+   · temperature: 0.7
+   · do sample: True
+   · max new tokens: 512 (configurable)
+   · num return sequences: 2 (default)
+
+Prompt format: The prompt consists of the conversation history (all dialogue turns before the final assistant response). The
+model generates continuations from this prompt.
+
+                                                                        19
+            Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+D.2. GPT API Winrate Evaluation Prompt
+For winrate evaluation using GPT API, we use the following prompt template to compare two responses:
+
+Below is a conversation between a human and an AI assistant,
+followed by two responses. Pick the response that is more
+helpful and harmless. State your choice with a single capital
+letter, i.e., "A" if RESPONSE A is better, "B" if RESPONSE B
+is better.
+
+### CONVERSATION:
+{prompt}
+
+### RESPONSE A: {response_a}
+### RESPONSE B: {response_b}
+### YOUR CHOICE:
+Evaluation process:
+
+  1. Generate responses from fine-tuned model for test prompts
+  2. Generate responses from baseline model (adapter disabled) for the same prompts
+  3. For each prompt, send the comparison prompt to GPT API (gpt-4o-mini by default)
+  4. Parse GPT response to extract choice (A or B)
+  5. Calculate winrate: percentage of cases where fine-tuned model (RESPONSE A) is preferred
+
+Configuration:
+
+   · use gpt api for winrate: True
+   · openai model: "gpt-4o-mini" (default, cost-efficient)
+   · max samples for reward: 30 (evaluation sample limit)
+
+D.3. Additional Generation Prompts
+D.3.1. HELPFULNESS-FOCUSED GENERATION
+For helpfulness-specific generation (used in ablation studies):
+
+Below is a conversation between a human and an AI assistant.
+Write a response that is helpful.
+
+### CONVERSATION:
+{prompt}
+
+### RESPONSE:
+
+D.3.2. HARMLESSNESS-FOCUSED GENERATION
+For harmlessness-specific generation (used in ablation studies):
+
+Below is a conversation between a human and an AI assistant.
+Write a response that is harmless.
+
+                                                                        20
+Federated Variational Preference Alignment with Gumbel-Softmax Prior for Personalized User Preferences
+
+### CONVERSATION:
+{prompt}
+
+### RESPONSE:
+
+D.3.3. GENERAL GENERATION
+For general response generation (both helpful and harmless):
+
+Below is a conversation between a human and an AI assistant.
+Write a response that is both helpful and harmless.
+
+### CONVERSATION:
+{prompt}
+
+### RESPONSE:
+
+D.4. Prompt Usage Summary
+Table 5 summarizes when each prompt template is used.
+
+               Table 5. Prompt template usage across different stages of training and evaluation.
+
+                   Stage                   Prompt Template
+
+                   Selector Training       Comparison prompt (binary choice)
+                   RL Generation           Conversation history (standard generation)
+                   GPT Winrate Evaluation  Comparison prompt (A vs B)
+                   Helpfulness Ablation    Helpfulness-focused generation
+                   Harmlessness Ablation   Harmlessness-focused generation
+
+                                                       21
+

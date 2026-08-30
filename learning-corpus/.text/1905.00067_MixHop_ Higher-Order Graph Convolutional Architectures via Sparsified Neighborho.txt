@@ -1,0 +1,603 @@
+                                        MixHop: Higher-Order Graph Convolutional Architectures
+                                                       via Sparsified Neighborhood Mixing
+
+                                        Sami Abu-El-Haija 1 Bryan Perozzi 2 Amol Kapoor 2 Nazanin Alipourfard 1 Kristina Lerman 1
+                                                                 Hrayr Harutyunyan 1 Greg Ver Steeg 1 Aram Galstyan 1
+
+arXiv:1905.00067v3 [cs.LG] 19 Jun 2019                          Abstract                                           A^H (i)
+
+                                              Existing popular methods for semi-supervised                W (i)
+                                              learning with Graph Neural Networks (such as the
+                                              Graph Convolutional Network) provably cannot                H (i+1)                 H (i+1)
+                                              learn a general class of neighborhood mixing rela-
+                                              tionships. To address this weakness, we propose a           H(i+1) = (A^H(i)W (i))  ( | | ) H(i+1) =  A^0H(i)W (i) A^1H(i)W (i) . . .
+                                              new model, MixHop, that can learn these relation-
+                                              ships, including difference operators, by repeat-                                   0        1
+                                              edly mixing feature representations of neighbors
+                                              at various distances. MixHop requires no addi-              (a) Traditional graph convolution. (b) Our mixed feature model.
+                                              tional memory or computational complexity, and
+                                              outperforms on challenging baselines. In addition,          Figure 1: Feature propagation in traditional graph convolu-
+                                              we propose sparsity regularization that allows us
+                                              to visualize how the network prioritizes neighbor-          tion methods (a), compared to ours (b). We show the latent
+                                              hood information across different graph datasets.
+                                              Our analysis of the learned architectures reveals           feature for red node in layer i + 1 given node features in
+                                              that neighborhood mixing varies per datasets.
+                                                                                                          layer i. The traditional graph convolution case only aggre-
+                                        1. Introduction                                                   gates from immediate neighbors A^H(i). In our MixHop the
+                                                                                                          feature vector H(i+1) is a learned combination of the node's
+                                        Convolutional Neural Networks (CNNs) establish state-of-          neighbors A^jH(i) at multiple distances j.
+                                        the-art performance for many Computer Vision applications
+                                        (Krizhevsky et al., 2012; Szegedy et al., 2015). CNNs con-        tures should allow models to learn location-invariant node
+                                        sist of a series of convolutional layers, each parameterized      and neighborhood features.
+                                        by a filter with pre-specified spatial dimensions. CNNs
+                                        are powerful because they are able to learn a hierarchy of        Early extensions of the graph convolution (GC) operator
+                                        translation invariant feature detectors.                          were theoretically motivated (Bruna et al., 2014), but (1)
+                                                                                                          required quadratic computational complexity in number of
+                                        The success of CNNs in Computer Vision and other domains          nodes and therefore were not scalable to large graphs, and
+                                        has motivated researchers (Bruna et al., 2014; Defferrard         (2) required the graph to be completely observed during
+                                        et al., 2016; Kipf & Welling, 2017) to extend the convolu-        training, targeting only the transductive setting. Deffer-
+                                        tional operator from regular grids, in which the structure        rard et al. (2016) and Kipf & Welling (2017) propose GC
+                                        is fixed and repeated everywhere, to graph-structured data,       approximations that are computationally-efficient (linear
+                                        where nodes' neighborhoods can greatly vary in structure          complexity, in the number of edges), and can be applied in
+                                        across the graph. Generalizing convolution to graph struc-        inductive settings, where the test graphs are not observed
+                                                                                                          during training.
+                                            1Information Sciences Institute, University of Southern Cal-
+                                        ifornia 2Google AI, New York. Correspondence to: Sami             However, said approximations limit the representational ca-
+                                        <sami@haija.org>, Bryan <bperozzi@acm.org>.                       pacity of the model. In particular, if we represent an image
+                                                                                                          as a graph of pixel nodes, where edges connect adjacent
+                                        Proceedings of the 36 th International Conference on Machine      pixels, GC approximations applied on the pixel graphs will
+                                        Learning, Long Beach, California, PMLR 97, 2019. Copyright        be unable to learn Gabor-like1 filters. Gabor filters are fun-
+                                        2019 by the author(s).                                            damental to the human visual cognitive system (Daugman,
+                                                                                                          1980; 1985). Further, these filters are automatically recov-
+                                                                                                          ered by training CNNs on natural images (see Krizhevsky
+                                                                                                          et al. (2012); Lee et al. (2009) for visualizations). Their
+
+                                                                                                              1We use "like", as graph edges are not axis-aligned.
+MixHop: Higher-Order Graph Convolution Architectures via Sparsified Neighborhood Mixing
+
+automatic recovery implies their usefulness for hierarchical     message passing and feature aggregation, every node out-
+object representations and scene understanding, as guided        puts a representation which can be used for an upstream
+by the optimization (e.g. classification) objective. Since       task e.g. node classification, or entire graph classifica-
+Graphs are generic data structures that can encode data from     tion. The l steps (message passing and aggregation) can be
+various domains (e.g. images, chemical compounds, so-            parametrized and trained via Backprop-Through-Structure
+cial, and biological networks), realizing Gabor-like filters in  algorithms (Goller & Kuchler, 1996), to minimize an objec-
+Graph domains ought to yield a general advantage.                tive measured using the node representations as output by
+                                                                 the l'th step.
+In this work, we address the limitations of the approxima-
+tions that prevent these models from capturing the graph         2.3. Graph Convolutional Networks
+analogue of Gabor filters. Our proposed method, MixHop,
+allows full linear mixing of neighborhood information (as il-    We refer to the Graph Convolutional Network proposed by
+lustrated in Figure 1), at every message passing step. Specif-   Kipf & Welling (2017) as the vanilla GCN. The vanilla
+ically, our contributions are the following:                     GCN Graph Convolutional (GC) Layer is defined as:
+
+   · We formalize Delta Operators and their generalization,                    H(i+1) = (AH(i)W (i)),                             (1)
+      Neighborhood Mixing, to analyze the expressiveness
+      of graph convolution models. We show that popular          where H(i)  Rn×si and H(i+1)  Rn×si+1 are the input
+      graph convolution models (e.g. GCN of Kipf & Welling       and output activations for layer i, W (i)  Rsi×si+1 is a
+      (2017)) cannot learn these representations.
+                                                                 trainable weight matrix and  is an element-wise activation
+   · We propose MixHop, a new Graph Convolutional layer
+      that mixes powers of the adjacency matrix. We prove        function, and A is a symmetrically normalized adjacency
+      that MixHop can learn a wider class of representations
+      without increasing the memory footprint or computa-        matrix  with  self-connections,  A  =  D  -  1  (A  +  In)D-  1  .  A
+      tional complexity of previous GCN models.                                                               2                2
+
+   · We provide a method of learning to divide modeling ca-      GCN model with l layers is then defined as:
+      pacity among various widths and depths of a MixHop
+      model, yielding powerful compact GCN architectures.        H(i) =        X                           if i = 0               (2)
+      These architectures conveniently also allow visual in-                   (AH(i-1)W (i-1))            if i  [1 .. l],
+      spection of which aspects of a graph are important.
+                                                                 and the output YO can be set as to function of H(l). The
+We demonstrate our method on node classification tasks.          vanilla GCN can be described as a message passing al-
+Our code is available on github.com/samihaija/mixhop.            gorithm, where a node's latent representation at step i is
+                                                                 defined as an average of its neighbors' representations from
+2. Preliminaries and Related Work                                step i - 1, multiplied by W (i-1). See Gilmer et al. (2017).
+
+2.1. Notation                                                    The vanilla GCN makes three simplifying assumptions: (1)
+Graph G with n nodes and m edges has a feature matrix            it is a Chebyshev rank-2 approximation of multiplication
+X  Rn×s0 with s0 features per node, and training labels          in the Graph Fourier basis, defined to be the eigenbasis of
+YI , annotating a partial set of nodes with the c possible       the graph Laplacian; (2) it assumes that the two coefficients
+classes. The output of the task, YO, is an assignment of la-     of the Chebyshev polynomials multiply to -1; (3) a renor-
+bels to the nodes, Y  [0, 1]n×c. Let A denote the adjacency      malization trick adds self-connections (identity matrix) to
+matrix of G, where a non-zero entry Aij indicates an edge        A before, rather than after, normalization. These simplifi-
+between nodes i and j. We consider the case of a binary          cations reduce the computational complexity and prevent
+adjacency matrix (A  {0, 1}n×n), but this notation can be        exploding/vanishing gradients. However, it simplifies the
+extended w.l.o.g. to weighted graphs. Let In be the n × n        definition of convolution to become a simple neighborhood-
+identity matrix, and D be the degree matrix, D = diag(d),        averaging operator: this is obvious from Equation 1 ­ the
+where d  Zn is the degree vector with dj = i Aij.                features are left-multiplied by normalized adjacency A, ef-
+                                                                 fectively replacing each row in the feature matrix, by the
+2.2. Message Passing                                             average of its neighbors (and itself, due to renormalization).
+Message Passing algorithms can be used to learn models
+over graphs (Gilmer et al., 2017). In such models, each          2.4. Semi-supervised Node Classification
+graph node (and optionally edge) holds a latent vector, ini-
+tialized to the node's input features Each node repeatedly       We are interested in semi-supervised node classification
+passes its current latent vector to, and aggregates incoming     tasks. To train a GCN model on such a task, we select row
+messages from, its immediate neighbors. After l steps of         slices from the output matrix YO, corresponding to nodes
+                                                                 with known labels in YI , on which a loss and its gradients
+                                                                 are evaluated. The gradient of the loss is backpropagated
+                                                                 through the GC layers where they get multiplied by A ,
+                                                                 spreading gradients to unlabeled examples.
+MixHop: Higher-Order Graph Convolution Architectures via Sparsified Neighborhood Mixing
+
+3. Our Proposed Architecture                                                                         H (i-1)
+
+We are interested in higher-order message passing, where        H (i-1)                A0 ×  A1 ×    A2 ×
+nodes receive latent representations from their immediate
+(first-degree) neighbors and from further N-degree neigh-       A×                     ×             ×               ×
+bors at every message passing step. In this section, we                 ×                     W0(i)         W1(i)       W2(i)
+motivate and detail a model with trainable aggregation pa-
+rameters that can choose how to mix latent information from                     W (i)                    H (i)
+neighbors at various distances.                                       H (i)                  (b) Our proposed layer
+
+Our analysis starts with the Delta Operator, a subtraction      (a) GCN layer.
+operation between node features collected from different
+distances. The vanilla GCN is unable to learn such a feature    Figure 2: Vanilla GC layer (a), using adjacency A, versus
+representation. Before introducing our model, we give one       our GC layer (b), using powers of A. Orange denotes an in-
+formal definition:                                              put activation matrix, with one row per node; green denotes
+                                                                the trainable parameters; and red denotes the layer output.
+Definition 1 Representing Two-hop Delta Operator: A             Left vs right-multiplication is specified by the relative posi-
+model is capable of representing a two-hop Delta Operator       tion of the multiplicand to the × operator.
+if there exists a setting of its parameters and an injective
+mapping f , such that the output of the network becomes
+
+f  AX -  A2X ,                  (3)
+
+given any adjacency matrix A, features X, and activation        where the hyper-parameter P is a set of integer adjacency
+function .                                                      powers, Aj denotes the adjacency matrix A multiplied by it-
+                                                                self j times, and denotes column-wise concatenation. The
+Learning such an operator should allow models to represent      difference between our proposed layer and a vanilla GCN
+feature differences among neighbors, which is necessary,        is shown in Figure 2. Note that setting P = {1} exactly
+for example, for learning Gabor-like filters on the graph       recovers the original GC layer. Further, note that A0 is the
+manifold. To provide a concrete example regarding graphs,       identity matrix In, where n is the number of nodes in the
+consider an online social network. In this setting, Delta       graph. We depict a model with P = {0, 1, 2} in Figure
+Operators allow a model to represent users that live around     1b. In our model, each layer contains |P | distinct parameter
+the "boundary" of social circles (Perozzi & Akoglu, 2018).      matrices, each of which can be a different size. By default,
+To learn an approximate feature for American person with a      we set all |P | matrices to have the same dimensionality;
+popular German friend, who might have most immediate            however, in Section 4.2, we explain how we utilize sparsify-
+friends speaking English, but many friends-of-friends speak-    ing regularizers on the learnable weight matrices to produce
+ing German. This person can be represented by learning          dataset-specific model architectures that slightly outperform
+a convolutional filter contrasting the English and German       our default settings.
+languages of one-hop and two-hop neighbors.
+                                                                3.2. Computational Complexity
+Note that in the Definition 1 we allow not learning the direct
+form of two-hop Delta Operators, but a transformation of        There is no need to calculate Aj. We calculate AjH(i) with
+it, as long as that transformation can be inverted (i.e. f is   right-to-left multiplication. Specifically, if j = 3, we cal-
+injective).                                                     culate A3H(i) as A A AH(i) . Since we store A as a
+                                                                sparse matrix with m non-zero entries, an efficient imple-
+In Sections 3.1 - 3.3, we analyze the extent to which various   mentation of our layer (Equation 4) takes O(jmax × m × si)
+GCN models can learn the Delta Operator. We generalize          computational time, where jmax is the largest element in P
+this definition and analysis in Section 3.4.                    and si is the feature dimension of H(i). Under the realistic
+                                                                assumptions of jmax m and sl m, running an l-layer
+3.1. MixHop Graph Convolution Layer                             model takes O(lm) computational time. This matches the
+                                                                computational complexity of the vanilla GCN.
+We propose replacing the Graph Convolution (GC) layer
+defined in Equation 1, with:                                    3.3. Representational Capability
+
+H (i+1) =       Aj H(i)Wj(i) ,  (4)                             Since each layer outputs the multiplication of different adja-
+                                                                cency powers in different columns, the next layer's weights
+           jP
+MixHop: Higher-Order Graph Convolution Architectures via Sparsified Neighborhood Mixing
+
+Algorithm 1 MixHop Graph Convolution Layer                     of vertices 1 and 2 was arbitrary, we have that all rows of
+                                                               W  are equal to each other. Therefore, rank(AlW )  1,
+   Inputs: H(i-1), A                                           which implies that outputs of mapping f should be at most
+   Parameters: {Wj(i)}jP                                       rank-one matrices. Thus, f cannot be injective, proving that
+   jmax := max P                                               vanilla GCN cannot represent two-hop Delta Operators.
+   B := H(i-1)
+                                                               Proof of Theorem 2. A two-layer model, defined using
+   for j = 1 to jmax do                                        Equation 4 with P = {0, 1, 2} recovers the two-hop delta
+      B := AB                                                  operator defined in Equation 3. We start by redefining the
+                                                               feature vector H(1) learned by the first layer of the model
+      if j  P then                                             by pulling out the element-wise activation function  and
+         Oj := BWj(i)                                          expanding the concatenation operator found in the layer
+                                                               definition:
+      end if
+
+   end for
+   H(i) := Oj
+
+                   jP
+
+   Return: H(i)
+
+                                                               H(1) =                Aj XWj(0)
+
+can learn arbitrary linear combinations of the columns. By                j{0,1,2}
+assigning a positive coefficient to a column produced by
+some A power, and assigning a negative coefficient to an-                                       
+other, the model can learn a Delta Operator. In contrast,
+vanilla GCNs are not capable of representing this class of             =              Aj XWj(0)
+operations, even when stacked over multiple layers.                                               
+
+                                                                            
+
+                                                                            j{0,1,2}
+
+Theorem 1 The vanilla GCN defined by Equation 2 is not                 =  IN XW0(0) AXW1(0) A2XW2(0) ,
+capable of representing two-hop Delta Operators.
+                                                               We can now set W0(0) = 0 (zero matrix) and W1(0) =
+Theorem 2 MixHop GCN (using layers defined in Equa-            W2(0) = Is0 . The expression above can be simplified to
+tion 4) can represent two-hop Delta Operators.                 H(1) =  0 AX A2X . The feature vector H(1)
+
+Proof of Theorem 1. The output of an l-layer vanilla GCN       can be plugged into the equation for the second layer that
+has the following form:                                        has linear activation function:
+
+     (A((A · · · (AXW (0)) · · · )W (l-2))W (l-1)).            H (2) = IN H (1)W0(1) AH (1)W1(1) A2H (1)W2(1) .
+
+For the simplicity of the proof, let's assume that i, si =     Setting the weights for the second layer as W1(1) = W2(1) =
+n. In a particular case, when (x) = x and X = In,
+this reduces to AlW , where W  = W (0)W (1) · · · W (l-1).     0, and
+
+Suppose the network is capable of representing a two-hop                              0
+
+Delta Operator. This means that there exists an injective map                       W0(1) =  Is0  ,        (5)
+f and a value for W , such that A, AlW  = f (A - A2).
+Setting A = In, we get that W  = f (0). Let                                           -Is0
+
+                                                               makes
+
+      0.5 0.5 0 · · · 0                                        H(2) =  AX -  A2X                     00 .
+
+      0.5 0.5 0 · · · 0
+
+C1,2    0    0 1 · · · 0                                       This shows that our GCN can successfully represent the
+                                                               two-hop Delta Operators according to the Definition 1.
+
+        ...  ...  ...  ...  ...                                3.4. General Neighborhood Mixing
+                                 
+                                                               We generalize Definition 1 from two-hops to multiple hops:
+
+        0 0 0 ··· 1                                            Definition 2 General layer-wise Neighbor-hood Mixing:
+                                                               A Graph Convolutional Network is capable of representing
+be the symmetrically normalized adjacency matrix with          layer-wise neighborhood mixing if for any 0, 1, . . . , m
+                                                               numbers, there exists a setting of its parameters and an
+self-connections corresponding to the graph having a single
+
+edge between vertices 1 and 2. Setting A = C1,2, we get
+C1,2W  = f (0). Since we already have that f (0) = W ,
+we get that (In - C1,2)W  = 0, which proves that the
+w1 = w2, where wi is the i-th row of W . Since the choice
+MixHop: Higher-Order Graph Convolution Architectures via Sparsified Neighborhood Mixing
+
+injective mapping f , such that the output of the network         being trained on. As MixHop uniquely mixes features from
+becomes equal to
+                                                                  different sets of information, we theorized that constraining
+
+                                                                  the output layer may result in better outcomes for different
+
+  m                                                               tasks. In order to leverage this property, we define our output
+
+f  j AjX            (6)                                           layer in the following way: We divide sl columns into sets
+
+  j=0                                                             of size c and compute YO =      sl /c  qk H(l,()idl /c          (i+1)sl /c) ,
+                                                                                                  k=1
+                                                                                                                               :
+
+for any adjacency matrix A, features X, and activation            then YO = softmax(YO). Here the subscript on H(l) selects
+function .
+                                                                  c contiguous columns and the scalars qk  [0, 1] define
+
+                                                                  a valid distribution (output of a softmax). This results in
+
+Theorem 3 GCNs defined using Equation 1 are not capa-             the model being forced to choose which features it wants
+ble of representing general layer-wise neighborhood mixing.
+                                                                  to prioritize by putting more weight on that feature. We
+
+Theorem 4 GCNs defined using our proposed method                  obtain  the  model  parameters  Wi(j)  for  all  i,  j  and  q1,  .  .  .  q  sl  ,
+(Equation 4) are capable of representing general layer-wise                                                                                     c
+neighborhood mixing.                                              by minimizing cross-entropy loss, measured only on nodes
+
+                                                                  with known labels i.e. similar to (Kipf & Welling, 2017).
+
+Proof of Theorem 3. This trivially follows from Theorem 1:        4.2. Learning Adjacency Power Architectures
+if the vanilla GCN cannot recover a two-hop Delta Operator,
+defined in Equation 3, it cannot recover the Delta Operator       As mentioned, our model learns multiple weight matrices
+generalization in Equation 6.                                     Wj(i), one per adjacency power used in the model. By
+                                                                  default, we set all Wj(i) to be the same size, which effectively
+Proof of Theorem 4. The proof steps closely resemble the          assigns the same capacity to adjacency powers Aj for all
+                                                                  j  P . We intuit that different sizes of Wj(i) may be more
+proof of Theorem 2. Our GCN with P = {0, . . . , m} can           appropriate for different tasks and datasets; as such, we are
+                                                                  interested in learning how to automatically size Wj(i).
+represent the target function, by setting the first layer weight
+matrices as Wj(0) = Is0 , j  P and setting all but the            For vanilla GCNs, such an architecture search is relatively
+zeroth second layer weight matrices as W1(1) = W2(1) =            inexpensive - the parameters are the number of layers and
+· · · = Wm(1) = 0. In other words, we utilize only zero-hops      their widths. In contrast, searching over the architecture
+                                                                  space of our model is multiplicatively O(l × |P |) more ex-
+in the second layer, setting the zeroth-power weight matrix       pensive, as each architecture involves choices on how to
+                                                                  divide each layer width si among the adjacency powers. To
+the following way:                                                address this limitation, we propose using a lasso regular-
+                                                                  ization to automatically learn an architecture for our model
+           0Is0                                                   (Gordon et al., 2018). In particular, we train our architecture
+                                                                  in stages:
+W0(1)  =    ...     (7)
+                                                                    1. Construct a wide network (e.g. 200 dimensions for
+                                                                        each adjacency power, at each layer), only making
+            mIs0                                                        choices on the depth.
+
+This setting of parameters exactly recover the expression in        2. Train the network on the task while applying L2 Group
+Equation 6, for any adjacency matrix A and features X.                  Lasso regularization over each column of each Wj(l).
+                                                                        This will drop values of entire columns (close) to zero.
+We note that the generalized Delta Operator in Definition 2
+does not explicitly specify feature differences as in Defini-       3. At the peak validation accuracy, measure the L2 norm
+tion 1; rather, the generalized form defines linear combina-            of each Wj(l). Pick a threshold, and count the number
+tions of features (which includes subtraction).                         of columns in each Wj(l) with norm higher than the
+                                                                        threshold. In our experiments, we pick a threshold
+4. Learning Graph Convolution Architectures                             such that the size of the shrunken model equals size of
+                                                                        our baseline model (i.e. with P = {1}).
+We have discussed a single layer of our model. In prac-
+tice, one would stack multiple layers and interleave them           4. Shrink the weight matrices by removing columns with
+with standard neural operators such as BatchNorm (Ioffe &               norms below the k'th percentile.
+Szegedy, 2015), element-wise activation, and Dropout (Sri-
+vastava et al., 2014). In this section, we discuss approaches       5. Substitute L2 Group Lasso with standard L2 regular-
+to turning the MixHop GC layer into a MixHop GCN.                       ization. Restart training.
+
+4.1. Output Layer                                                 We discuss the learned architectures in Section 6.3.
+
+The final layer of a GCN performs a key role for learning
+the learned latent space of the model on the dataset that is
+MixHop: Higher-Order Graph Convolution Architectures via Sparsified Neighborhood Mixing
+
+5. Experimental Design
+
+Given the model described above, a number of natural ques-        # Learned Delta Ops
+tions arise. In this section, we aim to design experiments
+which answer the following hypothesises:                                                                         Homophily
+
+   · H1: The MixHop model learns delta operators.                 Figure 3: Amount of model capacity devoted to learning
+   · H2: Higher order graph convolutions using neighbor-          delta operators at different levels of homophily.
+
+      hood mixing can outperform existing approaches (e.g.        models using a Gradient Descent optimizer for a maximum
+      vanilla GCNs) on real semi-supervised learning tasks.       of 2000 steps, with an initial learning rate of 0.05 that decays
+   · H3: When learning a model architecture for MixHop            by 0.0005 every 40 steps. We terminate training if validation
+      the best performing architectures differ for each graph.    accuracy does not improve for 40 consecutive steps; as a
+To answer these questions, we design three experiments.           result, most runs finish in less than 200 steps. We use
+   · Synthetic Experiments: This experiment uses a fam-           5 × 10-4 L2 regularization on the weights, and dropout
+      ily of synthetic graphs which allow us to vary the cor-     input and hidden layers. We note that the citation datasets
+      relation (or homophily) of the edges in a generated         are extremely sensitve to initializations; as such, we run all
+      graph, and observe how different graph convolutional        models 100 times, sort by the validation accuracy, and finally
+      approaches respond. As homophily is decreased in the        report the test accuracy for the top 50 runs. For all models
+      network, nodes are more likely to connect to those with     we ran (our models in Tables 1 & 3, and all models in Table
+      different labels, and a model that better captures delta    3), we use a latent dimension of 60; Our default architecture
+      operators should have superior performance.                 evenly divided 60 dimensions are divided evenly to all |P |
+   · Real-World Experiments: This experiment evaluates            powers. Our learned architectures spread them unevenly,
+      MixHop's performance on a variety of noisy real world       see Section 6.3.
+      datasets, comparing against challenging baselines.
+   · Model Visualization Experiment: This experiment              6. Experimental Results
+      shows how an appropriately regularized MixHopmodel
+      can learn different, task-dependent, architectures.         6.1. Results on Synthetic Graphs
+
+5.1. Datasets                                                     We present our results on the synthetic datasets in Figure
+                                                                  4. We show average accuracy for each baseline against the
+We conduct semi-supervised node classification experiments        homophily of the graph. We use a dense (MLP) model that
+on synthetic and real-world datasets.                             does not ingest any adjacency information as a control. As
+                                                                  expected, all models perform better as the homophily of
+Synthetic Datasets: Our synthetic datasets are generated          the synthetic graph increases. At low levels of homophily,
+following Karimi et al. (2017). We generate 10 graphs,            when nodes are rarely adjacent to neighbors with the same
+each with a different homophily coefficient (ranging from         label, we observe that MixHop performs significantly better
+0.0 to 0.9 at 0.1 intervals) that indicates the likelihood of     than the most competitive baseline. Interestingly, we notice
+a node forming a connection to a neighbor with the same           that the GAT model performs significantly worse than the
+label. For example, a node in the homophily = 0.9 graph           features-only control. This suggests that the added attention
+with 10 edges, will have on average 9 edges to a same-label       mechanism of the GAT model relies heavily on homophily
+neighbor. All graphs contain 5000 nodes. The features for         in node neighborhoods.
+all synthetic nodes were sampled from overlapping multi-
+Gaussian distributions. We randomly partition each graph          For each level of homophily, we measured the number of
+into train, test, and validation node splits, all of equal size.  delta operators learned by our model. We present these
+See Appendix for more information.                                metrics in Figure 3. We observe that for low levels of
+                                                                  homophily, our model uses 2.5X of its model capacity on
+Real World Datasets: The experiments with real-world
+datasets follow the methodology proposed in Yang et al.
+(2016). In addition to using the classic dataset split, (which
+have 20 samples per label), we evaluate against against a
+set of random splits with 100 samples per label. We will
+release our test splits.
+
+5.2. Training
+
+For all experiments, we construct a 2-layer network of our
+model using TensorFlow (Abadi et al., 2016). We train our
+               MixHop: Higher-Order Graph Convolution Architectures via Sparsified Neighborhood Mixing
+
+               Model                                            Citeseer  Cora  Pubmed
+               ManiReg (Belkin et al., 2006)                      60.1    59.5    70.7
+               SemiEmb (Weston et al., 2012)                      59.6    59.0    71.1
+               LP (Zhu et al., 2003)                              45.3    68.0    63.0
+               DeepWalk (Perozzi et al., 2014)                    43.2    67.2    65.3
+               ICA (Lu & Getoor, 2003)                            69.1    75.1    73.9
+               Planetoid (Yang et al., 2016)                      64.7    75.7    77.2
+               Vanilla GCN (Kipf & Welling, 2017)                 70.3    81.5    79.0
+
+               MixHop with P = {1} (baseline) 70.7±0.73 81.1±0.84 79.9±0.78
+
+               MixHop: default architecture (ours) 71.4±0.81 81.8±0.62 80.0±1.1
+               MixHop: learned architecture (ours) 71.4±0.81 81.9±0.40 80.8±0.58
+
+Table 1: Experiments run on Node Classification citation datasets created by Yang et al. (2016). The learned architecture
+for Citeseer is equivalent to default architecture, so the results are the same.
+
+     Dataset nodes edges features c |YIP | |YIR|Test Accuracy   out of the first layer, is assigned values of opposite signs
+     Citeseer 3,327 4,732 3,703 6 120 600                       in W1(j). We restrict the analysis to only values of W1(j)
+     Cora 2,708 5,429 1,433 7 140 700                           with magnitude larger than the median in the corresponding
+     Pubmed 19,717 44,338 500 3 60 300                          column.
+Table 2: Dataset statistics. Numbers of nodes (n), edges
+(m), features, classes (c), and labeled nodes (|YIP | from the  6.2. Node Classification Results
+Planetoid splits, |YIR| from our random splits).
+                                                                We show two sets of semi-supervised node classfication
+                                 Homophily                      results using different splits of our datasets. Because these
+                                                                datasets are taken from the real world, they are inherently
+Figure 4: Synthetic dataset results. MLP does not utilize       noisy, and it is unlikely that achieving 100% classification
+graph with (homophilic) edges, but only node features.          accuracy is possible even when given a significant amount
+                                                                of labeled training data. Instead, we are interested in the
+learning delta operators compared with higher homophily.        sparse classification task, namely how well our model is
+This follows intuition: as the nodes cluster around like-       able to improve on previous work while being resilient to
+labeled neighbors, the need to identify meaningful feature      noise, even with limited information.
+differences between neighbors at different distances drops
+significantly. These results strongly suggest that the learned  In Table 2, we demonstrate how our model performs on
+delta operators play a role in the success of MixHop in         common splits taken from Yang et al. (2016). Accuracy
+Figure 4. For this experiment, we trained our model over the    numbers above double-line are copied from Kipf & Welling
+synthetic datasets under one constraint: input layer weights    (2017). Numbers below the double-line are our methods,
+W0(j) are shared across all powers j  P . This allows           with P = {1} being equivalent to vanilla GCNs. ± repre-
+us to examine sub-columns in the following layer W1(j).         sents the standard deviation of 50 runs with different random
+Specifically, we count the number of times a feature, coming    initializations. All MixHop models are of same capacity.
+                                                                These splits utilize only 20 labeled nodes per class during
+                                                                training. We achieve a test accuracy of 71.4%, 81.9%, and
+                                                                80.8% on Citeseer, Cora, and Pubmed respectively. Inter-
+                                                                estingly, for Citeseer, we see that the learned architecture
+                                                                was equal to the original architecture (and so the models
+                                                                performed the same). In Table 3, we demonstrate how our
+                                                                model performs using random splits with more training in-
+                                                                formation available. These splits utilize 100 nodes per class
+                                                                during training. We achieve a test accuracy of 77.0%, 87.2%,
+                                                                and 83.9% on Citeseer, Cora, and Pubmed respectively.
+
+                                                                As MixHop is able to pull in linear combinations of features
+                                                                from farther distances, it can extract meaningful signals in
+                                                                extremely sparse settings. We believe this explains why Mix-
+                                                                Hop outperforms baseline methods in both sets of dataset
+              MixHop: Higher-Order Graph Convolution Architectures via Sparsified Neighborhood Mixing
+
+                            Model                                               Citeseer Cora Pubmed
+
+                            2-Layer MLP                                         70.6±1 69.0±1.1 78.3±0.54
+
+                            Chebyshev (Defferrard et al., 2016) 74.2±0.5 85.5±0.4 81.8±0.5
+
+                            Vanilla GCN (Kipf & Welling, 2017) 76.7±0.43 86.1±0.34 82.2±0.29
+
+                            GAT (Velickovic et al., 2018)                       74.8±0.42 83.0±1.1 81.8±0.18
+
+                            MixHop: default architecture (ours) 76.3±0.41 87.0±0.51 83.6±0.68
+                            MixHop: learned architecture (ours) 77.0±0.54 87.2±0.32 83.8±0.44
+
+                  Table 3: Classification results on random partitions of (Yang et al., 2016) datasets.
+
+                                                         60                                                     1433
+
+                         500                      W0(2)      3                                    W0(1)               24                 W0(2)  60
+
+                  W0(1)       17                                                                                                                    0
+
+              ×          ×                    ×          ×                                    ×                 ×                    ×          ×
+
+              A0                              A0                                              A0                                     A0
+                                                                                                         W1(1)
+     n=19717      W1(1)       23   n              W1(2)      6                        n=2708                          18  n              W1(2)      7
+                                          60                                                                                     60
+500  X        ×          ×                    ×          ×      n               1433  X       ×                 ×                    ×          ×      n
+                                                                            12                                                                                     14
+
+              A1  W2(1)       20              A1                                              A1                                     A1
+                                                                                                         W2(1)
+                                                  W2(2)      3                                                        18                 W2(2)      7
+
+              ×          ×                    ×          ×                                    ×                 ×                    ×          ×
+
+              A2                              A2                                              A2                                     A2
+
+                                  (a) Pubmed                                                                              (b) Cora
+
+Figure 5: Learned MixHop Architectures. Note how different parameter sizes (green boxes) are learned for the two datasets.
+
+For example, Group-Lasso regularization on Cora removes all capacity for the zeroth power in the second GC layer. For
+
+space, all matrices are plotted transposed and output layer (Section 4.1) has been ommitted.
+
+splits. The results of these experiments confirm our hypoth-                    (Kipf & Welling, 2017), allowing us to hypothesize that mes-
+esis (H2) that higher order graph convolution methods with                      sage passing along edges outperforms explicit alignment
+neighborhood mixing can outperform existing methods on                          onto the graph Fourier Basis.
+real datasets.
+                                                                                8. Conclusion
+6.3. Visualizing Learned Architectures
+                                                                                In this work, we analyzed the expressive power of popular
+Figure 5 depicts the learned architectures for two of the cita-                 methods for semi-supervised learning with Graph Neural
+tion datasets. We note that each dataset prefers its own archi-                 Networks and we showed they cannot learn general neigh-
+tecture. For example, Cora prefers to have zero-capacity on                     borhood mixing functions. To address this, we have pro-
+the 0th power of the adjacency matrix (effectively ignoring                     posed a graph convolutional layer that utilizes multiple pow-
+the features of each node) in the second layer. Not shown                       ers of the adjacency matrix. Repeated application of this
+(for space reasons) is Citeseer, which prefers the default                      layer allows a model to learn general mixing of neighbor-
+parameter settings with the same weight capacity across                         hood information, including averaging and delta operators
+all powers. All three real datasets had different final archi-                  in the feature space, without additional memory or compu-
+tectures, which confirms our hypothesis (H3) that different                     tational complexity. Utilizing L2 group lasso regularization
+architectures are optimal for different graph datasets.                         on these stacked layers allows us to learn a unique architec-
+                                                                                ture that is optimized for each dataset. Our experimental
+7. Related Work                                                                 results showed that higher order graph convolution methods
+                                                                                can achieve state of the art performance on several node
+? uses adjacency powers but for embedding learning. Abu-                        classification tasks. Our analysis of the experimental results
+El-Haija et al. (2018); Atwood & Towsley (2016) use adja-                       showed that neighborhood difference operators are espe-
+cency powers for feature propagation on graphs, but they                        cially useful in graphs which do not have high homophily
+combine the powers at the end of the network (right be-                         (correlation between edges and labels). While we focused
+fore classification), and Lee et al. (2018) combine them at                     this paper on applying our proposal to the most popular
+the input. We intermix information from the powers layer-                       models for graph convolution, it is possible to implement
+wise, enabling our method to learn neighborhood mixing e.g.                     our method in more sophisticated frameworks including the
+delta operators, which contrast the features of immediate                       recent GAT (Velickovic et al., 2018). Other recent work like
+neighbors from those further away. Defferrard et al. (2016)                     (Ying et al., 2018), which focuses on hierarchical pooling
+uses more Chebyshev polynomials (i.e. higher-rank) Graph                        for community-aware graph representation might also be
+Convolution, but their model underperforms our baseline                         extended to use general neighborhood mixing layers.
+MixHop: Higher-Order Graph Convolution Architectures via Sparsified Neighborhood Mixing
+
+Acknowledgements                                                      Lee, H., Grosse, R., Ranganath, R., and Ng, A. Y. Convolutional
+                                                                         deep belief networks for scalable unsupervised learning of hier-
+The authors acknowledge support from the Defense Ad-                     archical representations. In ICML, 2009.
+vanced Research Projects Agency (DARPA) under award
+FA8750-17-C-0106, and acknowledge discussions with                    Lee, J. B., Rossi, R. A., Kong, X., Kim, S., Koh, E., and
+Jesse Dodge and Leto Peel, respectively, on Group Lasso                  Rao, A. Higher-order graph convolutional networks. In
+regularization and synethetic experiments.                               arxiv/1809.07697, 2018.
+
+References                                                            Lu, Q. and Getoor, L. Link-based classification. In ICML, 2003.
+
+Abadi, M., Agarwal, A., et al. TensorFlow: Large-scale machine        Perozzi, B. and Akoglu, L. Discovering communities and anoma-
+   learning on heterogeneous systems. In OSDI'16, 2016.                  lies in attributed graphs: Interactive visual exploration and
+                                                                         summarization. ACM Trans. Knowl. Discov. Data, 12(2):24:1­
+Abu-El-Haija, S., Kapoor, A., Perozzi, B., and Lee, J. N-gcn:            24:40, January 2018.
+   Multi-scale graph convolution for semi-supervised node classi-
+   fication. In MLG KDD Workshop, 2018.                               Perozzi, B., Al-Rfou, R., and Skiena, S. Deepwalk: Online learn-
+                                                                         ing of social representations. In Knowledge Discovery and Data
+Atwood, J. and Towsley, D. Diffusion-convolutional neural net-           Mining, 2014.
+   works. In NeurIPS, 2016.
+                                                                      Srivastava, N., Hinton, G., Krizhevsky, A., Sutskever, I., and
+Belkin, M., Niyogi, P., and Sindhwani, V. Manifold regularization:       Salakhutdinov, R. Dropout: a simple way to prevent neural
+   A geometric framework for learning from labeled and unlabeled         networks from overfitting. In JMLR, 2014.
+   examples. In JMLR, 2006.
+                                                                      Szegedy, C., Liu, W., Jia, Y., Sermanet, P., Reed, S. E., Anguelov,
+Bruna, J., Zaremba, W., Szlam, A., and LeCun, Y. Spectral net-           D., Erhan, D., Vanhoucke, V., and Rabinovich, A. Going deeper
+   works and locally connected networks on graphs. In ICLR,              with convolutions. In CVPR, 2015.
+   2014.
+                                                                      Velickovic, P., Cucurull, G., Casanova, A., Romero, A., Li, P., and
+Daugman, J. Two-dimensional spectral analysis of cortical recep-         Bengio, Y. Graph attention networks. In ICLR, 2018.
+   tive field profiles. In Vision Research, 1980.
+                                                                      Weston, J., Ratle, F., Mobahi, H., and Collobert, R. Deeplearning
+Daugman, J. Uncertainty relation for resolution in space, spatial        via semi-supervised embedding. In Neural Networks: Tricks of
+   frequency, and orientation optimized by two-dimensional visual        the Trade, pp. 639­655, 2012.
+   cortical filters. In Journal of the Optical Society of America,
+   1985.                                                              Yang, Z., Cohen, W., and Salakhutdinov, R. Revisiting semi-
+                                                                         supervised learning with graph embeddings. In ICML, 2016.
+Defferrard, M., Bresson, X., and Vandergheynst, P. Convolutional
+   neural networks on graphs with fast localized spectral filtering.  Ying, Z., You, J., Morris, C., Ren, X., Hamilton, W., and Leskovec,
+   In NeurIPS, 2016.                                                     J. Hierarchical graph representation learning with differentiable
+                                                                         pooling. In NeurIPS, pp. 4805­4815, 2018.
+Gilmer, J., Schoenholz, S. S., Riley, P. F., Vinyals, O., and Dahl,
+   G. E. Neural message passing for quantum chemistry. In ICML,       Zhu, X., Ghahramani, Z., and Lafferty, J. Semi-supervised learning
+   2017.                                                                 using gaussian fields and harmonic functions. In ICML, 2003.
+
+Goller, C. and Kuchler, A. Learning task-dependent distributed
+   representations by backpropagation through structure. In Inter-
+   national Conference on Neural Networks, 1996.
+
+Gordon, A., Eban, E., Nachum, O., Chen, B., Wu, H., Yang, T.-J.,
+   and Choi, E. Morphnet: Fast & simple resource-constrained
+   structure learning of deep networks. In CVPR, June 2018.
+
+Ioffe, S. and Szegedy, C. Batch normalization: Accelerating
+   deep network training by reducing internal covariate shift. In
+   arXiv:1502.03167, 2015.
+
+Karimi, F., Genois, M., Wagner, C., Singer, P., and Strohmaier, M.
+   Visibility of minorities in social networks. In arxiv/1702.00150,
+   2017.
+
+Kipf, T. and Welling, M. Semi-supervised classification with graph
+   convolutional networks. In ICLR, 2017.
+
+Krizhevsky, A., Sutskever, I., and Hinton, G. E. Imagenet classi-
+   fication with deep convolutional neural networks. In NeurIPS,
+   2012.
+

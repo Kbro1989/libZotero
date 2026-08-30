@@ -1,0 +1,190 @@
+SpecInfer: Accelerating Large Language Model Serving with Tree-based Speculative Inference and Verification
+
+Xupeng Miao
+Carnegie Mellon University Pittsburgh, PA, USA xupeng@cmu.edu
+Xinhao Cheng
+Carnegie Mellon University Pittsburgh, PA, USA
+xinhaoc@andrew.cmu.edu
+
+Gabriele Oliaro
+Carnegie Mellon University Pittsburgh, PA, USA goliaro@cs.cmu.edu
+Zeyu Wang
+Carnegie Mellon University Pittsburgh, PA, USA
+zeyuwang@alumni.cmu.edu
+
+Zhihao Zhang
+Carnegie Mellon University Pittsburgh, PA, USA
+zhihaoz3@andrew.cmu.edu
+Zhengxin Zhang
+Tsinghua University Beijing, China
+zhang-zx21@mails.tsinghua.edu.cn
+
+arXiv:2305.09781v4 [cs.CL] 1 Apr 2024
+
+Rae Ying Yee Wong
+Stanford University Stanford, CA, USA raewong@stanford.edu
+
+Alan Zhu
+Carnegie Mellon University Pittsburgh, PA, USA
+aczhu@andrew.cmu.edu
+
+Lijie Yang
+Carnegie Mellon University Pittsburgh, PA, USA
+lijiey@andrew.cmu.edu
+
+Xiaoxiang Shi
+Shanghai Jiao Tong University Shanghai, China
+lambda7shi@sjtu.edu.cn
+
+Chunan Shi
+Peking University Beijing, China
+spirited_away@pku.edu.cn
+
+Zhuoming Chen
+Carnegie Mellon University Pittsburgh, PA, USA
+zhuominc@andrew.cmu.edu
+
+Daiyaan Arfeen
+Carnegie Mellon University Pittsburgh, PA, USA
+marfeen@andrew.cmu.edu
+
+Reyna Abhyankar
+University of California, San Diego San Diego, CA, USA vabhyank@ucsd.edu
+
+Zhihao Jia
+Carnegie Mellon University Pittsburgh, PA, USA zhihao@cmu.edu
+
+Abstract
+This paper introduces SpecInfer, a system that accelerates generative large language model (LLM) serving with treebased speculative inference and verification. The key idea behind SpecInfer is leveraging small speculative models to predict the LLM's outputs; the predictions are organized as a token tree, whose nodes each represent a candidate token sequence. The correctness of all candidate token sequences represented by a token tree is verified against the LLM in parallel using a novel tree-based parallel decoding mechanism. SpecInfer uses an LLM as a token tree verifier instead of an incremental decoder, which significantly reduces the end-toend latency and computational requirement for serving generative LLMs while provably preserving model quality. Our
+Equal contribution.
+Permission to make digital or hard copies of part or all of this work for personal or classroom use is granted without fee provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and the full citation on the first page. Copyrights for thirdparty components of this work must be honored. For all other uses, contact the owner/author(s). ASPLOS '24, April 27-May 1, 2024, La Jolla, CA, USA © 2024 Copyright held by the owner/author(s). ACM ISBN 979-8-4007-0386-7/24/04. https://doi.org/10.1145/3620666.3651335
+
+evaluation shows that SpecInfer outperforms existing LLM serving systems by 1.5-2.8× for distributed LLM inference and by 2.6-3.5× for offloading-based LLM inference, while preserving the same generative performance. SpecInfer is publicly available at https://github.com/flexflow/FlexFlow/
+Keywords: large language model serving, speculative decoding, token tree verification
+ACM Reference Format: Xupeng Miao, Gabriele Oliaro, Zhihao Zhang, Xinhao Cheng, Zeyu Wang, Zhengxin Zhang, Rae Ying Yee Wong, Alan Zhu, Lijie Yang, Xiaoxiang Shi, Chunan Shi, Zhuoming Chen, Daiyaan Arfeen, Reyna Abhyankar, and Zhihao Jia. 2024. SpecInfer: Accelerating Large Language Model Serving with Tree-based Speculative Inference and Verification. In 29th ACM International Conference on Architectural Support for Programming Languages and Operating Systems, Volume 3 (ASPLOS '24), April 27-May 1, 2024, La Jolla, CA, USA. ACM, New York, NY, USA, 18 pages. https://doi.org/10.1145/3620666.3651335
+1 Introduction
+Generative large language models (LLMs), such as ChatGPT [3] and GPT-4 [33], have proven to be powerful in various application domains, including question answering, program synthesis, and task automation [26, 56]. However, it is challenging to quickly and cheaply serve these LLMs
+
+due to their large volume of parameters, complex architec- approaches) to maximize speculative performance. These
+
+tures, and high computational requirements. For example, candidates are organized as a token tree, whose nodes each
+
+the largest GPT-3 architecture has 175 billion parameters, represents a sequence of speculated tokens. The correctness
+
+which requires more than eight NVIDIA 40GB A100 GPUs of all candidate token sequences is verified against the LLM
+
+to store in half-precision floating points, and takes several in parallel, which allows SpecInfer to significantly increase
+
+seconds to serve a single inference request [3].
+
+the number of generated tokens in an LLM decoding step.
+
+An LLM generally takes as input a sequence of tokens, Compared with sequence-based speculative inference, lever-
+
+called prompt, and generates subsequent tokens one at a time, aging tree structures can significantly improve the success
+
+as shown in Figure 1a. The generation of each token in the rate of verifying a token (e.g., from 52-57% to 96-97% for
+
+sequence is conditioned on the input prompt and previously stochastic decoding as shown in Table 1). However, realizing
+
+generated tokens and does not consider future tokens. This this improvement requires addressing two unique challenges.
+
+approach is also called autoregressive decoding because each Next, we elaborate on these challenges and the main ideas
+
+generated token is also used as input for generating future SpecInfer uses to address them.
+
+tokens. This dependency between tokens is crucial for many
+
+First, SpecInfer must explore an extremely large search
+
+NLP tasks that require preserving the order and context of space of candidate token sequences to maximize speculative
+
+the generated tokens, such as text completion [55].
+
+performance. While the idea of speculative execution has
+
+Existing LLM systems generally use an incremental decod- been widely deployed in a variety of optimization tasks in
+
+ing approach to serving a request where the system computes computer architecture and systems, including branch pre-
+
+the activations for all prompt tokens in a single step and then diction in modern pipelined processors and value prediction
+
+iteratively decodes one new token using the input prompt for pre-fetching memory and files [13, 42], the search space
+
+and all previously generated tokens [27]. This approach re- considered by SpecInfer is significantly larger due to two
+
+spects data dependencies between tokens, but achieves sub- reasons: (1) modern LLMs generally involve very large vocab-
+
+optimal runtime performance and limited GPU utilization, ularies, and (2) maximizing speculative performance requires
+
+since the degree of parallelism within each request is greatly predicting multiple future tokens (instead of just the next
+
+limited in the incremental phase. In addition, the attention token). For example, all LLMs in the OPT model family con-
+
+mechanism of Transformer [48] requires accessing the keys sider 50,272 different possible tokens in their vocabulary,
+
+and values of all previous tokens to compute the attention while SpecInfer can correctly predict the next 4 tokens on
+
+output of a new token. To avoid recomputing the keys and values for all preceding tokens, today's LLM systems use a
+
+average. Achieving this goal requires considering a search space of 502724  6 × 1018 different combinations of tokens.
+
+caching mechanism to store their keys and values for reuse
+
+SpecInfer leverages existing distilled, quantized, and/or
+
+in future iterations. For long-sequence generative tasks (e.g., pruned variants of an LLM, which we call small specula-
+
+GPT-4 supports up to 32K tokens in a request), caching keys tive models (SSMs), to guide speculation. A key challenging
+
+and values introduces significant memory overhead, which of using SSMs for speculative inference is that the align-
+
+prevents existing systems from serving a large number of re- ment between an SSM and an LLM is inherently bounded
+
+quests in parallel due to the memory requirement of caching their keys and values.
+
+by the model capacity gap, since an SSM is generally 1001000× smaller than an LLM. Instead of using a single SSM
+
+Motivated by the idea of speculative execution in proces- for sequence-based speculation, SpecInfer maximizes spec-
+
+sor optimizations [13, 42], recent work introduces sequence- ulative performance by simultaneously considering a vari-
+
+based speculative inference, which leverages a small specula- ety of token sequences organized in a tree structure for a
+
+tive model (SSM) to generate a sequence of tokens and uses an given input prompt. SpecInfer introduces an expansion- and
+
+LLM to examine their correctness in parallel [5, 22, 25, 44, 51]. a merge-based mechanism for constructing token trees by
+
+These attempts only consider a token sequence generated by exploiting diversity within a single SSM and across multiple
+
+a single SSM for speculation, which cannot align well with SSMs, respectively.
+
+an LLM due to the model capacity gap between them, since
+
+A second challenge SpecInfer must address is verifying the
+
+SSMs are generally orders of magnitude smaller than the speculated tokens. Many LLM applications perform stochas-
+
+LLM to maintain low memory and runtime overheads.
+
+tic decoding, which samples the next token from a probability
+
+This paper introduces SpecInfer, a system that improves distribution instead of deterministically generating a token.
+
+the end-to-end latency and computational efficiency of LLM To preserve an LLM's generative performance, SpecInfer
+
+serving with tree-based speculative inference and verifica- must guarantee that its tree-based speculative inference and
+
+tion. Figure 1b illustrates a comparison between existing verification mechanism generates the next token by follow-
+
+incremental decoding, sequence-based speculative inference, ing the exact same probability distribution as incremental
+
+and our tree-based speculative inference. A key insight be- decoding. To achieve this goal, we propose multi-step spec-
+
+hind SpecInfer is to simultaneously consider a diversity of ulative sampling, a new sampling approach for SSMs that
+
+speculation candidates (instead of just one as in existing guarantees equivalence while maximizing the number of
+
+2
+
+

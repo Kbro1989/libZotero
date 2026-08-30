@@ -1,0 +1,2302 @@
+arXiv:2605.21059v1 [cs.CV] 20 May 2026     Multimodal LLMs under Pairwise Modalities
+
+                                                      Yan Li1*, Yunlong Deng1*, Yuewen Sun1,2, Gongxu Luo1
+                                                                    Kun Zhang1,2, and Guangyi Chen1,2
+
+                                                          1 Mohamed bin Zayed University of Artificial Intelligence
+                                                                              2 Carnegie Mellon University
+
+                                                 Abstract. Despite the impressive results achieved by multimodal large
+                                                 language models (MLLMs), their training typically relies on jointly cu-
+                                                 rated multimodal data, requiring substantial human effort to construct
+                                                 multi-way aligned datasets and thereby limiting scalability across do-
+                                                 mains. In this work, we explore training MLLMs by only leveraging
+                                                 multiple paired modalities as a surrogate for the full joint multimodal
+                                                 distribution. Specifically, we first provide a theoretical analysis of the
+                                                 conditions under which the representations are identifiable with only
+                                                 observing pairwise modalities. Building on this analysis, we propose a
+                                                 representation learning framework for aligning latent representations
+                                                 across modalities using only pairwise data. The framework consists of two
+                                                 stages: latent representation alignment and cross-modal recomposition.
+                                                 Specifically, in the first stage, we learn the shared latent space across
+                                                 modalities by both self-modal reconstruction and pair-wise contrastive
+                                                 learning. We also incorporate an inductive bias in the contrastive learning
+                                                 process by partially aligning and minimal latent specification. In stage
+                                                 two, we integrate the encoder of newly introduced modalities with the
+                                                 decoders of the pre-trained modalities to facilitate cross-modal transfer
+                                                 and generation. We evaluate our method by newly adding 3D point clouds
+                                                 and tactile modalities into pre-trained MLLMs with three modality pairs
+                                                 and show that, by learning an aligned latent representation space, our
+                                                 model achieves strong cross-modal performance.
+
+                                        1 Introduction
+
+                                        Multimodal large language models (MLLMs) have recently demonstrated re-
+                                        markable capabilities in cross-modal understanding and generation, enabling
+                                        applications such as image-grounded dialogue [13, 30, 35, 55], audio-visual rea-
+                                        soning [63, 64], cross-modal interactions [7, 66], and embodied perception [25, 79].
+                                        By jointly modeling multiple modalities, e.g., text, images, audio, and 3D sig-
+                                        nals, these MLLMs learn shared representations that support flexible modality
+                                        transfer and cross-modal generation. However, their success has largely relied
+                                        on large-scale jointly curated multimodal datasets, in which all modalities are
+                                        aligned for each instance [55, 64]. Constructing such multi-way aligned data
+
+                                        * Equal contribution.
+                                         Preprint
+2  Y. Li et al.
+
+Fig. 1: Comparison between jointly-aligned and pairwise-aligned multimodal
+data. (a) Jointly-aligned modalities: each sample requires all modalities, which is
+expensive and difficult to scale. (b) Pairwise-aligned modalities: modality pairs (e.g.,
+text­image, image­tactile, text­3D) are naturally available from different sources,
+forming a connected modality graph without requiring fully aligned multi-way data.
+
+is expensive, labor-intensive, and often infeasible in emerging domains such as
+robotics, tactile sensing, and medical imaging. This heavy dependence on fully
+aligned multimodal corpora significantly limits scalability to more modalities.
+
+    As shown in Figure 1, compared with fully jointly aligned multimodal data,
+pairwise modality alignments are far more readily available in real-world data
+sources, making them a more practical supervision signal for scalable multimodal
+learning. For example, Image­text pairs are abundant on the web, 3D­image pairs
+can be obtained from multi-view capture systems, and tactile­vision pairs can
+be collected using instrumented robotic platforms equipped with touch sensors.
+This observation raises a fundamental yet unresolved question:
+
+        How can we train a multimodal model using only paired modalities,
+                    without ever observing the full joint distribution?
+
+In this work, we explore multimodal representation learning under pairwise
+modalities as a surrogate for full multi-way supervision. We begin by theoretically
+analyzing the conditions under which latent representations are identifiable from
+a collection of overlapping modality pairs in the generative model setting. Under
+mild identifiability assumptions, we show that learning shared representations
+from pairwise modalities is feasible and admits theoretical guaranties. Intuitively,
+if the modality graph formed by pairwise datasets is sufficiently connected,
+shared latent factors can be consistently recovered even without explicit multi-
+way alignment.
+
+    Motivated by this analysis, we introduce a representation learning framework
+for aligning latent representations across modalities using only pairwise supervi-
+sion. The framework is structured into two stages: first, learning a unified shared
+latent space; and second, facilitating cross-modality transfer via representation
+recomposition. Specifically, in stage one, shared representations are learned by
+Multimodal LLMs under Pairwise Modalities  3
+
+combining self-modal reconstruction with cross-modal latent alignment. The
+former preserves modality-specific semantics and stabilizes training, whereas the
+latter employs a contrastive objective to encourage latent factors from paired
+modalities to align within a unified representation space. Within the contrastive
+learning framework, we incorporate structural inductive biases derived from the
+underlying data-generating process by enforcing partial representation align-
+ment and promoting minimal latent specification. Then, in the second stage,
+we perform cross-modal recomposition to integrate newly introduced modali-
+ties into pre-trained large language models (LLMs) or MLLMs. For example,
+to incorporate a new modality such as 3D point clouds into an LLM, we first
+extract the shared representations between 3D and text with a point cloud
+encoder aligned with the textual latent space. We then recombine the aligned
+encoder with the text decoder, enabling text generation conditioned on 3D inputs.
+This recompositional design allows the new modality to leverage the generative
+capacity of pre-trained language models without full joint retraining. Unlike
+existing cross-modal adapters that require instruction tuning [35] or LoRA-based
+fine-tuning [21] to modify pre-trained models, our approach keeps the pre-trained
+models unchanged, thereby avoiding catastrophic forgetting and preserving their
+original capabilities.
+
+    We validate our approach by incorporating two new modalities, such as
+3D point clouds and tactile sensing, into a pre-trained MLLM. Specifically, we
+adopt Qwen3-Omni [64], which is pre-trained on image, text, video, and audio
+modalities, as the base MLLM. To train and evaluate the proposed framework,
+we leverage publicly available datasets Objaverse [12] and TVL [16], comprising
+three new modality pairs: text­3D, text­tactile, and image­tactile. We compare
+our method against previous state-of-the-art MLLMs as well as adapter-based
+baselines. The results demonstrate that, when properly structured, pairwise
+modality supervision provides a scalable and effective alternative to conventional
+fully jointly aligned multimodal training.
+
+    In summary, the main contributions of this paper are threefold:
+
+  ­ We provide a theoretical analysis on the identifiability of multimodal repre-
+     sentation from pairwise modality data.
+
+  ­ We propose a unified latent alignment and recomposition framework for
+     scalable multimodal learning using only pairwise supervision.
+
+  ­ We conduct experiments with two newly introduced modalities and demon-
+     strate strong cross-modal transfer despite relying solely on limited modality-
+     pair datasets.
+
+2 Related Work
+
+Multimodal Representation Learning. Foundation scale pretraining made
+representation alignment a central design pattern. Dual encoder contrastive learn-
+ing, exemplified by CLIP [43] and ALIGN [24], aligns image and text embeddings
+with large scale paired supervision, enabling strong zero shot transfer and re-
+trieval via similarity in a shared space. Later refinements improved objectives and
+4  Y. Li et al.
+
+scaling strategies, including locked image text tuning, sigmoid based contrastive
+losses, and hybrid encoder decoder formulations that unify contrastive alignment
+with captioning [69, 71, 72]. Complementary to dual encoders, fusion based
+vision language pretraining integrates modalities inside a transformer using cross
+attention, with representative instances such as ViLBERT, LXMERT, UNITER,
+ViLT, and ALBEF [8, 26, 33, 38, 48]. Unified task formulations further connect
+representation learning with generation; for example, OFA, FLAVA, BLIP, and
+BLIP 2 [31, 32, 45, 54]. Beyond image text, alignment has been extended to
+video and audio through video text pretraining and multimodal self-supervised
+learning, as well as audio text contrastive learning [2, 15, 62]. Recent work aims
+to bind multiple modalities into a single latent space, including ImageBind and
+language centered binding via language as a hub, such as LanguageBind and
+OneLLM [18, 20, 76]. Closely related to our motivation, unpaired multimodal
+representation learning reduces the need for fully aligned multimodal tuples
+by connecting or extending existing contrastive representation spaces, as in C-
+MCR [56] and Ex-MCR [74]. Another relevant line is missing-modality learning,
+which studies inference or training when only partial modalities are observed, in-
+cluding multimodal VAEs, SMIL, and shared-specific feature modeling [39, 52, 58].
+Our work follows the spirit of representation alignment but emphasizes explicit
+latent space alignment through a chain of paired datasets, targeting improved
+efficiency and a principled mechanism for modality extension. While our setting
+can be viewed as a structured special case of missing-modality learning, it differs
+in that we infer joint representations from sparsely connected observations rather
+than assuming that a shared embedding learned from partial modalities directly
+transfers to missing-modality cases.
+
+Causal Representation Learning. Causality formalizes how latent mecha-
+nisms generate observations and how interventions affect outcomes, commonly
+described by structural causal models and related graphical criteria [40, 41, 46].
+Causal representation learning aims to discover representations corresponding
+to high level causal variables that support robust generalization and modular
+recombination across domains [44]. A core difficulty is identifiability: how can
+the estimated latent variables be disentangled and correspond to the ground
+truth latent variables in block level or one-to-one mapping, especially in nonlin-
+ear cases [37]. Recent progress establishes identifiability by leveraging sufficient
+changes [68, 73], distribution shifts [28, 34], multi view learning [47, 67], con-
+trastive learning [23, 78], supervised learning [19, 51], or explicit structural
+constraints like sparsity [29, 75]. In language models, causal tools have been
+used to connect internal representations to behavior, spanning causal mediation
+analysis and causal abstraction. Recent surveys advocate integrating causality
+throughout pretraining, fine-tuning, alignment, inference, and evaluation [57].
+Our approach aligns with this agenda by using interlocking paired datasets
+across modalities to identify a shared latent space that remains consistent when
+incorporating new modalities.
+
+Multimodal Large Language Models. Multimodal large language models
+extend transformer-based language models with modality encoders and connectors
+Multimodal LLMs under Pairwise Modalities                                       5
+
+and are typically trained via staged pretraining, alignment, and instruction
+tuning [5, 50]. Early strong results include Flamingo for few shot visual language
+adaptation and PaLM E for embodied multimodal reasoning [3, 14]. Closed-source
+systems such as GPT 4 and Gemini demonstrate strong multimodal capabilities
+at scale [1, 49]. Open and instruction tuned MLLMs have rapidly progressed,
+including Kosmos 1, InstructBLIP, LLaVA, MiniGPT 4, and parameter-efficient
+visual instruction adaptation [6, 11, 17, 22, 36, 77]. Scaling alignment with
+stronger vision foundations is explored in InternVL [9], and any-to-any generation
+systems, such as Next-GPT, connect an LLM to multiple modality decoders [59].
+Within open source ecosystems, the Qwen series has released multiple multimodal
+technical reports, including Qwen2-VL, Qwen2-Audio, Qwen2.5-Omni, Qwen3-
+VL, and Qwen3-Omni [4, 10, 53, 63, 64]. Most modality extension approaches
+rely on large-scale joint datasets or extensive modality-specific finetuning. While
+some works [62, 64] are LanguageBind-style approaches that use language as a
+shared anchor, our framework does not require any universal anchor modality,
+enabling more flexible updates for newly emerging modality pairs. We implement
+explicit representation-level latent alignment on top of Qwen3 Omni using a
+chain of paired datasets, enabling new modalities and cross-modal generation
+while preserving original multimodal abilities.
+
+3 Theory
+
+3.1 Generative Model and Problem Setup
+
+We introduce the following generative model as a formal tool for studying
+identifiability: it specifies how modality-specific observations arise from shared
+and private latent factors, thereby allowing us to state when the shared latent
+subspace can be recovered from pairwise observations.
+
+Data Generating Process.
+
+We consider x := [x(1), . . . , x(M)]
+
+to denote a collection of obser-
+
+vations from M distinct modal-
+ities, where each x(m)  Rd(xm)
+
+represents the observation cor-
+
+responding to modality m, and
+
+dx(m) denotes its dimensionality.
+Let z := [z(1), . . . , z(M)] denote
+
+the collection of latent variables     Fig. 2: Data generation process. The shared
+associated with the M modal-
+ities, which are assumed to be         latent space c (blue) contains factors that influ-
+causally related and to jointly
+govern the data generating pro-        ence multiple modalities, while modality-specific
+cess of the observed variables.
+For each modality, the latent          variables s (red) affect only their corresponding
+
+                                       modality. Each observation x(m) is generated from
+
+                                       its  shared  latent  block  z  (m)  and  modality-specific
+                                                                      c
+
+                                       block zs(m).
+6      Y. Li et al.
+
+variables z(m) = [z(cm), z(sm)]  Rdz(m) consist of a shared latent block zc(m)
+and an independent modality-specific latent block zs(m). The shared latent vari-
+ables zc(m)  Rdc(m) denote the subset of latent factors that are causally associated
+with latent variables from other modalities, or directly participate in the gener-
+
+ation of multiple modalities. In contrast, the modality-specific latent variables
+z(sm)  Rd(sm) are exclusively related to modality m and influence only its corre-
+sponding observations.
+
+    As shown in Figure 2, the data generation process can be written as:
+
+               \label {eq:gen_single} \vec {z}^{(m)}_i = f_{m, i}(\text {Pa}(\vec {z}^{(m)}_i), \epsilon ^{(m)}_i) ,\qquad \vec {x}^{(m)} = g_{m}(\vec {z}^{(m)}_c, \vec {z}^{(m)}_s),                                                         (1)
+
+where the fm,i denotes the latent causal process of each latent variable, while
+
+the gm is the generative function from latent factors to the observation. Pa(·)
+
+denotes the parents of a variable, and i(m)  p(im) is the noise term. Since certain
+shared latent factors may simultaneously appear in the generating processes of
+
+multiple modalities (e.g., c3 in Figure 2), the total number of distinct shared
+
+latent variables is generally smaller than        M       |z(cm)|.  To  make                                                                                                                                                it  clearer,       we
+                                                  m=1
+
+define the set of all connected latent factors as c = {c1, c2, . . . , cdc }, and we have
+
+c = {z(c1)  z(c2)  ...  z(cM)}. Similarly, we define the set of modality-specific
+
+latent variables as s = {s1, s2, . . . , sds }.
+
+Pairwise Observations and Modeling. In practice, it is often challenging to
+collect fully jointly aligned multimodal data as described in Eq. 1. Instead, it is
+considerably more feasible to obtain observations that are aligned only in pairwise
+modalities. To formally characterize such pairwise co-occurrence, we introduce
+an undirected graph G = ([M ], E), where the node set [M ] := {1, . . . , M } indexes
+the modalities, and the edge set E  {i, j} : 1  i < j  M encodes the
+availability of pairwise observations. An edge {i, j}  E indicates that paired data
+between modalities i and j are observed. For a fixed target modality i  [M ],
+we define its set of observed neighbors as N (i) := { j  [M ] \ {i} : {i, j}  E }
+which represents the collection of modalities for which pairwise aligned data with
+modality i are available. Accordingly, the available dataset consists of pairwise
+observations D = (x(i), x(j)) : {i, j}  E , that is, for each edge {i, j}  E in
+the modality graph, we observe samples jointly drawn from modalities i and j.
+
+    Given one pairwise observations (x(i), x(j)), and taking modality i as target,
+we assume that the paired data between modality i and any neighbor j  N (i)
+admits the following form
+
+               \label {eq:pair_gen} \vec {x}^{(i)} = g_i\bigl (\vec {z}^{(i)}_c, \vec {z}^{(i)}_s\bigr ), \qquad \vec {x}^{(j)} = g_{j\leftarrow i}\bigl (\vec {z}^{(i)}_c, \tilde {\vec {z}}^{(j)}_{\setminus i}\bigr ),                      (2)
+
+where  the   former   denotes  the  standard  generating  process,  z   (i)  denotes                                                                                                                                            all    latent
+                                                                        c
+
+variables of modality i that are relevant to other modalities, and z~\(ji) represents
+
+the  latent  factors  of  modality  j  that  are  needed  to  generate  x(j)                                                                                                                                                expect  z  (i)  .  As
+                                                                                                                                                                                                                                       c
+
+illustrated in Figure 2, when i = 2 and j = 3, the shared latent variables are
+                                         Multimodal LLMs under Pairwise Modalities                                                                                                                                                                                                            7
+
+given  by  z  (i)  =  {c2,  c3},  while  z~(\ji)  corresponds      to    the  set   {c4, s3},  which                                                                                                                                                                                includes
+              c
+
+the latent factors of modality j = 3 that are not shared with modality i = 2.
+
+Identifiability. Given the data D, our goal is to learn latent variables z(m) under-
+
+lying each modality. Formally, consider the ground truth data-generating process
+
+in Equation (1), whose parameters are                    gm,      {fm,i  }dz(m)  ,  {p(i(m))}di=(zm1)                                                                                                                                                                               M
+
+                                                                           i=1                                                                                                                                                                                                           , and
+
+                                                                                                                                                                                                                                                                                    m=1
+                                                                                       M
+the estimated parameters               g^m,  {f^m,i    }dz(m)  ,   {p^(i(m))}id=(zm1)
+                                                                                            . Our subspace
+                                                         i=1
+                                                                                       m=1
+identification objective is to show that, with the same data, the estimated shared
+
+latent representations z^c(m) based on estimated parameters should be equivalent
+
+to  the  ground       truth  counterpart          zc(m)  as    z^  (m)  =  h(m)zc(m),  where                                                                                                                                                                                        h(m)  is  an
+                                                                   c
+
+invertible mapping.
+
+     This notion of subspace identifiability guarantees that, although individual
+
+latent components may not be uniquely identifiable, the shared latent subspace
+
+responsible for cross-modal dependence is recoverable from pairwise observations.
+
+Such identifiability is sufficient to guarantee consistent cross-modal alignment
+
+and reliable transfer across modalities, thereby providing a principled foundation
+
+for real-world multimodal learning applications.
+
+Example (Pairwise Multimodal Setting). Consider three modalities in Fig. 2:
+image (m = 1), tactile sensing (m = 2), and text (m = 3), with observations
+x(1), x(2), x(3). The latent variables z = [z(1), z(2), z(3)] = [[c1, s1], [c2, c3, s2], [c3,
+c4, s3]] capture underlying semantic factors, where the shared block c = {c1, c2, c3,
+c4} represents object-level properties that influence multiple modalities, while
+the modality-specific block s = {s1, s2, s3} accounts for modality-dependent
+variations such as sensor noise. In practice, we may only observe pairwise data,
+such as image­text, text­tactile, or image­tactile pairs, without fully aligned
+triplets. Nevertheless, because the shared latent factors propagate across the
+connected modality graph, the common semantic subspace can still be recovered
+from overlapping pairwise observations.
+
+3.2 Block Identifiability
+
+Notation. Here, we introduce several notations that will be used in the sub-
+
+sequent theoretical analysis. For a vector v  RD, we denote by [v]k its k-th
+
+coordinate and by [v]I the subvector indexed by I  [D] := {1, . . . , D}. For a
+
+vector-valued function f , [f ]k denotes its k-th output component. Let Jf denote
+
+the Jacobian matrix of a function f with respect to its concatenated input vari-
+
+ables. We use I(zc(m)) to denote the set of coordinate indices corresponding to
+
+the  shared   latent  block  z    (m)  within     the    full  latent   vector.     Accordingly,                                                                                                                                                                                    the  partial
+                                  c
+
+Jacobian of gji z(ci), z~\(ji) (cf. Equation (2)), which captures the sensitivity of
+
+x(j) with respect to z(ci), can be expressed as
+
+                A_{j\leftar ow i}(\vec {z}^{(i)}_c, \tilde {\vec {z} ^{(j)}_{\setminus i}) := \bigl [J_{g_{j\leftar ow i}\bigl (\vec {z}^{(i)}_c, \tilde {\vec {z} ^{(j)}_{\setminus i}\bigr )}\bigr ]_{:,\,I(\vec {z}^{(m)}_c)} \in \mathb  {R}^{d_{x}^{(j)}\times d_{c}^{(i)} . 
+8  Y. Li et al.
+
+      Assumption 1 (Subspace Identifiability Conditions)
+
+   (A1) Smoothness & Invertibility: The generative function of single modal-
+          ity gi and the joint one gij : (z(ci), zs(i), z~(\ji))  (x(i), x(j)) are smooth
+          and admit smooth inverse functions.
+
+   (A2) Linear Independence: For latent realization (z(ci), z~\(ji)), j  N (i),
+          there exist matrices  L_{ij}(\vec {z}^{(i)}_c, \tilde {\vec {z}}^{(j)}_{\setminus i})\in \mathbb {R}^{d^{(i)}_{c}\times d^{(j)}_{x}},  such that the following
+          coefficient combination identity holds:
+                              \sum _{j\in \mathcal {N}(i)} L_{ij}(\vec {z}^{(i)}_c, \tilde {\vec {z} ^{(j)}_{\setminus i})\;A_{j\leftar ow i}(\vec {z}^{(i)}_c, \tilde {\vec {z} ^{(j)}_{\setminus i}) = I(\vec {z}^{(i)}_c). 
+
+Remark 1. Assumption 1(A1) means that each observation contains enough
+information about its underlying latent factors so that one can, in principle,
+recover a latent representation from the data, with only a change of coordinates
+ambiguity.This premise is common in nonlinear latent variable identifiability [28,
+47, 67, 78]. Assumption 1(A2) captures the idea that the shared factors influence
+the neighboring modalities in a sufficiently rich way so that those neighbors
+provide informative constraints for recovering the shared part. Importantly,
+it does not require any observed pair to be fully informative; one neighbor
+may reveal only certain directions of the shared factors, while another may
+reveal complementary directions. Instead, it requires that, when information
+is aggregated across all observed neighbors, the resulting constraints span all
+directions of the shared latent block.
+
+     Theorem 1 (Subspace Identifiability with Pairwise Modalities)
+
+  With pairwise observations, a fixed target modality i and its observed
+   neighbors N (i), if the parameters {gi, {gji}jN (i)} of the pairwise data-
+   generating processes for (z(ci), z(si)) satisfy Assumption 1(A1) and (A2), the
+   estimated ones { g^i, {g^ji}jN (i)} for (z^c(i), z^(si)) satisfy Assumption 1(A1),
+   and generative models induce identical pairwise observations for all j  N (i),
+   then the shared latent block zc(i) can be identified.
+
+Proof Intuition. We compare two specifications that induce the same pairwise
+distributions for all observed neighbors. By Assumption 1(A1), each observation
+can serve as a local coordinate chart for its latent variables, so we can track how
+small changes in the shared coordinates propagate to each observation of neighbors.
+Since the pairwise distributions match, these local input-output change patterns
+must also match up to a smooth change of coordinates. The key step is then to
+aggregate the neighbor-wise constraints using Assumption 1(A2): combining the
+constraints across multiple neighbors forces the recovered shared representation
+Multimodal LLMs under Pairwise Modalities                                                                                  9
+
+to be related to the true shared block by a smooth invertible transformation,
+establishing block identifiability even when no single pair is sufficient on its
+own. A detailed proof of block identifiability, along with additional results on
+component identifiability, is provided in Appendix A.
+
+4 Approach
+
+In this section, we present a framework, Multimodal Pairwise Model( MPM
+in short), for multimodal representation learning using only pairwise modality
+supervision. This framework is motivated by our theoretical insight that, under
+appropriate connectivity, shared latent representations can be recovered from
+overlapping modality pairs without ever observing fully jointly aligned samples.
+
+4.1 Overall Framework
+
+Formally, as shown in the theoretical setup, suppose that we are given a set of
+modalities M = {1, . . . , M }. Instead of observing samples from the full joint
+distribution, we only have access to datasets of modality pairs
+
+  \label {eq:pair_dataset} \mathcal {D}_{ij} = \{(x^{(i)}_n, x^{(j)}_n)\}_{n=1}^{N_{ij}}, \qquad (i,j) \in \mathcal {E},   (3)
+
+where E denotes the set of observed modality pairs as defined in Sec. 3, and
+Nij denotes the number of data pairs in modality pair x(i), x(j). Our goal is to
+learn the latent representation z(m) = [zc(m), z(sm)] of each modality x(m), and
+most importantly, to find the shared latent variables z(cm), which are semantically
+aligned across modalities, enabling cross-modal transfer and generation.
+
+    As shown in Figure 3, our framework consists of two stages:
+
+      Stage I: Latent Representation Alignment. Learn modality encoders
+      and decoders that map inputs into a unified shared latent space using only
+      pairwise supervision.
+
+      Stage II: Cross-Modal Recomposition. Recompose the aligned encoders
+      of newly introduced modalities with the decoders of existing modalities
+      in pre-trained LLMs or MLLMs, thereby enabling cross-modal generation
+      without modifying the backbone model.
+
+4.2 Stage I: Latent Representation Alignment
+
+Self-modal Reconstruction. We begin our approach with a generative frame-
+work that reconstructs each modality from its learned latent representation,
+implemented through an autoencoder architecture. For each modality x(m), we
+first learn an encoder, such as a Transformer [50] or a lightweight multilayer
+perceptron (MLP), that maps the observed data into latent space:
+
+            \label {eq:encoder_def} \text {Enc}_m:\mathbb {R}^{d_x^{(m)}} \rightarrow \mathbb {R}^{d_c^{(m)}} \times \mathbb {R}^{d_s^{(m)}}, \qquad (\hat {\vec {z}}^{(m)}_c,\hat {\vec {z}}^{(m)}_s) = \text {Enc}_m(\vec {x}^{(m)}).  (4)
+10  Y. Li et al.
+
+Fig. 3: Two-stage framework for multimodal learning from pairwise-only
+supervision. Stage I (Left) aligns modality encoders in a shared latent space; and
+Stage II (Right) recomposes them with a frozen pretrained MLLM to enable cross-modal
+generation without multi-way alignment.
+
+which mirrors the theoretical decomposition z(m) = [zc(m), zs(m)]. The shared
+code z^(cm) is intended to parameterize the modality-relevant subset, while z^s(m)
+captures modality-specific variations.
+
+    To ensure that (z^(cm), z^s(m)) preserves all information about x(m), we introduce
+a lightweight decoder:
+
+      \label {eq:decoder_def} \text {Dec}_m:\mathbb {R}^{d_c^{(m)}} \times \mathbb {R}^{d_s^{(m)}} \rightarrow \mathbb {R}^{d_x^{(m)}}, \qquad \hat {\vec {x}}^{(m)} = \text {Dec}_m\bigl (\hat {\vec {z}}^{(m)}_c,\hat {\vec {z}}^{(m)}_s\bigr ).                                                                                  (5)
+
+Here, all latent variables are used to generate the observation. Then, we minimize
+
+                    \label {eq:rec_los } \mathcal {L}^{(m)}_{\mathrm {rec}  = \mathb  {E}_{\vec {x}^{(m)} \!\left [ \el  _m\!\left ( \hat {\vec {x} ^{(m)},\, \vec {x}^{(m)} \right ) \right ],                                                                                                                                     (6)
+
+where m denotes a modality-specific reconstruction loss that measures the
+discrepancy between the reconstruction x^(m) and the original input x(m). In our
+implementation, we adopt a weighted combination of the mean squared error
+(MSE) and a cosine similarity term:
+
+      \label {eq:recon_loss_full} \ell _m\bigl (\hat {\vec {x}}^{(m)}, \vec {x}^{(m)}\bigr ) = \left \lVert \hat {\vec {x}}^{(m)} - \vec {x}^{(m)} \right \rVert _2^2 \;-\; \lambda \, \hat {\vec {x}}^{(m)\top }\vec {x}^{(m)} / ( \lVert \hat {\vec {x}}^{(m)}\rVert _2 \lVert \vec {x}^{(m)} \rVert _2 ).  (7)
+where  controls the trade-off between the MSE and the cosine similarity.
+
+Cross-Modal Contrastive Alignment. To align the shared latent represen-
+
+tations across modalities, we adopt a CLIP-style contrastive learning objective.
+
+Following the symmetric formulation of CLIP, we enforce bidirectional alignment
+between modalities i and j. Given the shared representations z^(ci) and z^(cj), the
+standard contrastive loss from i  j is defined as
+
+      \mathcal {L}_{i \rightar ow j} =- \mathb  {E} \left [ \log \frac { \exp \!\left ( \mathrm {sim}(\hat {\vec {z} ^{(i)}_c, \hat {\vec {z} ^{(j)}_c) / \tau \right ) }{ \sum _{(\vec {x}^{(i)}, \vec {x}^{(j')})} \exp \!\left ( \mathrm {sim}( \hat {\vec {z} _c^{(i)}, \hat {\vec {z} _c^{(j')}) / \tau \right ) } \right ],   (8)
+                                     Multimodal LLMs under Pairwise Modalities                                                                                                                                                                                                    11
+
+where sim(·, ·) denotes cosine similarity and  is a temperature parameter.
+(x(i), x(j)) are negative pairs. The reverse direction j  i is defined analogously.
+The final alignment loss for the pair {i, j} is
+
+                                       \label {eq:align_los } \mathcal {L}^{(ij)}_{\mathrm {con}  = \frac {1}{2} \left ( \mathcal {L}_{i \rightar ow j} + \mathcal {L}_{j \rightar ow i} \right ).                                                                                (9)
+
+We combine self-modal reconstruction and cross-modal contrastive alignment:
+
+                           \label {eq:stage1_los } \mathcal {L}^{(ij)}_{\mathrm {Stage\,I}  = \lambda _{\mathrm {rec}  \left ( \mathcal {L}^{(i)}_{\mathrm {rec}  + \mathcal {L}^{(j)}_{\mathrm {rec}  \right ) + \lambda _{\mathrm {con}  \mathcal {L}^{(ij)}_{\mathrm {con} ,   (10)
+
+where rec and con balance reconstruction and alignment, respectively.
+
+Partial and Asymmetric Alignment. According to the pairwise generative
+
+form in Equation (2), when treating modality i as the target modality, the
+
+cross-modal dependence between x(i) and x(j) is mediated only by the subset
+
+of shared latent variables that are relevant to modality i. In other words, not
+
+all components of z(cj) necessarily contribute to the generation of x(i). This
+
+observation is particularly important in our setting, where the ultimate objective
+
+is to integrate newly introduced modalities into pre-trained LLMs/MLLMs. We
+
+therefore treat modalities that already exist in the pre-training stage as target
+
+modalities. Due to modality gaps, certain latent factors in a newly added modality
+
+may not correspond to those in the target modality. For example, tactile sensing
+
+may capture fine-grained surface properties (e.g., roughness, stiffness, or friction)
+
+that are not explicitly described in textual captions, even though some of these
+
+properties are visually correlated with images. Enforcing full alignment between
+
+z(ci)  and  z  (j)  may  therefore   introduce  spurious  constraints.
+               c
+
+To address this issue, we propose an asymmetric and partial alignment
+
+mechanism from the newly added modality to the target modality. Specifically,
+
+we introduce a binary mask m(ji)  {0, 1}dc(j) to select the subset of shared
+
+latent components in z(cj) that are relevant to modality i. The similarity used in
+
+the contrastive objective is then defined as
+
+                           \label {eq:masked_similarity} \mathrm {sim}\bigl (\vec {z}_c^{(i)}, \vec {z}_c^{(j)}\bigr ) \;:=\; \mathrm {sim}\bigl ( \vec {z}_c^{(i)},\; \vec {m}^{(j\leftar ow i)} \odot \vec {z}_c^{(j)} \bigr ),                                                 (11)
+
+where  denotes element-wise multiplication. Thus, we feed the selected shared
+
+representation of the newly added modality into the decoder of the target modality,
+
+x~(i) = Deci        m(ji)    z  (j)  and impose a reconstruction constraint on x~(i). In
+                                c
+
+our experiments, we assume that the representations learned by the pre-trained
+
+MLLMs have already captured all latent variables, including shared factors and
+
+specific factors. Therefore, we focus solely on modeling and aligning the shared
+
+representations when integrating newly introduced modalities. As illustrated in
+
+Figure 3, for simplicity, we predefine the number of active entries in the mask,
+and the mask m(ji) is allowed to vary across different target modalities to
+
+reflect modality-dependent shared subspaces.
+12  Y. Li et al.
+
+4.3 Stage II: Cross-Modal Recomposition
+
+After learning modality-specific encoders {Encm}M m=1 and decoders {Decm}M m=1
+in Stage I, we enable cross-modal generation by recomposing the learned shared
+representations with a frozen pre-trained LLM/MLLM. The key idea is to use
+the shared latent space as a bridge between newly introduced modalities and the
+modalities already supported by the pre-trained backbone.
+
+    Specifically, let modality (i) denote a target modality involved in the pre-
+training of LLMs/MLLMs, and let modality (j) be newly introduced. Given an
+input x(j), we first obtain its shared representation via Encj(x(j)). We then apply
+the asymmetric mask m(ji) to select the components relevant to modality (i),
+and feed the resulting representation into the decoder of modality (i):
+
+                    \label {eq:cros _modal_transfer} \tilde {\vec {x} ^{(i)} = \mathrm {Dec}_i\!\left ( \vec {m}^{(j\leftar ow i)} \odot \mathrm {Enc}_j\!\left (\vec {x}^{(j)}\right ) \right ).   (12)
+
+The transferred representation x~(i) is treated as a surrogate input in modality (i)
+and is subsequently provided as context to the frozen pre-trained LLM/MLLM
+for downstream generation. During this stage, the parameters of the backbone
+model remain fixed, while only the modality encoders and decoders are updated.
+This design preserves the original capabilities of the pre-trained model and avoids
+catastrophic forgetting.
+
+One Modality with Multiple Pairs. In practice, a modality may participate
+in multiple pairwise datasets. To accommodate this setting, we jointly transfer
+the modality to all its corresponding target modalities and aggregate the result-
+ing outputs as contextual inputs to the pre-trained MLLM. As illustrated in
+Figure 3, since fully jointly aligned multimodal data are unavailable, training
+proceeds iteratively over individual modality pairs. In each iteration, we sample
+one observed pair and update the corresponding alignment components, while
+keeping all decoders active. Although a specific modality may not appear in the
+current mini-batch, its decoder remains trainable due to the shared latent space
+established in Stage I, which ensures global consistency across modalities.
+
+5 Experiments
+
+5.1 Experimental Setup
+
+Backbone and Frozen Feature Extractors. All experiments are built on
+Qwen3-Omni-30B-A3B, which serves as the frozen MLLM backbone. We keep
+the entire backbone fully frozen throughout training: we never update the LLM
+parameters nor its native multimodal branches. In particular, we use the image
+branch of Qwen3-Omni-30B-A3B as a fixed visual feature extractor for image
+inputs. For newly introduced modalities, we adopt off-the-shelf encoders in
+baselines and freeze them as well: for 3D point clouds, we use PointBERTv1.2 [70]
+released by PointLLM [65]; for tactile sensing, we use the tactile-pretrained
+ViT-Base released in TVL [16]. Consequently, all trainable parameters in our
+               Multimodal LLMs under Pairwise Modalities  13
+
+Table 1: Performance comparison with baselines on two 3D point benchmarks:
+3D MM-VET and ModelNet40. "Tuning" indicates whether the model is fully
+fine-tuned (Full) or adapted via parameter-efficient fine-tuning (PEFT); when available,
+we report the number of updated parameters in parentheses. Higher is better. All scores
+are accuracy (%).  Results marked with a dagger are taken from the original PointLLM
+and ShapeLLM papers.
+
+     Method       Tuning         Input      3D MM-VET ModelNet40
+                       ­   3-view 2D image
+  Qwen3-Omni-                               56.1  24.2
+     30B-A3B   LoRA(7B)     3D point cloud
+                Full(7B)    3D point cloud  23.5  51.9
+PointBind&LLM   Full(13B)   3D point cloud  41.2  53.4
+ PointLLM-7B    Full(7B)    3D point cloud  46.6  53.0
+ PointLLM-13B   Full(13B)   3D point cloud  47.4  53.1
+ ShapeLLM-7B   PEFT(9.5M)   3D point cloud  53.1  53.0
+ShapeLLM-13B   PEFT(78M)    3D point cloud
+                                            49.7  53.2
+      Adapter                               57.6  70.5
+        MPM
+
+system reside on the modality side (our alignment autoencoder and the Stage II
+mappers), which preserves the backbone's native multimodal capabilities and
+mitigates catastrophic forgetting.
+
+Modality-Side Autoencoder Architecture. We instantiate a lightweight
+autoencoder to learn a unified shared latent space from paired supervision and to
+support cross-modal recomposition. Across text/image/tactile/point modalities,
+we use a unified encoder template: each modality encoder is a 4-layer attention
+stack that maps frozen modality tokens into a structured latent representation.
+On the decoding side, we employ 12-layer attention decoders.
+
+Paired Training Data. We use three types of paired training data: text­3D,
+text­tactile, and image­tactile. For text­3D, we combine two sources: (i) 660K
+Objaverse point clouds with captions provided by the PointLLM annotations, and
+(ii) an additional 100K synthetic point­caption pairs generated using Microsoft
+TRELLIS [61]. For tactile, we use the TVL dataset and restrict supervision to
+touch­text and touch­image pairs only, resulting in 43K paired samples in total.
+
+5.2 Evaluation
+
+3D Point Cloud Benchmarks. We evaluate 3D point understanding on two
+benchmarks: ModelNet40 [60], a standard 40-way object classification dataset, and
+3D MM-VET released by ShapeLLM [42], a 3D question answering benchmark
+with free-form responses. On ModelNet40, we prompt the model to choose
+one label from the 40 canonical categories and report top-1 accuracy. On 3D-
+MMVET, we follow the official protocol and use the benchmark's GPT-based
+evaluation script to judge answer correctness. We compare against the frozen
+Qwen3-Omni-30B-A3B backbone [64], several 3D-aware multimodal language
+models trained/fine-tuned with 3D­language supervision, and an adapter baseline
+14  Y. Li et al.
+
+Table 2: Performance comparison on TVL benchmarks. Most results come from
+TVL [16]. All results are evaluated by GPT-4.
+
+    Method                SSVTP   HCT   TVL
+    LLaVA-1.5 13B           3.55  3.63  3.62
+    ViP-LLaVA 13B           4.10  3.76  3.80
+    GPT-4V                  5.02  4.42  4.49
+    TVL-LLaMA (ViT-Base)    6.16  4.89  5.03
+    Qwen3-Omni              5.30  4.28  4.40
+    MPM                    6.24   5.09  5.22
+
+implemented by us that inserts a two-layer MLP projector on top of the same
+Qwen3-Omni backbone. MPM outperforms all baselines on both benchmarks.
+
+Tactile Benchmarks. For tactile sensing, we evaluate on TVL, where the input
+is a tactile image (optionally with an object image), and the model describes
+tactile attributes such as soft or smooth. Following prior work, we use GPT-4
+for score prediction, ground-truth agreement on a 1­10 scale. As shown in Tab. 2,
+MPM achieves the best performance among tactile-capable baselines, and it does
+so without requiring the auxiliary object image at inference time. The experiment
+details and showcases can be found in Appendix B.
+
+5.3 Ablations
+
+Can we skip Stage I and directly "plug" a new modality into a frozen
+MLLM via recomposition? No. We remove Stage I entirely and only optimize
+the Stage II interface to the frozen backbone. This recomposition-only variant
+performs substantially worse than the full model (Table 3), suggesting that under
+pairwise data it is difficult to simultaneously discover modality semantics and
+align them to the backbone embedding space in a single end-to-end step. Stage I
+mitigates this by learning an information-preserving shared latent code on which
+recomposition can reliably operate; without such a common latent space, the
+cross-modal "translation" becomes poorly constrained.
+
+If Stage I already aligns representations, do we still need Stage II?
+Yes. We keep Stage I training intact but remove Stage II, i.e., we do not
+connect the learned shared code to the frozen MLLM decoder. This Stage I
+only variant underperforms the full pipeline (Table 3), indicating that aligned
+representations alone do not directly yield strong language-grounded performance.
+Stage I decoders are lightweight reconstruction heads and are not meant to model
+fluent language generation or instruction-following behavior; Stage II is essential
+as a compatibility bridge that maps z^c into the backbone's input embedding
+space and leverages the frozen decoder for robust downstream performance.
+
+Which ingredient in Stage I matters more: reconstruction or contrastive
+alignment? Both matter. To isolate the contributions of the two Stage I
+objectives, we train two variants that remove either the self-modal reconstruction
+                           Multimodal LLMs under Pairwise Modalities  15
+
+Table 3: Ablation study on our evaluation suite (higher is better). Drop is
+the absolute decrease in ModelNet40 score relative to the full model.
+
+Variant                             ModelNet40 score (%)  Drop (%) 
+
+Full (Stage I + Stage II)           70.5  0.0
+
+w/o Stage I (recomposition-only)    47.3  23.2
+
+w/o Stage II (Stage I only)         63.6  6.9
+
+w/o reconstruction Lrec in Stage I  4.1   66.4
+
+w/o contrastive Lalign in Stage I   54.7  15.8
+
+losses L(remc) or the pairwise contrastive losses L(ailjig)n, while keeping all other
+settings unchanged. Removing reconstruction hurts performance more than
+removing contrastive alignment (Table 3), consistent with the intended design:
+reconstruction constrains the latent space to remain informative and prevents
+collapse, while contrastive learning provides the cross-modal signal that pulls
+paired modalities into a shared semantic coordinate system. More ablation studies
+and discussions can be found in Appendix C.
+
+6 Conclusion
+
+In this work, we study MLLM training under pairwise-aligned supervision, without
+requiring fully jointly aligned multimodal data. We provide a theoretical analysis
+showing that, under suitable connectivity, the shared latent subspace across
+modalities can be recovered from overlapping modality pairs. Building on this
+insight, we propose a two-stage framework consisting of latent representation
+alignment and cross-modal recomposition, enabling scalable modality extension
+while keeping pre-trained MLLM frozen. Experiments with newly introduced
+3D and tactile modalities demonstrate strong cross-modal transfer using only
+pairwise supervision. Limitations. While our framework demonstrates promising
+results under pairwise supervision, scaling it to a broader set of modalities and
+validating its effectiveness on more diverse and complex downstream tasks remain
+important directions for future work.
+                           Bibliography
+
+ [1] Achiam, J., Adler, S., Agarwal, S., Ahmad, L., Akkaya, I., Aleman, F.L.,
+      Almeida, D., Altenschmidt, J., Altman, S., Anadkat, S., et al.: Gpt-4 technical
+      report. arXiv preprint arXiv:2303.08774 (2023)
+
+ [2] Akbari, H., Yuan, L., Qian, R., Chuang, W.H., Chang, S.F., Cui, Y., Gong,
+      B.: Vatt: Transformers for multimodal self-supervised learning from raw
+      video, audio and text. Advances in neural information processing systems
+      34, 24206­24221 (2021)
+
+ [3] Alayrac, J.B., Donahue, J., Luc, P., Miech, A., Barr, I., Hasson, Y., Lenc, K.,
+      Mensch, A., Millican, K., Reynolds, M., et al.: Flamingo: a visual language
+      model for few-shot learning. Advances in neural information processing
+      systems 35, 23716­23736 (2022)
+
+ [4] Bai, S., Cai, Y., Chen, R., Chen, K., Chen, X., Cheng, Z., Deng, L., Ding,
+      W., Gao, C., Ge, C., Ge, W., Guo, Z., Huang, Q., Huang, J., Huang, F.,
+      Hui, B., Jiang, S., Li, Z., Li, M., Li, M., Li, K., Lin, Z., Lin, J., Liu, X.,
+      Liu, J., Liu, C., Liu, Y., Liu, D., Liu, S., Lu, D., Luo, R., Lv, C., Men, R.,
+      Meng, L., Ren, X., Ren, X., Song, S., Sun, Y., Tang, J., Tu, J., Wan, J.,
+      Wang, P., Wang, P., Wang, Q., Wang, Y., Xie, T., Xu, Y., Xu, H., Xu, J.,
+      Yang, Z., Yang, M., Yang, J., Yang, A., Yu, B., Zhang, F., Zhang, H., Zhang,
+      X., Zheng, B., Zhong, H., Zhou, J., Zhou, F., Zhou, J., Zhu, Y., Zhu, K.:
+      Qwen3-vl technical report (2025), https://arxiv.org/abs/2511.21631
+
+ [5] Brown, T., Mann, B., Ryder, N., Subbiah, M., Kaplan, J.D., Dhariwal, P.,
+      Neelakantan, A., Shyam, P., Sastry, G., Askell, A., et al.: Language models
+      are few-shot learners. Advances in neural information processing systems
+      33, 1877­1901 (2020)
+
+ [6] Cai, M., Liu, H., Mustikovela, S.K., Meyer, G.P., Chai, Y., Park, D., Lee,
+      Y.J.: Vip-llava: Making large multimodal models understand arbitrary visual
+      prompts. In: Proceedings of the IEEE/CVF Conference on Computer Vision
+      and Pattern Recognition. pp. 12914­12923 (2024)
+
+ [7] Carion, N., Gustafson, L., Hu, Y.T., Debnath, S., Hu, R., Suris, D., Ryali,
+      C., Alwala, K.V., Khedr, H., Huang, A., et al.: Sam 3: Segment anything
+      with concepts. arXiv preprint arXiv:2511.16719 (2025)
+
+ [8] Chen, Y.C., Li, L., Yu, L., El Kholy, A., Ahmed, F., Gan, Z., Cheng, Y.,
+      Liu, J.: Uniter: Universal image-text representation learning. In: European
+      conference on computer vision. pp. 104­120. Springer (2020)
+
+ [9] Chen, Z., Wu, J., Wang, W., Su, W., Chen, G., Xing, S., Zhong, M., Zhang,
+      Q., Zhu, X., Lu, L., et al.: Internvl: Scaling up vision foundation models and
+      aligning for generic visual-linguistic tasks. In: Proceedings of the IEEE/CVF
+      conference on computer vision and pattern recognition. pp. 24185­24198
+     (2024)
+
+[10] Chu, Y., Xu, J., Yang, Q., Wei, H., Wei, X., Guo, Z., Leng, Y., Lv, Y., He, J.,
+      Lin, J., et al.: Qwen2-audio technical report. arXiv preprint arXiv:2407.10759
+     (2024)
+Multimodal LLMs under Pairwise Modalities  17
+
+[11] Dai, W., Li, J., Li, D., Tiong, A., Zhao, J., Wang, W., Li, B., Fung, P.N.,
+      Hoi, S.: Instructblip: Towards general-purpose vision-language models with
+      instruction tuning. Advances in neural information processing systems 36,
+      49250­49267 (2023)
+
+[12] Deitke, M., Schwenk, D., Salvador, J., Weihs, L., Michel, O., VanderBilt, E.,
+      Schmidt, L., Ehsani, K., Kembhavi, A., Farhadi, A.: Objaverse: A universe
+      of annotated 3d objects. In: Proceedings of the IEEE/CVF conference on
+      computer vision and pattern recognition. pp. 13142­13153 (2023)
+
+[13] Deng, Y., Chen, G., Gu, T., Kong, L., Li, Y., Tang, Z., Zhang, K.: Towards
+      self-refinement of vision-language models with triangular consistency. arXiv
+      preprint arXiv:2510.10487 (2025)
+
+[14] Driess, D., Xia, F., Sajjadi, M.S., Lynch, C., Chowdhery, A., Wahid, A.,
+      Tompson, J., Vuong, Q., Yu, T., Huang, W., et al.: Palm-e: An embodied
+      multimodal language model (2023)
+
+[15] Elizalde, B., Deshmukh, S., Al Ismail, M., Wang, H.: Clap learning au-
+      dio concepts from natural language supervision. In: ICASSP 2023-2023
+      IEEE International Conference on Acoustics, Speech and Signal Processing
+     (ICASSP). pp. 1­5. IEEE (2023)
+
+[16] Fu, L., Datta, G., Huang, H., Panitch, W.C.H., Drake, J., Ortiz, J., Mukadam,
+      M., Lambeta, M., Calandra, R., Goldberg, K.: A touch, vision, and language
+      dataset for multimodal alignment. arXiv preprint arXiv:2402.13232 (2024)
+
+[17] Gao, P., Han, J., Zhang, R., Lin, Z., Geng, S., Zhou, A., Zhang, W., Lu,
+      P., He, C., Yue, X., et al.: Llama-adapter v2: Parameter-efficient visual
+      instruction model. arXiv preprint arXiv:2304.15010 (2023)
+
+[18] Girdhar, R., El-Nouby, A., Liu, Z., Singh, M., Alwala, K.V., Joulin, A.,
+      Misra, I.: Imagebind: One embedding space to bind them all. In: Proceedings
+      of the IEEE/CVF conference on computer vision and pattern recognition.
+      pp. 15180­15190 (2023)
+
+[19] Hälvä, H., Hyvarinen, A.: Hidden markov nonlinear ica: Unsupervised learn-
+      ing from nonstationary time series. In: Conference on Uncertainty in Artificial
+      Intelligence. pp. 939­948. PMLR (2020)
+
+[20] Han, J., Gong, K., Zhang, Y., Wang, J., Zhang, K., Lin, D., Qiao, Y., Gao,
+      P., Yue, X.: Onellm: One framework to align all modalities with language. In:
+      Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern
+      Recognition. pp. 26584­26595 (2024)
+
+[21] Hu, E.J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L.,
+      Chen, W., et al.: Lora: Low-rank adaptation of large language models. Iclr
+      1(2), 3 (2022)
+
+[22] Huang, S., Dong, L., Wang, W., Hao, Y., Singhal, S., Ma, S., Lv, T., Cui, L.,
+      Mohammed, O.K., Patra, B., et al.: Language is not all you need: Aligning
+      perception with language models. Advances in Neural Information Processing
+      Systems 36, 72096­72109 (2023)
+
+[23] Hyvarinen, A., Sasaki, H., Turner, R.: Nonlinear ica using auxiliary variables
+      and generalized contrastive learning. In: The 22nd International Conference
+      on Artificial Intelligence and Statistics. pp. 859­868. PMLR (2019)
+18  Y. Li et al.
+
+[24] Jia, C., Yang, Y., Xia, Y., Chen, Y.T., Parekh, Z., Pham, H., Le, Q., Sung,
+      Y.H., Li, Z., Duerig, T.: Scaling up visual and vision-language representation
+      learning with noisy text supervision. In: International conference on machine
+      learning. pp. 4904­4916. PMLR (2021)
+
+[25] Kim, M.J., Pertsch, K., Karamcheti, S., Xiao, T., Balakrishna, A., Nair, S.,
+      Rafailov, R., Foster, E., Lam, G., Sanketi, P., et al.: Openvla: An open-source
+      vision-language-action model. arXiv preprint arXiv:2406.09246 (2024)
+
+[26] Kim, W., Son, B., Kim, I.: Vilt: Vision-and-language transformer without
+      convolution or region supervision. In: International conference on machine
+      learning. pp. 5583­5594. PMLR (2021)
+
+[27] Kong, L., Ma, M.Q., Chen, G., Xing, E.P., Chi, Y., Morency, L.P., Zhang,
+      K.: Understanding masked autoencoders via hierarchical latent variable
+      models. In: Proceedings of the IEEE/CVF Conference on Computer Vision
+      and Pattern Recognition. pp. 7918­7928 (2023)
+
+[28] Kong, L., Xie, S., Yao, W., Zheng, Y., Chen, G., Stojanov, P., Akinwande, V.,
+      Zhang, K.: Partial disentanglement for domain adaptation. In: International
+      conference on machine learning. pp. 11455­11472. PMLR (2022)
+
+[29] Lachapelle, S., Lacoste-Julien, S.: Partial disentanglement via mechanism
+      sparsity. arXiv preprint arXiv:2207.07732 (2022)
+
+[30] Li, B., Zhang, Y., Guo, D., Zhang, R., Li, F., Zhang, H., Zhang, K., Zhang,
+      P., Li, Y., Liu, Z., et al.: Llava-onevision: Easy visual task transfer. arXiv
+      preprint arXiv:2408.03326 (2024)
+
+[31] Li, J., Li, D., Savarese, S., Hoi, S.: Blip-2: Bootstrapping language-image
+      pre-training with frozen image encoders and large language models. In:
+      International conference on machine learning. pp. 19730­19742. PMLR
+     (2023)
+
+[32] Li, J., Li, D., Xiong, C., Hoi, S.: Blip: Bootstrapping language-image pre-
+      training for unified vision-language understanding and generation. In: Inter-
+      national conference on machine learning. pp. 12888­12900. PMLR (2022)
+
+[33] Li, J., Selvaraju, R., Gotmare, A., Joty, S., Xiong, C., Hoi, S.C.H.: Align
+      before fuse: Vision and language representation learning with momentum
+      distillation. Advances in neural information processing systems 34, 9694­
+      9705 (2021)
+
+[34] Li, Z., Cai, R., Chen, G., Sun, B., Hao, Z., Zhang, K.: Subspace identifica-
+      tion for multi-source domain adaptation. Advances in Neural Information
+      Processing Systems 36, 34504­34518 (2023)
+
+[35] Liu, H., Li, C., Wu, Q., Lee, Y.J.: Visual instruction tuning. Advances in
+      neural information processing systems 36, 34892­34916 (2023)
+
+[36] Liu, H., Li, C., Wu, Q., Lee, Y.J.: Visual instruction tuning. Advances in
+      neural information processing systems 36, 34892­34916 (2023)
+
+[37] Locatello, F., Bauer, S., Lucic, M., Raetsch, G., Gelly, S., Schölkopf, B.,
+      Bachem, O.: Challenging common assumptions in the unsupervised learning
+      of disentangled representations. In: international conference on machine
+      learning. pp. 4114­4124. PMLR (2019)
+
+[38] Lu, J., Batra, D., Parikh, D., Lee, S.: Vilbert: Pretraining task-agnostic
+      visiolinguistic representations for vision-and-language tasks. Advances in
+      neural information processing systems 32 (2019)
+Multimodal LLMs under Pairwise Modalities  19
+
+[39] Ma, M., Ren, J., Zhao, L., Tulyakov, S., Wu, C., Peng, X.: Smil: Multi-
+      modal learning with severely missing modality. In: Proceedings of the AAAI
+      conference on artificial intelligence. vol. 35, pp. 2302­2310 (2021)
+
+[40] Pearl, J.: Causality. Cambridge university press (2009)
+[41] Peters, J., Janzing, D., Schölkopf, B.: Elements of causal inference: founda-
+
+      tions and learning algorithms. The MIT press (2017)
+[42] Qi, Z., Dong, R., Zhang, S., Geng, H., Han, C., Ge, Z., Wang, H., Yi, L., Ma,
+
+      K.: Shapellm: Universal 3d object understanding for embodied interaction.
+      arXiv preprint arXiv:2402.17766 (2024)
+[43] Radford, A., Kim, J.W., Hallacy, C., Ramesh, A., Goh, G., Agarwal, S.,
+      Sastry, G., Askell, A., Mishkin, P., Clark, J., et al.: Learning transferable
+      visual models from natural language supervision. In: International conference
+      on machine learning. pp. 8748­8763. PmLR (2021)
+[44] Schölkopf, B., Locatello, F., Bauer, S., Ke, N.R., Kalchbrenner, N., Goyal,
+      A., Bengio, Y.: Toward causal representation learning. Proceedings of the
+      IEEE 109(5), 612­634 (2021)
+[45] Singh, A., Hu, R., Goswami, V., Couairon, G., Galuba, W., Rohrbach, M.,
+      Kiela, D.: Flava: A foundational language and vision alignment model. In:
+      Proceedings of the IEEE/CVF conference on computer vision and pattern
+      recognition. pp. 15638­15650 (2022)
+[46] Spirtes, P., Glymour, C.N., Scheines, R.: Causation, prediction, and search.
+      MIT press (2000)
+[47] Sun, Y., Kong, L., Chen, G., Li, L., Luo, G., Li, Z., Zhang, Y., Zheng,
+      Y., Yang, M., Stojanov, P., et al.: Causal representation learning from
+      multimodal biological observations. arXiv preprint arXiv:2411.06518 (2024)
+[48] Tan, H., Bansal, M.: Lxmert: Learning cross-modality encoder representa-
+      tions from transformers. arXiv preprint arXiv:1908.07490 (2019)
+[49] Team, G., Anil, R., Borgeaud, S., Alayrac, J.B., Yu, J., Soricut, R., Schalk-
+      wyk, J., Dai, A.M., Hauth, A., Millican, K., et al.: Gemini: a family of highly
+      capable multimodal models. arXiv preprint arXiv:2312.11805 (2023)
+[50] Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A.N.,
+      Kaiser, L., Polosukhin, I.: Attention is all you need. Advances in neural
+      information processing systems 30 (2017)
+[51] Von Kügelgen, J., Sharma, Y., Gresele, L., Brendel, W., Schölkopf, B.,
+      Besserve, M., Locatello, F.: Self-supervised learning with data augmenta-
+      tions provably isolates content from style. Advances in neural information
+      processing systems 34, 16451­16467 (2021)
+[52] Wang, H., Chen, Y., Ma, C., Avery, J., Hull, L., Carneiro, G.: Multi-modal
+      learning with missing modality via shared-specific feature modelling. In:
+      Proceedings of the IEEE/CVF conference on computer vision and pattern
+      recognition. pp. 15878­15887 (2023)
+[53] Wang, P., Bai, S., Tan, S., Wang, S., Fan, Z., Bai, J., Chen, K., Liu, X.,
+      Wang, J., Ge, W., et al.: Qwen2-vl: Enhancing vision-language model's
+      perception of the world at any resolution. arXiv preprint arXiv:2409.12191
+     (2024)
+20  Y. Li et al.
+
+[54] Wang, P., Yang, A., Men, R., Lin, J., Bai, S., Li, Z., Ma, J., Zhou, C., Zhou,
+      J., Yang, H.: Ofa: Unifying architectures, tasks, and modalities through a
+      simple sequence-to-sequence learning framework. In: International conference
+      on machine learning. pp. 23318­23340. PMLR (2022)
+
+[55] Wang, X., Zhang, X., Luo, Z., Sun, Q., Cui, Y., Wang, J., Zhang, F., Wang,
+      Y., Li, Z., Yu, Q., et al.: Emu3: Next-token prediction is all you need. arXiv
+      preprint arXiv:2409.18869 (2024)
+
+[56] Wang, Z., Zhao, Y., Huang, H., Liu, J., Yin, A., Tang, L., Li, L., Wang, Y.,
+      Zhang, Z., Zhao, Z.: Connecting multi-modal contrastive representations.
+      Advances in Neural Information Processing Systems 36, 22099­22114 (2023)
+
+[57] Wu, A., Kuang, K., Zhu, M., Wang, Y., Zheng, Y., Han, K., Li, B., Chen,
+      G., Wu, F., Zhang, K.: Causality for large language models. arXiv preprint
+      arXiv:2410.15319 (2024)
+
+[58] Wu, M., Goodman, N.: Multimodal generative models for scalable weakly-
+      supervised learning. Advances in neural information processing systems 31
+     (2018)
+
+[59] Wu, S., Fei, H., Qu, L., Ji, W., Chua, T.S.: Next-gpt: Any-to-any multimodal
+      llm. In: Forty-first International Conference on Machine Learning (2024)
+
+[60] Wu, Z., Song, S., Khosla, A., Yu, F., Zhang, L., Tang, X., Xiao, J.: 3d
+      shapenets: A deep representation for volumetric shapes. In: Proceedings
+      of the IEEE conference on computer vision and pattern recognition. pp.
+      1912­1920 (2015)
+
+[61] Xiang, J., Lv, Z., Xu, S., Deng, Y., Wang, R., Zhang, B., Chen, D., Tong, X.,
+      Yang, J.: Structured 3d latents for scalable and versatile 3d generation. In:
+      Proceedings of the IEEE/CVF conference on computer vision and pattern
+      recognition. pp. 21469­21480 (2025)
+
+[62] Xu, H., Ghosh, G., Huang, P.Y., Okhonko, D., Aghajanyan, A., Metze, F.,
+      Zettlemoyer, L., Feichtenhofer, C.: Videoclip: Contrastive pre-training for
+      zero-shot video-text understanding. arXiv preprint arXiv:2109.14084 (2021)
+
+[63] Xu, J., Guo, Z., He, J., Hu, H., He, T., Bai, S., Chen, K., Wang, J.,
+      Fan, Y., Dang, K., et al.: Qwen2. 5-omni technical report. arXiv preprint
+      arXiv:2503.20215 (2025)
+
+[64] Xu, J., Guo, Z., Hu, H., Chu, Y., Wang, X., He, J., Wang, Y., Shi, X., He,
+      T., Zhu, X., Lv, Y., Wang, Y., Guo, D., Wang, H., Ma, L., Zhang, P., Zhang,
+      X., Hao, H., Guo, Z., Yang, B., Zhang, B., Ma, Z., Wei, X., Bai, S., Chen,
+      K., Liu, X., Wang, P., Yang, M., Liu, D., Ren, X., Zheng, B., Men, R., Zhou,
+      F., Yu, B., Yang, J., Yu, L., Zhou, J., Lin, J.: Qwen3-omni technical report
+     (2025), https://arxiv.org/abs/2509.17765
+
+[65] Xu, R., Wang, X., Wang, T., Chen, Y., Pang, J., Lin, D.: Pointllm: Em-
+      powering large language models to understand point clouds. In: European
+      Conference on Computer Vision. pp. 131­147. Springer (2024)
+
+[66] Yang, Z., Wang, J., Tang, Y., Chen, K., Zhao, H., Torr, P.H.: Lavt: Language-
+      aware vision transformer for referring image segmentation. In: Proceedings
+      of the IEEE/CVF conference on computer vision and pattern recognition.
+      pp. 18155­18165 (2022)
+Multimodal LLMs under Pairwise Modalities  21
+
+[67] Yao, D., Xu, D., Lachapelle, S., Magliacane, S., Taslakian, P., Martius, G.,
+      von Kügelgen, J., Locatello, F.: Multi-view causal representation learning
+      with partial observability. arXiv preprint arXiv:2311.04056 (2023)
+
+[68] Yao, W., Chen, G., Zhang, K.: Temporally disentangled representation
+      learning. In: Advances in Neural Information Processing Systems (2022),
+      https://openreview.net/forum?id=Vi-sZWNA_Ue
+
+[69] Yu, J., Wang, Z., Vasudevan, V., Yeung, L., Seyedhosseini, M., Wu, Y.: Coca:
+      Contrastive captioners are image-text foundation models. arXiv preprint
+      arXiv:2205.01917 (2022)
+
+[70] Yu, X., Tang, L., Rao, Y., Huang, T., Zhou, J., Lu, J.: Point-bert: Pre-training
+      3d point cloud transformers with masked point modeling. In: Proceedings of
+      the IEEE/CVF conference on computer vision and pattern recognition. pp.
+      19313­19322 (2022)
+
+[71] Zhai, X., Mustafa, B., Kolesnikov, A., Beyer, L.: Sigmoid loss for language im-
+      age pre-training. In: Proceedings of the IEEE/CVF international conference
+      on computer vision. pp. 11975­11986 (2023)
+
+[72] Zhai, X., Wang, X., Mustafa, B., Steiner, A., Keysers, D., Kolesnikov,
+      A., Beyer, L.: Lit: Zero-shot transfer with locked-image text tuning. In:
+      Proceedings of the IEEE/CVF conference on computer vision and pattern
+      recognition. pp. 18123­18133 (2022)
+
+[73] Zhang, K., Xie, S., Ng, I., Zheng, Y.: Causal representation learning from
+      multiple distributions: A general setting. arXiv preprint arXiv:2402.05052
+     (2024)
+
+[74] Zhang, Z., Wang, Z., Liu, L., Huang, R., Cheng, X., Ye, Z., Lin, W., Liu, H.,
+      Huang, H., Zhao, Y., et al.: Extending multi-modal contrastive representa-
+      tions. Advances in Neural Information Processing Systems 37, 91880­91903
+     (2024)
+
+[75] Zheng, Y., Ng, I., Zhang, K.: On the identifiability of nonlinear ica: Sparsity
+      and beyond. Advances in neural information processing systems 35, 16411­
+      16422 (2022)
+
+[76] Zhu, B., Lin, B., Ning, M., Yan, Y., Cui, J., Wang, H., Pang, Y., Jiang, W.,
+      Zhang, J., Li, Z., et al.: Languagebind: Extending video-language pretrain-
+      ing to n-modality by language-based semantic alignment. arXiv preprint
+      arXiv:2310.01852 (2023)
+
+[77] Zhu, D., Chen, J., Shen, X., Li, X., Elhoseiny, M.: Minigpt-4: Enhancing
+      vision-language understanding with advanced large language models. arXiv
+      preprint arXiv:2304.10592 (2023)
+
+[78] Zimmermann, R.S., Sharma, Y., Schneider, S., Bethge, M., Brendel, W.:
+      Contrastive learning inverts the data generating process. In: International
+      conference on machine learning. pp. 12979­12990. PMLR (2021)
+
+[79] Zitkovich, B., Yu, T., Xu, S., Xu, P., Xiao, T., Xia, F., Wu, J., Wohlhart, P.,
+      Welker, S., Wahid, A., et al.: Rt-2: Vision-language-action models transfer
+      web knowledge to robotic control. In: Conference on Robot Learning. pp.
+      2165­2183. PMLR (2023)
+22  Y. Li et al.
+
+                       Table A1: Key notations in this paper.
+
+Notation               Meaning
+
+M, [M ]                Number of modalities; index set {1, . . . , M }.
+x(m)  Rdx(m)
+z(m) = [zc(m), zs(m)]  Observation of modality m.
+dc(m), ds(m)
+z~(\ji)                Latents of modality m (shared/specific blocks).
+G = ([M ], E)
+N (i)                  Dimensions  of  z  (m)  and  z s(m) .
+                                          c
+gi
+                       Latents for generating x(j) excluding z(ci) (pairwise).
+gji
+g^i, g^ji              Modality graph; edge {i, j}  E means paired data observed.
+Jf
+I (z c(i) )            Neighbor set {j = i : {i, j}  E}.
+Idc(i)
+                       Single-modality generator: x(i) = gi(z(ci), z(si)).
+Aji                    Pairwise generator: x(j) = gji(z(ci), z~\(ji)).
+                       Estimated generators.
+Lij
+hi = gi-1  g^i         Jacobian of function f .
+hi(c), hi(s)
+i                      Index set of zc(i) coordinates (for Jacobian slicing).
+
+m                      Identity matrix on the shared block (use in Assumption 1(A2)).
+zec
+Im                     Partial Jacobian                                   d(xj ) ×dc(i)
+Im|n                                      J  R . gji :,I(z(ci))
+gc, G
+Gmn                    Coefficients such that jN (i) Lij Aji = Idc(i) .
+M 0,E
+P(d), Pc               Coordinate map from estimated to true latents (modality i).
+
+hm, h                  Shared/specific components of hi.
+T = Jh
+g^c, G^                Reduced map z(ci) = i(z^c(i)) (from Theorem 1).
+Pm, m,k
+                       Injective map [zc(m)]k = cm(k) linking to global shared factors.
+
+                       Extended  shared   vector    [(z  (1)  )  ,  .  .  .  ,  (zc(M  )  )  ].
+                                                         c
+
+                       Indices of modality-m block within zec.
+
+                       Non-overlap indices of m w.r.t. n (for de-duplicated sparsity).
+
+                       SCM on zec and its Jacobian G = gc/(zec).
+                       Block GIm,In .
+                       De-duplicated cross-modality sparsity counted only on edges E.
+
+                       Generalized permutations; block-diagonal version across modali-
+
+                       ties.
+                       Block diffeomorphisms hm and their concatenation h on zec.
+                       Jacobian of h; T = diag(T1, . . . , TM ).
+                       Reparameterized SCM g^c = h-1  gc  h and its Jacobian G^.
+
+                       Component-wise ambiguity: permutation Pm and 1D diffeomor-
+
+                       phisms m,k.
+
+A Proof and Discussions
+
+We summarize the notations used throughout the paper in Table A1.
+
+A.1 Proof of Block Identifiability (Subspace Identifiability)
+This appendix provides a detailed proof for Theorem 1 and clarifies the meaning
+of Assumption 1(A2) in the main text. Throughout, we fix a target modality
+i  [M ] and its neighbor set N (i) . We use the same notations as in the main
+                        Multimodal LLMs under Pairwise Modalities                                                                                                                                                                                                   23
+
+text: x(m), (z(cm), z(sm)), z~(\ji), and the partial Jacobian
+                  A_{j\leftar ow i}(\vec {z}^{(i)}_c,\tilde {\vec {z} ^{(j)}_{\setminus i}) := \bigl [J_{g_{j\leftar ow i}(\vec {z}^{(i)}_c,\tilde {\vec {z} ^{(j)}_{\setminus i})}\bigr ]_{:,\,I(\vec {z}^{(i)}_c)} \in \mathb  {R}^{d_x^{(j)}\times d_c^{(i)} . 
+
+    First, we introduce the meanings of Assumption 1(A2). Assumption 1(A2)
+is a collective full-rank condition: each individual neighbor j may only reveal a
+subspace of directions in Rd(ci) , but aggregating all neighbors must span the full
+shared block. The following lemma provides equivalent characterizations.
+
+Lemma 1 (Equivalent collective full-rank characterizations). Fix a target
+modality i and its neighbor set N (i). For each j  N (i), let Aji  Rdx(j)×d(ci)
+be any matrices (e.g., the Jacobians Aji(zc(i), z~\(ji)) evaluated at a fixed latent
+realization). Define the linear operator
+
+                   \mathcal {A}_i:\mathbb {R}^{d_c^{(i)}}\to \prod _{j\in \mathcal {N}(i)}\mathbb {R}^{d_x^{(j)}}, \qquad \mathcal {A}_i(\mathbf {v})=\bigl (A_{j\leftarrow i}\mathbf {v}\bigr )_{j\in \mathcal {N}(i)}. 
+
+Then the following are equivalent:
+  (i) (Injectivity) Ai is injective: Ai(v) = 0  v = 0. Equivalently,
+                                           \bigcap _{j\in \mathcal {N}(i)}\mathrm {Null}(A_{j\leftarrow i})=\{0\}
+
+       .
+ (ii) (Gram positive definite) The Gram matrix
+
+                                                                     G_i:=\sum _{j\in \mathcal {N}(i)} A_{j\leftarrow i}^\top A_{j\leftarrow i} \in \mathbb {R}^{d_c^{(i)}\times d_c^{(i)}} 
+
+is positive definite (hence full rank).
+
+(iii) (Coefficient combination / left inverse) There exist matrices Lij 
+
+Rd(ci)×dx(j) such that    \sum _{j\in \mathcal {N}(i)} L_{ij}A_{j\leftarrow i}=I_{d_c^{(i)}}. 
+
+      Moreover, if Gi  0, one valid choice is Lij = G-i 1Aji.
+
+Proof. Let d := d(ci) and choose an arbitrary ordering N (i) = {j1, . . . , jK }. Define
+the block-stacked matrix
+
+  A_i \;\triangleq \; \begin {bmatrix} A_{j_1\leftarrow i}\\ \vdots \\ A_{j_K\leftarrow i} \end {bmatrix} \in \mathbb R^{D_i\times d}, \qquad D_i:=\sum _{\ell =1}^K d_x^{(j_\ell )}. 
+
+Also define the canonical concatenation isomorphism
+
+  \Phi :\prod _{\ell =1}^K \mathbb R^{d_x^{(j_\ell )}}\to \mathbb R^{D_i}, \qquad \Phi \bigl ( (y_{j_\ell })_{\ell =1}^K \bigr )= \begin {bmatrix} y_{j_1}\\ \vdots \\ y_{j_K} \end {bmatrix}. 
+24  Y. Li et al.
+
+By construction, for every v  Rd,
+
+                     \Phi \bigl (\mathcal A_i(\mathbf {v})\bigr ) = \begin {bmatrix} A_{j_1\leftar ow i}\mathbf {v}\  \vdots \  A_{j_K\leftar ow i}\mathbf {v} \end {bmatrix} = A_i \mathbf {v}. 
+
+Since  is a linear bijection, Ai(v) = 0 iff Aiv = 0. Thus (i) holds iff Null(Ai) =
+{0}, i.e., Ai has full column rank.
+(i)(ii). Using the block-stacking definition,
+
+                     A_i^\top A_i = \sum _{\ell =1}^K A_{j_\ell \leftarrow i}^\top A_{j_\ell \leftarrow i} = \sum _{j\in \mathcal {N}(i)} A_{j\leftarrow i}^\top A_{j\leftarrow i} = G_i. 
+
+Therefore, for any v = 0,
+                                  \mathbf {v}^\top G_i \mathbf {v} = \mathbf {v}^\top A_i^\top A_i \mathbf {v} = \|A_i\mathbf {v}\|_2^2. 
+
+Hence Gi  0 iff Aiv = 0 for all v = 0, which is equivalent to Null(Ai) = {0},
+i.e., (i).
+(ii)(iii). Assume Gi  0 and define Lij := Gi-1Aji. Then
+
+                    \sum _{j\in \mathcal {N}(i)} L_{ij}A_{j\leftarrow i} = \sum _{j\in \mathcal {N}(i)} G_i^{-1}A_{j\leftarrow i}^\top A_{j\leftarrow i} = G_i^{-1}G_i = I_{d}. 
+
+(iii)(i). If j LijAji = Id and Ai(v) = 0, then Ajiv = 0 for all j, so
+                                 \mathbf {v} = I_d\mathbf {v} = \sum _{j\in \mathcal {N}(i)} L_{ij}A_{j\leftarrow i}\mathbf {v} = 0. 
+
+Thus Ai is injective, i.e., (i) holds.
+
+    At any latent  rLeiajl(izza(cit)i,oz~n(\j(i)z)(cis)u,cz~h(\jit)h)jatN \s(umi _){j,\in A\mathscasl {uN}(mi)} Lp_{ijt}Ai_{oj\lneftar1row (i}A=I_{d2_c^){(i)a}}.s  sBeyrtsLethmemeaxi1s-,
+tence of matrices
+
+this is equivalent to the stacked operator being injective, or equivalently, the
+
+aggregated Gram matrix being positive definite, i.e., the neighbors collectively
+
+span all directions of the shared block.
+
+Proof (Proof of ?? 1).
+    Fix a target modality i and its neighbor set N (i).
+    By Assumption 1(A1), both gi and g^i are smooth and invertible. Define the
+
+(smooth) change-of-variables map
+
+                     h_i \;:=\; g_i^{-1}\circ \hat g_i: (\hat {\vec {z}}^{(i)}_c,\hat {\vec {z}}^{(i)}_s)\mapsto (\vec {z}^{(i)}_c,\vec {z}^{(i)}_s). 
+                                       Multimodal LLMs under Pairwise Modalities                                                                                                                                                                                                                     25
+
+Write its block decomposition as
+
+               h_i(\hat {\vec {z}}^{(i)}_c,\hat {\vec {z}}^{(i)}_s) = \Bigl ( h_i^{(c)}(\hat {\vec {z}}^{(i)}_c,\hat {\vec {z}}^{(i)}_s),\; h_i^{(s)}(\hat {\vec {z}}^{(i)}_c,\hat {\vec {z}}^{(i)}_s) \Bigr ), 
+
+so that
+
+               \vec {z}^{(i)}_c = h_i^{(c)}(\hat {\vec {z}}^{(i)}_c,\hat {\vec {z}}^{(i)}_s), \qquad \vec {z}^{(i)}_s = h_i^{(s)}(\hat {\vec {z}}^{(i)}_c,\hat {\vec {z}}^{(i)}_s). 
+
+Fix any neighbor j  N (i). Under the estimated model, generate
+
+               \vec {x}^{(i)}=\hat g_i(\hat {\vec {z} ^{(i)}_c,\hat {\vec {z} ^{(i)}_s), \q uad \vec {x}^{(j)}=\hat g_{j\leftar ow i}\bigl (\hat {\vec {z} ^{(i)}_c,\hat {\tilde {\vec {z} }^{(j)}_{\setminus i}\bigr ). 
+
+By the theorem assumption, the true and estimated models induce identical
+pairwise distributions for (x(i), x(j)). Hence we may consider a coupling under
+which the same pair (x(i), x(j)) is also generated by the true model, i.e., there
+exist (zc(i), z(si), z~\(ji)) such that
+
+                       \vec {x}^{(i)}=g_i(\vec {z}^{(i)}_c,\vec {z}^{(i)}_s), \qquad \vec {x}^{(j)}=g_{j\leftarrow i}\bigl (\vec {z}^{(i)}_c,\tilde {\vec {z}}^{(j)}_{\setminus i}\bigr ), 
+
+and moreover, by definition of hi,
+                                        \vec {z}^{(i)}_c = h_i^{(c)}(\hat {\vec {z}}^{(i)}_c,\hat {\vec {z}}^{(i)}_s). 
+
+Consequently, almost surely under this coupling,
+
+               \label {eq:ap _key_identity_xj} \hat g_{j\leftar ow i}\bigl (\hat {\vec {z} ^{(i)}_c,\hat {\tilde {\vec {z} }^{(j)}_{\setminus i}\bigr ) = g_{j\leftar ow i}\!\left ( h_i^{(c)}(\hat {\vec {z} ^{(i)}_c,\hat {\vec {z} ^{(i)}_s),\; \tilde {\vec {z} ^{(j)}_{\setminus i} \right ).   (A1)
+
+Differentiate both sides of (A1) with respect to z^s(i). The left-hand side is
+
+identically  independent  of  z^  (i)  ,  hence  its  derivative                                                         is                                                                         zero:
+                                  s
+
+                                   \frac {\partial }{\partial \hat {\vec {z}^{(i)}_s}\; \hat g_{j\leftarow i}\bigl (\hat {\vec {z}^{(i)}_c,\hat {\tilde {\vec {z}}^{(j)}_{\setminus i}\bigr ) =0. 
+
+    For the right-hand side, we need to control the dependence of z~\(ji) on z^s(i).
+Recall that z~\(ji) is a subvector of the latent variables of modality j . Applying
+Assumption 1(A1) to modality j yields that gj is invertible, so z(j) = gj-1(x(j))
+is a smooth function of x(j) alone. Therefore z~\(ji), being a subvector (or smooth
+projection) of z(j), is also a smooth function of x(j) alone. Since x(j) on the
+left-hand side of (A1) does not depend on z^(si), we have
+
+                                               \frac {\partial \tilde {\vec {z}^{(j)}_{\setminus i}{\partial \hat {\vec {z}^{(i)}_s}=0. 
+
+Thus, differentiating (A1) and applying the chain rule gives
+
+               0 = A_{j\leftar ow i}\bigl (\vec {z}^{(i)}_c,\tilde {\vec {z} ^{(j)}_{\setminus i}\bigr )\; \frac {\partial \, h_i^{(c)}(\hat {\vec {z} ^{(i)}_c,\hat {\vec {z} ^{(i)}_s)}{\partial \hat {\vec {z} ^{(i)}_s}. 
+26      Y. Li et al.
+
+Define
+
+                        B_i(\hat {\vec {z} ^{(i)}_c,\hat {\vec {z} ^{(i)}_s) := \frac {\partial \, h_i^{(c)}(\hat {\vec {z} ^{(i)}_c,\hat {\vec {z} ^{(i)}_s)}{\partial \hat {\vec {z} ^{(i)}_s} \in \mathb  {R}^{d_c^{(i)}\times d_s^{(i)} . 
+
+Then for every j  N (i),                                                                                                                                                                                                                                                            (A2)
+
+                                \label {eq:ap _A_B_zero} A_{j\leftar ow i}\bigl (\vec {z}^{(i)}_c,\tilde {\vec {z} ^{(j)}_{\setminus i}\bigr )\;B_i(\hat {\vec {z} ^{(i)}_c,\hat {\vec {z} ^{(i)}_s)=0. 
+
+    Now left-multiply (A2) by Lij(z(ci), z~\(ji)) and sum over j  N (i):
+                    \sum _{j\in \mathcal {N}(i)} L_{ij}\bigl (\vec {z}^{(i)}_c,\tilde {\vec {z} ^{(j)}_{\setminus i}\bigr )\; A_{j\leftar ow i}\bigl (\vec {z}^{(i)}_c,\tilde {\vec {z} ^{(j)}_{\setminus i}\bigr )\; B_i(\hat {\vec {z} ^{(i)}_c,\hat {\vec {z} ^{(i)}_s) =0. 
+
+By Assumption 1(A2),
+                           \sum _{j\in \mathcal {N}(i)} L_{ij}\bigl (\vec {z}^{(i)}_c,\tilde {\vec {z} ^{(j)}_{\setminus i}\bigr )\; A_{j\leftar ow i}\bigl (\vec {z}^{(i)}_c,\tilde {\vec {z} ^{(j)}_{\setminus i}\bigr ) = I_{d_c^{(i)} , 
+
+hence
+
+              B_i(\hat {\vec {z}}^{(i)}_c,\hat {\vec {z}}^{(i)}_s)=0 \qquad \text {(a.e.\ on the latent support)}. 
+
+Therefore,  h(ic)(z^  (i)  ,  z^  (si))  does  not  depend  on  z^(si),  i.e.,                                                                                                        there                                                     exists                           a  smooth
+                      c
+
+function i such that
+
+                                 \vec {z}^{(i)}_c = h_i^{(c)}(\hat {\vec {z}}^{(i)}_c,\hat {\vec {z}}^{(i)}_s) = \varphi _i(\hat {\vec {z}}^{(i)}_c). 
+
+    Since hi = gi-1  g^i is a diffeomorphism, its Jacobian is invertible everywhere.
+Because hi(c)/z^(si) = 0, the Jacobian of hi is block lower-triangular:
+
+                                    J_{h_i}(\hat {\vec {z} ^{(i)}_c,\hat {\vec {z} ^{(i)}_s) = \begin {bmatrix} J_{\varphi _i}(\hat {\vec {z} ^{(i)}_c) & 0\  * & * \end {bmatrix}, 
+
+which implies det(Ji (z^c(i))) = 0 for all points on the support. By the inverse
+function theorem, i is locally invertible (a local diffeomorphism) on the shared
+latent support. Hence there exists a smooth inverse map h(i) := i-1 (on the
+support) such that
+
+                                           \hat {\vec {z}}^{(i)}_c = h^{(i)}\bigl (\vec {z}^{(i)}_c\bigr ), 
+
+which matches the subspace/block identifiability notion stated in the main text.
+This completes the proof.
+
+A.2 Component-wise Identifiability
+
+Theorem 1 establishes block/subspace identifiability of the shared latent block: for
+each modality m, the learned shared representation can match the ground-truth
+one up to an invertible change of coordinates, i.e., z^(cm) = h(m)(zc(m)) (equivalently
+z(cm) = h~(m)(z^c(m))) for some diffeomorphism h(m). This is already sufficient for
+                               Multimodal LLMs under Pairwise Modalities                                                                                                   27
+
+cross-modal alignment at the subspace level (e.g., transfer, retrieval, or matching),
+
+but it still allows arbitrary within-block mixing: a single learned coordinate may
+
+entangle multiple true factors. Such an ambiguity limits fine-grained control-
+
+lability and interpretability of generative models: for controllable cross-modal
+
+generation (e.g., changing one semantic factor and generating consistent changes
+
+in image/text/tactile), we would like a one-to-one correspondence between latent
+
+components across modalities, rather than only a shared subspace.
+
+This motivates a stronger notion--component-wise identifiability--which aims
+
+to reduce the remaining ambiguity from an arbitrary diffeomorphism to only (i)
+
+within-block permutation and (ii) element-wise invertible scalings. As discussed in
+
+the disentanglement literature, such a stronger conclusion is impossible without
+
+additional inductive bias; a widely used and practically meaningful bias is some
+
+form of sparsity/structural simplicity in the underlying mechanisms [73].
+
+We      say  z^  (m)  is  component-wise  identifiable  w.r.t.  zc(m)  if  there   exist  a  permu-
+                 c
+                                                                           }dc(m)
+tation  matrix   Pm       and  element-wise  diffeomorphisms    {m,k               such   that,                                                                            on
+                                                                             k=1
+
+the support,
+
+          \hat {\vec {z}}^{(m)}_c = P_m\,\phi _m(\vec {z}^{(m)}_c), \qquad \phi _m(\vec {u}) = \bigl (\phi _{m,1}(u_1),\dots ,\phi _{m,d_c^{(m)}}(u_{d_c^{(m)}})\bigr ). 
+
+Equivalently, zc(m) = -m1 Pmz^(cm) . Under this definition, each learned compo-
+nent corresponds to exactly one ground-truth shared factor (up to 1D repa-
+rameterization), enabling factor-level interventions and controllable cross-modal
+generation.
+
+    We emphasize that the component-wise identifiability result in this appendix
+is not the main contribution of our work. Similar identifiability guarantees under
+closely related settings have already been established in prior studies [47]. Our
+contribution differs from existing results in two key aspects.
+
+    First, we consider a more general structural case in which a single latent
+factor may simultaneously explain multiple observed modality pairs, i.e., it
+can be incident to more than one edge in the observation graph. This departs
+from the standard assumption that latent components align to disjoint modality
+pairs. To accommodate such shared factors, we introduce an extended latent
+representation and impose an appropriate sparsity structure that captures how
+each component participates across edges. Second, our analysis starts from paired
+data only. Compared with settings that assume richer supervision (for example,
+multi-way aligned tuples), restricting to pairwise observations makes the problem
+fundamentally more under-determined. This motivates additional assumptions
+on the observation model to rule out ambiguous solutions and to ensure that the
+latent decomposition remains identifiable from pairwise measurements.
+
+    The overall proof strategy follows the line of reasoning in [47], while adapt-
+ing the arguments to our extended latent construction and the pairwise-only
+supervision regime.
+
+    Beyond establishing the formal statement, our goal in this section is to provide
+the community with clearer insight into what kinds of identifiability guarantees
+for multimodal latent variables are attainable when learning is driven purely by
+paired data.
+28  Y. Li et al.
+
+    Starting from block-identifiable solutions, we further introduce a sparsity-
+based selection principle on the cross-modality interactions in the extended shared
+coordinates zec (after carefully removing duplicated/overlapping coordinates
+across modalities via the non-overlap index sets Im|n). Intuitively, if the true
+cross-modality mechanism is sparse, then nontrivial within-block mixing tends
+to spread each cross-modality dependency across many coordinates, producing a
+denser cross-block Jacobian; thus, selecting the sparsest mechanism (under mild
+coverage conditions on observed pairs) rules out such mixing and leaves only
+permutations and element-wise transformations, formalized by Theorem 2.
+
+    This section strengthens the block/subspace identifiability result in Theo-
+rem 1 to component-wise identifiability under additional structural assumptions.
+Throughout, modalities are indexed by [M ] = {1, . . . , M } and the observation
+graph is G = ([M ], E) as in Section 2 of the main text.
+
+    Recall the notation in the main text: the set of all connected (distinct) shared
+latent factors is
+
+      \vec {c}=\{c_1,c_2,\dots ,c_{d_c}\}, \qquad \vec {c} = \bigcup _{m=1}^M \bigl \{[\vec {z}^{(m)}_c]_k:\ k\in [d_c^{(m)}]\bigr \}, 
+
+and the set of all modality-specific latent variables is s = {s1, s2, . . . , sds }. In
+particular, each modality-wise shared block z(cm) is a (possibly permuted) sub-
+
+collection of the global shared factors c. Equivalently, there exists an injective
+index map m : [d(cm)]  [dc] such that
+
+                    \label {eq:pi_map_shared} [\vec {z}^{(m)}_c]_k = c_{\pi _m(k)},\qquad k\in [d_c^{(m)}],\ \ m\in [M].                                                     (A3)
+
+This section focuses on identifying components of z(cm); the modality-specific
+variables zs(m) (whose union forms s) play no role here.
+
+    In the learned representation, we directly concatenate the (possibly overlap-
+ping) shared blocks {z(cm)}M m=1 and form the extended vector
+
+      \vec {z}_e^{\,c} \triangleq \bigl [(\vec {z}^{(1)}_c)^\top ,\dots ,(\vec {z}^{(M)}_c)^\top \bigr ]^\top \in \mathbb R^{d_e}, \qquad d_e=\sum _{m=1}^M d_c^{(m)}. 
+
+Let o1 := 0 and om :=  m-1  dc()  for  m    2,  so  that  the                               coordinates                                                                  of  zc(m)
+                       =1
+
+occupy the contiguous index set
+
+                    \mathcal I_m \triangleq \{o_m+1,\dots ,o_m+d_c^{(m)}\} \subset [d_e]. 
+
+    Using the index maps {m}M m=1 in (A3), for each ordered pair (m, n), define
+the indices of coordinates in z(cm) that correspond to global factors also appearing
+in z(cn):
+
+                        \mathcal I_{m,n} \triangleq \Bigl \{\, o_m+k\in \mathcal I_m:\ \pi _m(k)\in \pi _n([d_c^{(n)}]) \Bigr \}. 
+
+(When {m, n} / E, the set Im,n is still well-defined; it simply reflects whether
+the same global factor cr  c is present in both modality-wise shared blocks.)
+Multimodal LLMs under Pairwise Modalities                                                                                                                                                             29
+
+For m = n, define the non-overlap indices
+
+                           \mathcal I_{m\mid n}\triangleq \mathcal I_m\setminus \mathcal I_{m,n}, \qquad \mathcal I_{n\mid m}\triangleq \mathcal I_n\setminus \mathcal I_{n,m}. 
+
+    We consider a latent causal mechanism (SCM) on the extended shared coor-
+dinates, written in vector form as
+
+                                            \vec {z}_e^{\,c} = g_c(\vec {z}_e^{\,c},\epsilon ), 
+
+where gc is not the observation generator gm, but a compact notation for the
+structural assignments among shared latents. Define its Jacobian
+
+  G \triangleq \frac {\partial g_c(\vec {z}_e^{\,c},\epsilon )}{\partial (\vec {z}_e^{\,c})^\top } \in \mathbb R^{d_e\times d_e}, \qquad G^{m\leftarrow n}\triangleq G_{\mathcal I_m,\mathcal I_n}. 
+
+For any matrix-valued random variable M (zec), define
+               \|M\|_0 \triangleq \sum _{m\neq n}\, \bigl \|M_{\mathcal I_{m\mid n},\,\mathcal I_{n\mid m}}\bigr \|_0, \qquad \|A\|_0 \triangleq |\mathrm {supp}(A)|. 
+
+Here  \mathrm {supp}(A):=\{(u,v):\mathbb P(A_{uv}\neq 0)>0\}.  For observed pairs only, define
+M 0,E as the same quantity but with the outer sum restricted to {m, n}  E.
+
+    Let P(d) be the set of generalized permutation matrices in Rd×d and define
+
+                          \mathcal P_c \triangleq \Bigl \{\mathrm {diag}(P_1,\dots ,P_M):\ P_m\in \mathcal P(d_c^{(m)})\Bigr \}. 
+
+     Assumption 2 (Pair coverage of nonzero cross blocks)
+
+  If {m, n} / E, then there is no cross-modality dependence between the
+  non-overlap parts of modalities m and n, so (m, n) contributes zero to G0.
+  Equivalently,
+
+                                           \|G\|_0 \;=\; \|G\|_{0,\mathcal E}. 
+
+  Assumption 3 (Global sparsity minimality)
+
+For almost every zec, for any block-diagonal invertible T = diag(T1, . . . , TM ),
+if T / Pc then
+
+                                     \|T^{-1}GT\|_0 \;>\; \|G\|_0. 
+
+  Theorem 2 (Pairwise component-wise identifiability)
+
+Assume block identifiability holds for every modality's shared block (e.g.,
+Theorem 1 applied with target i = m for each m  [M ]), Assumption 2 holds,
+and Assumption 3 holds. Let z^(cm) be any block-identified representation
+consistent with the observed pairwise marginals on E. Then there exist
+30  Y. Li et al.
+
+    block-wise diffeomorphisms hm such that
+
+                                  \vec {z}^{(m)}_c = h_m\!\bigl (\hat {\vec {z}}^{(m)}_c\bigr ),\qquad m\in [M]. 
+
+    Define
+
+               h(\hat {\vec {z}}_e^{\,c}) \triangleq \bigl [h_1(\hat {\vec {z}}^{(1)}_c)^\top ,\dots ,h_M(\hat {\vec {z}}^{(M)}_c)^\top \bigr ]^\top , \qquad T(\hat {\vec {z}}_e^{\,c})\triangleq J_h(\hat {\vec {z}}_e^{\,c}). 
+
+    Consider the reparameterized mechanism
+
+                         \hat g_c(\hat {\vec {z} _e^{\,c}) \triangleq h^{-1}\!\bigl (g_c(h(\hat {\vec {z} _e^{\,c}),\epsilon )\bigr ), \q uad \hat G\triangleq \frac {\partial \hat g_c}{\partial (\hat {\vec {z} _e^{\,c})^\top }. 
+
+    Assume the learned solution satisfies the sparsity selection inequality on
+    observed pairs:
+
+                                           \|\hat G\|_{0,\mathcal E}\ \le \ \|G\|_{0,\mathcal E}. 
+    Then T (z^ec)  Pc almost surely; equivalently, each hm is component-wise
+    up to a within-block permutation (i.e., no nontrivial within-block mixing
+    remains).
+
+    Theorem 2 upgrades block identifiability to component-wise identifiability by
+leveraging a structural preference encoded through the sparsity of cross-modality
+interactions on the extended coordinates. Assumption 2 enforces consistency with
+the observation graph: after removing overlap coordinates that correspond to
+the same global factors in c, any remaining cross-modality dependence should
+only appear on modality pairs that are actually observed, so the relevant nonzero
+patterns are entirely captured by edges in E. This is crucial because our selection
+criterion is evaluated only on observed pairs; without such a coverage condition,
+a reparameterization could shift dependence into unobserved pairs without being
+penalized.
+
+    Assumption 3 imposes a uniqueness principle: among all block-wise invert-
+ible coordinate changes, the true representation is a strict minimizer of the
+cross-modality sparsity pattern on non-overlap parts, up to block-wise gener-
+alized permutations. Intuitively, mixing coordinates within a modality tends
+to spread a single cross-modality influence direction into multiple directions,
+thereby increasing the number of nonzero cross-modality entries when measured
+on the non-overlapping parts Im|n, In|m. The theorem then formalizes a selection
+argument: starting from any block-identified solution consistent with pairwise
+marginals, if the learned mechanism is chosen so that it is no denser than the
+true one on observed pairs, then any within-block mixing that would increase
+cross-modality density is excluded, forcing the remaining ambiguity to be only
+block-wise generalized permutations.
+                                            Multimodal LLMs under Pairwise Modalities                                                                                                                                                                                                             31
+
+A.3 Proof of component-wise identifiability
+
+Proof (Proof of Theorem 2). By the assumed block identifiability (Theorem 1
+
+applied to each modality), for every m  [M ] there exists a diffeomorphism
+hm : Rdc(m)  Rdc(m) such that
+
+                                     \label {eq:block_dif eo_ap } \vec {z}_c^{(m)} = h_m\!\bigl (\hat {\vec {z} _c^{(m)}\bigr )\q uad \text {a.s.}                                                                                                                                                (A4)
+
+Define the concatenated mapping
+
+               h(\hat {\vec {z}}_e^{\,c}) \triangleq \bigl [h_1(\hat {\vec {z}}_c^{(1)})^\top ,\dots ,h_M(\hat {\vec {z}}_c^{(M)})^\top \bigr ]^\top , \qquad \vec {z}_e^{\,c} = h(\hat {\vec {z}}_e^{\,c})\ \text {a.s.} 
+
+Since each hm is a diffeomorphism, h is a diffeomorphism on Rde and its Jacobian
+
+                      \begin {aligned} T(\hat {\vec {z}_e^{\,c}) ~\triangleq ~ J_h(\hat {\vec {z}_e^{\,c}) &= \mathrm {diag}\!\bigl (J_{h_1}(\hat {\vec {z}_c^{(1)}),\dots ,J_{h_M}(\hat {\vec {z}_c^{(M)})\bigr ) \ &= \mathrm {diag}(T_1,\dots ,T_M) \end {aligned} 
+
+is  block-diagonal          and    invertible  a.s.,  where  Tm       Jhm                                                                                                                                                                                               (z^  (m)  ).
+                                                                                                                                                                                                                                                                             c
+
+    Recall the (extended-coordinate) latent mechanism
+
+                                     \vec {z}_e^{\,c} = g_c(\vec {z}_e^{\,c},\epsilon ), \q uad G \triangleq \frac {\partial g_c(\vec {z}_e^{\,c},\epsilon )}{\partial (\vec {z}_e^{\,c})^\top }. 
+
+Define the reparameterized mechanism (as in Theorem 2)
+
+                          \hat g_c(\hat {\vec {z} _e^{\,c},\epsilon ) \triangleq h^{-1}\!\bigl (g_c(h(\hat {\vec {z} _e^{\,c}),\epsilon )\bigr ), \q uad \hat G \triangleq \frac {\partial \hat g_c(\hat {\vec {z} _e^{\,c},\epsilon )}{\partial (\hat {\vec {z} _e^{\,c})^\top }. 
+
+We show that G^ is a conjugate (similarity) transform of G by T .
+    Since zec = h(z^ec) and zec = gc(zec, ) hold on observational samples, substi-
+
+tuting gives
+                                    g_c(h(\hat {\vec {z}}_e^{\,c}),\epsilon ) = h(\hat {\vec {z}}_e^{\,c}) \qquad \text {a.s.} 
+
+Applying h-1 to both sides yields
+
+                                     \hat g_c(\hat {\vec {z}}_e^{\,c},\epsilon ) = h^{-1}(h(\hat {\vec {z}}_e^{\,c})) = \hat {\vec {z}}_e^{\,c} \qquad \text {a.s.} 
+
+Differentiate g^c(z^ec, ) = h-1(gc(h(z^ec), )) with respect to z^ec and apply the chain
+rule:
+
+                                 \hat G &= J_{h^{-1} \!\bigl (g_c(h(\hat {\vec {z} _e^{\,c}),\epsilon )\bigr )\; J_{g_c}\!\bigl (h(\hat {\vec {z} _e^{\,c}),\epsilon \bigr )\; J_h(\hat {\vec {z} _e^{\,c}). \label {eq:chain_rule_ful _ap }                                                      (A5)
+
+On observational samples we have gc(h(z^ec), ) = h(z^ec), so the first Jacobian is
+             c
+Jh-1  (h(z^  e  )).  By     the    inverse  function  theorem,
+
+                                   J_{h^{-1}}(h(\hat {\vec {z}}_e^{\,c})) = \bigl (J_h(\hat {\vec {z}}_e^{\,c})\bigr )^{-1} = T(\hat {\vec {z}}_e^{\,c})^{-1}. 
+
+Also  Jgc  (h(z^     c  ),  )  is  exactly  G  evaluated     at  zec  =                                                                                                                                                                                                 h(z^ec).  Plugging  into  (A5)
+                     e
+
+yields the desired conjugacy:
+
+                                     \label {eq:similarity_app} \hat G = T(\hat {\vec {z}}_e^{\,c})^{-1}\;G\;T(\hat {\vec {z}}_e^{\,c}) \qquad \text {a.s.}                                                                                                                                       (A6)
+32  Y. Li et al.
+
+In particular, for any block (m, n) with m = n,                                                                                                                                                                                                                             (A7)
+                                \label {eq:block_similarity_app} \hat G^{m\leftarrow n} = \hat G_{\mathcal I_m,\mathcal I_n} = T_m^{-1}\,G^{m\leftarrow n}\,T_n. 
+
+    Recall the de-duplicated sparsity functionals (defined in Appendix A.2):
+
+      \|M\|_0 \triangleq \sum _{m\neq n}\bigl \|M_{\mathcal I_{m\mid n},\,\mathcal I_{n\mid m}}\bigr \|_0, \qquad \|M\|_{0,\mathcal E} \triangleq \sum _{\substack {m\neq n:\\ \{m,n\}\in \mathcal E}} \bigl \|M_{\mathcal I_{m\mid n},\,\mathcal I_{n\mid m}}\bigr \|_0, 
+
+where for any matrix-valued random variable A, A0 = |supp(A)| and supp(A) =
+{(u, v) : P(Auv = 0) > 0}.
+
+    Assumption 2 states that if {m, n} / E, then the (non-overlap) cross-modality
+dependence between m and n vanishes, hence
+
+                     \label {eq:G_ful _equals_edge_ap } \|G\|_0 = \|G\|_{0,\mathcal E}.                                                                                                                                                                                     (A8)
+
+    We also need the analogous statement for G^. Under the bookkeeping con-
+vention used in Appendix A.2 that Im,n =  whenever {m, n} / E, we have
+Im|n = Im and In|m = In for all non-edges. Thus, for any {m, n} / E, Assump-
+tion 2 implies GIm,In  0 and therefore, by (A7),
+
+                                   \hat G_{\mathcal I_m,\mathcal I_n} = T_m^{-1}\,G_{\mathcal I_m,\mathcal I_n}\,T_n \equiv 0. 
+
+Hence G^Im|n, In|m  0 for all non-edges, and summing gives
+
+                     \label {eq:Ghat_ful _equals_edge_ap } \|\hat G\|_0 = \|\hat G\|_{0,\mathcal E}.                                                                                                                                                                        (A9)
+
+    From (A6) we have G^ = T -1GT a.s., hence
+
+      \label {eq:norm_transfer_app} \|\hat G\|_0 = \|T^{-1}GT\|_0, \qquad \|\hat G\|_{0,\mathcal E} = \|T^{-1}GT\|_{0,\mathcal E}.                                                                                                                                          (A10)
+
+Assumption 3 states that for almost every zec, for any block-diagonal invertible
+S = diag(S1, . . . , SM ), if S / Pc then
+
+                     \label {eq:minimality_app} \|S^{-1}GS\|_0 > \|G\|_0.                                                                                                                                                                                                   (A11)
+
+Apply (A11) to S = T (z^ec). If T (z^ec) / Pc on an event of positive probability,
+then
+
+                                         \|T^{-1}GT\|_0 > \|G\|_0. 
+
+Using (A8) and (A9), and then (A10), we obtain
+
+      \|\hat G\|_{0,\mathcal E} = \|\hat G\|_0 = \|T^{-1}GT\|_0 > \|G\|_0 = \|G\|_{0,\mathcal E}, 
+
+which contradicts the sparsity selection inequality assumed in Theorem 2: G^0,E 
+
+G0,E . Therefore,
+
+                     \label {eq:T_in_Pc_ap } T(\hat {\vec {z} _e^{\,c})\in \mathcal P_c \q uad \text {a.s.}                                                                                                                                                                 (A12)
+                                          Multimodal LLMs under Pairwise Modalities                                                                                                            33
+
+Fix a modality m and write d = d(cm). From (A12), we have Tm(z^(cm)) =
+
+Jhm  (z^  (m)  )    P (d)  a.s.  Because     hm  is  smooth,    Jhm (z)  is  continuous                                                          in                                   z.  The  set
+          c
+
+P(d) has finitely many support patterns (one per permutation). Thus, on each
+
+connected component of the support of z^c(m), the support pattern of Jhm (z) must
+be constant a.s. Consequently, there exists a permutation m of [d] such that
+
+            \label {eq:fixed_perm_pattern_app} \frac {\partial [h_m]_r(z)}{\partial [z]_k}=0 \quad \text {whenever }k\neq \sigma _m(r), \qquad r\in [d], \ \ \text {for a.e. }z.          (A13)
+
+(Additionally,      since  Jhm (z)  is  invertible,  the  remaining      partial                                                            derivatives                               [hm]r (z)
+                                                                                                                                                                                       [z ]m (r)
+
+are nonzero a.e.)
+
+    Equation (A13) implies that each coordinate function [hm]r depends on only
+one input coordinate [z]m(r) (a.e.): for any k = m(r), the partial derivative in
+direction k vanishes (a.e.), so [hm]r is (a.e.) constant along lines parallel to the
+k-axis. Hence there exist univariate functions m,r : R  R such that
+
+                             \label {eq:univariate_form_app} [h_m]_r(z) = \varphi _{m,r}\bigl ([z]_{\sigma _m(r)}\bigr ),\qquad r\in [d].                                                 (A14)
+
+Moreover,         because    [hm ]r    =  0  a.e.  and  hm  is  bijective,   each                                                           m,r  is                                a  1D  diffeo-
+                            [z ]m (r)
+
+morphism on the support (and can be extended to a global 1D diffeomorphism
+
+under standard regularity conditions). Therefore hm is component-wise up to a
+permutation:
+
+                             h_m(z) = \Bigl (\varphi _{m,1}(z_{\sigma _m(1)}),\dots ,\varphi _{m,d}(z_{\sigma _m(d)})\Bigr ). 
+
+    We have shown that T (z^ec) = Jh(z^ec)  Pc a.s., which forces each hm to be
+component-wise up to a within-block permutation. Since z(cm) = hm(z^c(m)), the
+ambiguity remaining after block identification is only within-block permutation
+
+and a 1D invertible reparameterization of each coordinate, i.e. component-wise
+
+identifiability (up to permutations) holds.
+
+A.4 Discussions
+
+Why the block-level identifiability assumptions are reasonable and
+widely used
+
+Assumption 1(A1) (Smoothness & invertibility). Assumption 1(A1) requires that
+(i) each single-modality generator gi is smooth and invertible, and (ii) the joint
+map gij : (zc(i), zs(i), z~\(ji))  (x(i), x(j)) is also smooth and invertible. Concep-
+tually, this assumption encodes a standard information sufficiency requirement:
+if a modality discards information about its latents (non-injective mapping),
+then those latents cannot be recovered from observations, and identifiability is
+impossible even in principle. Similar invertibility/injectivity assumptions are
+common in nonlinear ICA and identifiable deep latent-variable models, including
+time-contrastive / auxiliary-variable based nonlinear ICA, identifiable VAEs, and
+contrastive-learning based identifiability results [27, 47, 51, 67, 75].
+34  Y. Li et al.
+
+    From a practical standpoint, exact global invertibility can be seen as an
+idealization; what is typically sufficient for theory is local invertibility on the
+data support (i.e., the observation manifold). Moreover, many modern generative
+families are explicitly invertible (e.g., flow-based models), and even when using
+general decoders, training objectives often encourage near-injectivity on the
+relevant region of the latent space. Thus, Assumption 1(A1) is a standard and
+broadly adopted regularity condition for identifiability analysis.
+
+Assumption 1(A2) (Collective linear independence across neighbors). Assump-
+
+tion 1(A2) does not require any single pair (i, j) to fully determine the shared
+block zc(i). Instead, it only requires that the collection of neighbor responses
+jointly spans all directions of zc(i), formalized by the existence of matrices Lij such
+that jN (i) LijAji = I(zc(i)). This is exactly the "multi-view complementarity"
+phenomenon: different modalities often capture different aspects of the same
+
+underlying semantics, and each neighbor may reveal only a subset of factors, but
+
+together they cover the whole shared subspace. Closely related collective-rank
+
+conditions also appear in multi-view / multimodal identifiability analyses [47, 67].
+
+    In real datasets, Assumption 1(A2) is typically plausible when: (i) the shared
+dimension dc(i) is not larger than the effective total neighbor information (e.g.,
+
+   jN (i) d(xj) in a local linear sense), and (ii) different neighbors react to different
+directions of the shared factors (i.e., their Jacobians are not all aligned). Impor-
+
+tantly, even if each Aji is rank-deficient, the intersection of nullspaces can still
+be {0}, which is precisely why pairwise but graph-connected supervision can
+
+suffice.
+
+Why the component-wise assumptions are reasonable and broadly
+applicable
+
+Why do we need extra assumptions at all? Upgrading from block identifiability to
+component-wise identifiability is fundamentally a model selection problem: block
+identifiability leaves an equivalence class of solutions related by within-block
+diffeomorphisms. It is well-known that without inductive bias, fully unsupervised
+disentanglement (component-wise recovery) is impossible in general [37, 44].
+Therefore, to obtain a one-to-one component correspondence, we must introduce
+additional structure. Our choice is a sparsity-based structural preference on
+cross-modality mechanisms, which is mild and interpretable.
+
+Assumption 2 (Pair coverage of nonzero cross blocks). This assumption aligns the
+identifiability goal with the data availability encoded by the observation graph G =
+([M ], E). After removing overlap coordinates (so that we only count dependencies
+between non-overlap parts), Assumption 2 states that unobserved modality
+pairs should not contain additional non-overlap cross-modality dependence that
+we never see in the data; otherwise, any criterion evaluated only on observed
+pairs would be insufficient to uniquely select the correct component alignment.
+Multimodal LLMs under Pairwise Modalities  35
+
+In applications, this is reasonable when E is chosen to reflect the actual data
+collection design: we only aim to recover cross-modality structure for modality
+pairs that are co-observed (or can be connected through co-observed chains). If
+some pairs are never observed but still interact strongly in the true system, then
+purely observational pairwise data cannot determine those interactions, and one
+should either collect additional pair data (add edges) or relax the target (settle
+for block-level guarantees).
+
+Assumption 3 (Global sparsity minimality). This assumption is an explicit Occam-
+type principle: among all block-wise invertible reparameterizations, the true rep-
+resentation yields the sparsest cross-modality interaction pattern (on non-overlap
+parts), up to within-block generalized permutations. Such "minimality/sparsity
+selects the correct structure" principles are widely used in causal discovery and
+sparse mechanism learning. For example, classical identifiable causal models
+exploit structural constraints (e.g., non-Gaussianity and acyclicity in LiNGAM),
+and broader causal literature emphasizes minimality/simplicity as a central guid-
+ing principle [29, 41, 75]. More recently, representation learning works explicitly
+connect mechanism sparsity to disentanglement and component-level identifiabil-
+ity. In multimodal settings, sparsity is often natural: only a limited number of
+semantic factors truly induce cross-modality dependencies, while many variations
+remain modality-specific; moreover, mixing coordinates within a modality typi-
+cally spreads each cross-modality influence across multiple coordinates, increasing
+the number of nonzeros and thus being disfavored by the sparsity criterion [47].
+
+Some clarifications
+
+Q1: Is Assumption 1(A1) too strong because neural decoders are not strictly
+invertible?
+
+A1: In theory, invertibility ensures that observations preserve enough information
+to serve as (local) coordinates for latents. In practice, exact global invertibility is
+not strictly necessary; local invertibility on the data support is often sufficient
+for the Jacobian-based arguments in the proof. If the application demands strict
+guarantees, one can adopt explicitly invertible architectures (e.g., flow-based
+generators) or injective decoders. If a modality is truly non-injective (information-
+destroying), then the lost factors are not identifiable by any method, and the
+correct conclusion should be a weaker equivalence class.
+
+Q2: Does Assumption 1(A2) require every neighbor j to be fully informative about
+zc(i)?
+
+A2: No. The assumption is collective. Each Aji can be rank-deficient; what
+matters is that the stacked operator across j  N (i) has full column rank (cf.
+Lemma 1). This matches practical multimodal reality: one modality may reveal
+some semantic directions clearly while another reveals complementary ones.
+36  Y. Li et al.
+
+Q3: How many neighbors are needed for block identifiability?
+
+A3: A necessary condition is that the aggregated neighbor information can cover
+the shared dimension, i.e., the stacked Jacobian across neighbors should have
+rank dc(i). Heuristically, having more diverse neighbors (heterogeneous modalities)
+reduces the risk that all Jacobians align in the same subspace. This is exactly
+why a connected observation graph with overlapping pairwise data is powerful.
+
+Q4: Why sparsity leads to component-wise (one-to-one) correspondence?
+
+A4: Block identifiability allows within-block mixing hm. When the true cross-
+modality interaction structure is sparse, a nontrivial mixing Tm typically spreads
+one interaction direction into many coordinates, increasing the number of nonzero
+cross-block entries. Therefore, selecting the sparsest admissible mechanism rules
+out most mixings and leaves only generalized permutations, which imply that
+each coordinate depends on only one input coordinate, i.e., component-wise up
+to permutation (as formalized in Theorem 2).
+
+Q5: Is the sparsity minimality assumption always valid? What if the true system
+is dense?
+
+A5: If the underlying cross-modality mechanism is genuinely dense, then sparsity
+may not distinguish the correct component alignment, and component-wise
+identifiability may fail--but block/subspace identifiability (Theorem 1) can still
+hold. In such cases, a different inductive bias (e.g., independence constraints,
+temporal structure, interventions, or supervised anchors) may be needed to go
+beyond subspace-level guarantees.
+
+Q6: Why do we remove overlap coordinates via Im|n before counting sparsity?
+
+A6: Because the same global shared factor cr can appear in multiple modality-wise
+shared blocks, naively counting cross-block nonzeros would double-count "self"
+relations induced by duplication and could artificially favor incorrect mixings.
+The non-overlap indexing ensures the sparsity criterion focuses on genuine cross-
+modality interactions between distinct factors, which is exactly what should
+constrain component alignment.
+
+Q7: How should we understand the identifiability assumptions, and can MPM
+handle sample-wise or partially paired data?
+
+A: MPM provides stronger identifiability than prior settings because it does not
+require globally joint observations over all modalities. Instead, it relies on the
+marginal distributions of observed modality pairs, so shared latent variables can
+be recovered from sparsely connected pairwise observations when the modality
+graph provides sufficient connectivity and rank information. Assumption 2 is
+also collective rather than pairwise-uniform: for a given modality, the Jacobian
+Multimodal LLMs under Pairwise Modalities  37
+
+information contributed by its paired modalities only needs to jointly form a
+full-rank matrix, as formalized in Lemma 1. Thus, different modality pairs may
+contribute unequally to identifiability. For example, if rank three is required
+and three pairs contribute ranks one, two, and one, removing the rank-two pair
+breaks identifiability, whereas removing a redundant rank-one pair may not.
+Moreover, the framework extends to sample-wise or partially paired data because
+pairing is defined at the distribution level rather than requiring every sample
+to be fully paired. Noisy or partial pairing can be viewed as corruption, where
+consistent learning remains possible when such corruption is controlled, corrected,
+or filtered.
+
+B Additional Experimental Details
+
+This appendix provides implementation and training details for reproducibil-
+ity, complementing the main experimental section. The Qwen3-Omni-30B-A3B
+backbone and all off-the-shelf modality encoders remain fully frozen, and we
+only optimize modality-side modules (the Stage I alignment autoencoder and the
+Stage II mappers).
+
+B.1 Training Protocol and Hyperparameters
+
+Training framework. All training is conducted with Ms-Swift v4.0 (ms-swift4.0)
+from ModelScope, with our extensions integrated into its training pipeline (see
+Appendix B.4).
+
+Two-stage training. We follow the two-stage protocol described in the main
+paper. Stage I learns the modality-side alignment autoencoder under paired
+supervision. Stage II trains the modality-to-backbone interface (recomposition)
+for downstream generation and/or selection, while keeping the Qwen3-Omni
+backbone frozen.
+
+Learning rates. We use stage-specific learning rates: (i) Stage I: lr = 5 × 10-5;
+(ii) Stage II: lr = 5 × 10-5.
+
+Batch size. We keep the per-device batch size fixed within each stage: (i) Stage I:
+per-device batch size = 16; (ii) Stage II: per-device batch size = 8. The global
+batch size varies with the number of GPUs used in a given run.
+
+Epochs. We train for: (i) Stage I: 10 epochs; (ii) Stage II: 1 epoch.
+
+Other hyperparameters. All remaining hyperparameters and engineering settings
+are fully specified in our released YAML configuration files and can be directly
+inspected in the accompanying codebase.
+38  Y. Li et al.
+
+B.2 Training Cost and Hardware
+
+Hardware. All experiments are conducted on AMD hardware. Each MI210 server
+contains 8× AMD MI210 64GB GPUs. We report wall-clock time for a single
+representative run for each stage and modality.
+
+Stage I cost (single server). Stage I is trained on one MI210 server (8 GPUs
+total). A full Stage I run takes approximately: (i) point cloud modality: 1 hour;
+(ii) tactile modality: < 1 hour.
+
+Stage II cost (multi-server). Stage II is trained on 8 MI210 servers (64 GPUs
+total). A full Stage II run takes approximately: (i) point cloud modality: 6
+hours; (ii) tactile modality: 3 hours.
+
+Remark on MoE efficiency. Our backbone, Qwen3-Omni-30B-A3B, is a Mixture-
+of-Experts (MoE) model. Because our compute cluster consists solely of AMD
+GPUs, we cannot use training stacks that are primarily engineered for NVIDIA
+GPUs (e.g., Megatron-style optimized MoE kernels and systems), leading to
+significantly reduced training efficiency for MoE backbones in practice. Notably,
+this overhead persists even though the backbone parameters are frozen, since
+Stage II still requires running the backbone graph to obtain gradients with
+respect to the modality-conditioned soft embeddings. We expect that training on
+a comparable NVIDIA cluster with mature MoE-optimized kernels/frameworks
+would substantially reduce the overall training cost.
+
+B.3 Point-Cloud Data Augmentation
+
+To improve generalization on 3D point clouds, we apply data augmentation
+during training.
+
+Random rotations. We augment point clouds with random rotations where
+rotation angles are constrained to be multiples of 90. In the current experimental
+setting, we generate an additional rotated set whose size matches the original
+training set (i.e., 100% extra data volume for rotation augmentation).
+
+Color-to-gray conversion. To reduce over-reliance on color cues and improve
+robustness, we additionally apply a color transformation to a subset of point
+clouds by converting colors to pure gray. When this augmentation is applied,
+we also update the corresponding caption by replacing the original color words
+with "gray" to maintain consistency between geometry/color and text. In our
+experiments, we generate this color-transformed augmentation for 10% of the
+training data volume.
+
+Consistency with baselines. Our Adapter baseline uses exactly the same training
+data as MPM and therefore employs the same augmentation pipeline (rotation
+and color-to-gray) for fair comparison.
+Multimodal LLMs under Pairwise Modalities         39
+
+Table A2: Controlled comparison under the same Qwen3-Omni-30B-A3B
+backbone.
+
+Method                   3D MM-VET    ModelNet40
+
+PointLLM-style baseline         54.5        60.3
+MPM                             57.6        70.5
+
+B.4 Codebase and Implementation Notes
+
+Ms-Swift integration. We implement MPM by extending the ModelScope Ms-Swift
+codebase with a plugin-style design. This enables convenient customization of the
+LLM training pipeline (e.g., inserting our modality-side autoencoder and Stage II
+mappers) while avoiding intrusive modifications to the upstream framework.
+
+Modality-specific modules. All newly introduced architectures and utilities are
+modularized by modality:
+
+ ­ 3D point cloud components: stored under /point_clouds.
+ ­ Tactile components: stored under /tactile.
+
+Importantly, we do not modify Ms-Swift core code; instead, we register and
+invoke our modules through the framework's extension interfaces.
+
+Documentation. Additional implementation instructions (environment setup,
+entrypoints, and configuration usage) are provided in the submitted codebase
+README.md.
+
+B.5 More Experiments
+
+Controlled comparison under the same backbone. To further isolate the
+effect of the proposed pairwise latent alignment and recomposition design, we
+conduct a controlled comparison using the same Qwen3-Omni-30B-A3B backbone.
+As shown in Tab. A2, MPM consistently outperforms the PointLLM-style baseline
+under the unified backbone setting, suggesting that the gains are not solely due
+to the choice of the LLM backbone.
+
+Extension to infrared modality. To examine whether MPM can generalize
+beyond point clouds and tactile sensing, we further extend it to infrared imagery.
+We evaluate on the Infrared Template Benchmark, which includes aerial counting,
+pedestrian counting, recognition, and safety-related tasks. As shown in Tab. A3,
+MPM achieves the best results on aerial counting and pedestrian counting, and
+remains competitive on recognition and safety, demonstrating its flexibility for
+incorporating additional modalities.
+
+Sensitivity analysis. We further study the sensitivity of MPM to the shared-
+mask size and the reconstruction loss weight  on TVL Stage I. As shown
+in Tab. A4, MPM maintains stable performance under different mask sizes
+40  Y. Li et al.
+
+    Table A3: Evaluation on the Infrared Template Benchmark.
+
+Model              Aerial Count Pedestrian Counting Recognition Safety
+
+ImageBindLLM-7B        18.87    50.89  30.32                  77.38
+PandaGPT-7B            16.19    16.87  39.82                  66.97
+Infrared-LLaVA-7B      35.63    85.50  95.85                  94.54
+MPM                    45.38    90.36  86.90                  93.06
+
+            Table A4: Sensitivity analysis on TVL Stage I.
+
+    3-shared 2-shared Score                       Score
+
+       400         112 4.84                     0.1 4.84
+                                                0.3 4.68
+       800         224 4.65                     0.5 4.61
+
+       200         56  4.71            (b) Loss-weight ablation.
+
+       (a) Mask size ablation.
+
+and loss weights, indicating that the method is not overly sensitive to these
+hyperparameters.
+
+Effect of asymmetric alignment. We also evaluate the role of asymmetric
+alignment in Stage I. As shown in Tab. A5, removing asymmetric alignment leads
+to a clear performance drop, suggesting that this component helps better align
+modality-specific shared codes under pairwise-only supervision.
+
+Stability of GPT-based evaluation. Since tactile evaluation relies on GPT-
+based scoring, we additionally measure the standard deviation across repeated
+evaluations. The deviations are small on all three tactile subsets: 0.109 on SSVTP,
+0.037 on HCT, and 0.045 on TVL, indicating that the reported GPT-based scores
+are stable.
+
+B.6 Qualitative Results
+
+Discussion. Projecting 3D point clouds into a small set of rendered views
+inevitably discards information, especially fine-grained geometry and global
+spatial structure. Consequently, directly applying an image-based MLLM to
+three-view renders can be brittle: the model may overfit to a single viewpoint and
+fail to integrate multi-view evidence. For instance, in Figure A1(b), Qwen3-Omni
+predicts bathlib by relying primarily on the frontal appearance and under-
+utilizing the other views, which contain discriminative cues for recognizing a car.
+In Figure A1(d), it further confuses a 3D rocket-like object with a 2D national
+flag, reflecting limited capability to infer 3D structure from sparse viewpoints.
+In contrast, MPM operates on point-cloud-native representations and is more
+reliable on recognition-style tasks (e.g., (a,b)). Nevertheless, MPM still exhibits
+imperfect instruction following on open-ended questions (e.g., (c,d)), which we
+attribute to training with caption-style supervision only. A natural next step is
+to incorporate instruction-following data to improve generalization to broader
+question answering settings.
+Multimodal LLMs under Pairwise Modalities                 41
+
+Table A5: Effect of asymmetric alignment on TVL Stage I.
+
+Variant               Score
+
+Full alignment         4.84
+Asymmetric alignment   4.52
+
+C More Ablation studies
+
+Table A6 reports ablations on tactile understanding across SSVTP, HCT, and
+TVL under the same evaluation protocol (GPT-4 based scoring on a 1­10 scale).
+In all settings, the Qwen3-Omni backbone and the tactile encoder are kept
+frozen, and only modality-side modules are optimized. The full model achieves
+6.24/5.09/5.22 on SSVTP/HCT/TVL, improving over the frozen Qwen3-Omni
+baseline (5.30/4.28/4.40) by 0.94/0.81/0.82 points, which confirms that the
+proposed modality-side training can inject tactile capability without updating
+the backbone.
+
+    Removing Stage I and training only the Stage II interface (recomposition-only)
+yields 5.56/5.00/5.06. This corresponds to drops of 0.68/0.09/0.16 compared with
+the full model, while still outperforming the frozen backbone by 0.26/0.72/0.66.
+The result indicates that paired tactile supervision can directly train a tactile-
+to-backbone conditioning interface that already provides a meaningful signal.
+However, the consistent gap to the full model, particularly on SSVTP, suggests
+that learning a structured latent space in Stage I provides additional regularization
+and improves robustness for more fine-grained tactile attribute understanding.
+
+    Removing Stage II while keeping Stage I (Stage I only) leads to 5.99/4.70/4.84,
+with drops of 0.25/0.39/0.38 relative to the full model. This variant remains above
+the frozen backbone by 0.69/0.42/0.44, implying that Stage I can learn a useful
+aligned representation from paired tactile supervision. Nevertheless, the larger
+degradation on HCT and TVL supports the role of Stage II as a compatibility
+bridge that maps the learned latent code into the backbone's input embedding
+space, allowing the frozen decoder to contribute its language generation prior
+during tactile description.
+
+    The Stage I objectives play distinct roles. When the reconstruction loss
+is removed in Stage I, performance collapses to 2.98/3.94/3.08, far below the
+full model and also below the frozen backbone on all splits. This behavior
+indicates that reconstruction is essential for enforcing an information-preserving
+latent code and preventing degenerate solutions under limited paired tactile
+supervision. In contrast, removing the contrastive alignment loss in Stage I
+produces 5.96/4.79/4.93, which is consistently worse than the full model by
+0.28/0.30/0.29 but still stronger than the frozen backbone by 0.66/0.51/0.53.
+This suggests that contrastive alignment provides a complementary cross-modal
+semantic signal, while reconstruction is the dominant stabilizer that maintains
+latent fidelity; both contribute to the best overall tactile performance.
+
+    Overall, the ablations demonstrate that Stage I and Stage II are complemen-
+tary and that the reconstruction term in Stage I is critical for learning a stable
+42  Y. Li et al.
+
+    Table A6: Ablation study on our evaluation suite.
+
+    Method                              SSVTP   HCT   TVL
+    Full                                 6.24   5.09  5.22
+    w/o Stage I (recomposition-only)      5.56  5.00  5.06
+    w/o Stage II (Stage I only)           5.99  4.70  4.84
+    w/o reconstruction Lrec in Stage I    2.98  3.94  3.08
+    w/o contrastive Lalign in Stage I     5.96  4.79  4.93
+    Qwen3-Omni                            5.30  4.28  4.40
+
+tactile representation. Stage I improves the learnability and robustness of tactile
+semantics under pairwise supervision, while Stage II is necessary to fully exploit
+the frozen MLLM decoder for language-grounded tactile description, yielding the
+strongest results across SSVTP, HCT, and TVL.
+
+D Prompt Design
+
+We follow the native Qwen3-Omni chat formatting with explicit system and
+user messages. As shown in Figure A2, for the point-cloud modality, the object
+is provided through a dedicated text section 3D_POINT_CLOUD_EMBEDDING placed
+inside the user message. Tokens inside this section are placeholders: their con-
+tinuous embeddings are injected at training/inference time to carry semantic
+information of the input point cloud. Below we summarize the exact prompts
+used for (i) training and (ii) ModelNet40 evaluation; additional prompt variants
+are available in the released code.
+
+Implementation note. In code, we construct a two-turn conversation (system:
+prompt, user: query) and call processor.apply_chat_template(...) to pro-
+duce the final token sequence consumed by the frozen Qwen3-Omni backbone.
+Full prompt templates and all task-specific variants are provided in our released
+implementation.
+                      Multimodal LLMs under Pairwise Modalities   43
+
+(a) ModelNet40        Classification (b) ModelNet40          Classification
+
+Front           Side  Top                       Front  Side  Top
+
+Q: Classify the object into exactly one of the  Q: Classify the object into exactly one of the
+following ModelNet40 categories: {40 labels}.   following ModelNet40 categories: {40 labels}.
+MPM: monitor                                    MPM: car
+Qwen3-Omni (3-view): table.                     Qwen3-Omni (3-view): bathlib.
+GT: monitor.                                    GT: car.
+
+(c) 3D MM-VET Open-ended QA (d) 3D MM-VET Open-ended QA
+
+Front           Side  Top
+
+Q: What is this object mainly made of?          Front  Side  Top
+MPM: A pink and purple donut with
+sprinkles.                                      Q: Please describe how important it is to a
+Qwen3-Omni (3-view): Based on the visual        country.
+information provided, it is impossible to
+determine the material composition of the       MPM: A small red and white rocket-shaped
+object.                                         toy with a handle.
+GT: This is a doughnut, which is mainly
+made of dough, sugar and cream.                 Qwen3-Omni (3-view): The object depicted
+                                                is the national flag of Libya, which is a symbol
+                                                of national identity and sovereignty.
+
+                                                GT: A rocket symbolizes a nation's
+                                                technological prowess, military strength, and
+                                                scientific advancement. It enables space
+                                                exploration...
+
+Fig. A1: Qualitative examples on point-cloud benchmarks. We visualize each
+point cloud using three rendered views (front/side/top) for readability. The baseline
+feeds these renders to the frozen Qwen3-Omni backbone, whereas MPM consumes
+point-cloud tokens directly (the renders are shown for visualization and are not required
+by MPM). (a,b) are from ModelNet40 classification; (c,d) are from 3D MM-VET open-
+ended QA.
+44  Y. Li et al.
+
+Chat wrapper (Qwen3-Omni template used by Ms-Swift).
+
+  <|im_start|>system
+  {SYSTEM_PROMPT}
+  <|im_end|>
+  <|im_start|>user
+  {USER_QUERY} # a.k.a. QUERY / user_text
+  <|im_end|>
+  <|im_start|>assistant
+  # generation starts here (add_generation_prompt=True)
+
+(a) Training system prompt                                  (b) Training user message
+(DEFAULT_SYSTEM_PROMPT).                                    ({USER_QUERY} skeleton).
+
+   You are Qwen, a virtual human developed by the Qwen         {TASK_INSTRUCTION / QUESTION}
+             Team, Alibaba Group, capable of understanding
+             text inputs and generating helpful responses.     3D_POINT_CLOUD_EMBEDDING:
+                                                               <pc_tok_1> <pc_tok_2> ... <
+   Task setting:
+   - You will answer questions about an object                         pc_tok_L>
+
+           represented by a 3D point cloud.                 Note: <pc_tok_i> are placeholder
+   - In some requests, the user message will contain a      tokens whose embeddings are injected
+                                                            from the point-cloud encoder +
+             section named '3D_POINT_CLOUD_EMBEDDING'. The  mapper at runtime.
+             tokens in that section are placeholders whose
+             embeddings are injected at inference/training
+             time to carry semantic information about the
+           3D object.
+
+Instructions:
+- Use the '3D_POINT_CLOUD_EMBEDDING' section as
+
+        object context to answer the question.
+- If the embedding section is absent, answer based
+
+        only on the text question and be explicit
+        about uncertainty.
+- Output only the final answer text (no role labels
+
+          such as user/assistant, no extra dialogue
+        markers).
+
+(c) ModelNet40 system prompt                                (d) ModelNet40 user message
+(SYSTEM_PROMPT_CLS).                                        ({user_text} skeleton).
+
+   You are Qwen, a virtual human developed by the Qwen         Classify the object into exactly
+             Team, Alibaba Group.                                      one of the following
+                                                                       ModelNet40 categories: {40
+   Task setting:                                                       labels}.
+   - You will classify an object represented by a 3D
+                                                               3D_POINT_CLOUD_EMBEDDING:
+           point cloud into one of the ModelNet40              <pc_tok_1> <pc_tok_2> ... <
+           categories.
+   - The user message may contain a section named '3                   pc_tok_L>
+           D_POINT_CLOUD_EMBEDDING'. The tokens inside
+           that section are placeholders whose embeddings   Output constraint: the model must
+                                                            emit exactly one label token string (no
+             are injected at inference time to carry        punctuation or extra words).
+           semantic information about the 3D object.
+
+   Instructions:
+   - Use the embedding section as the ONLY object
+
+           context.
+   - Output exactly ONE category label from the
+
+           provided list.
+   - Output only the label string, no extra words, no
+
+           punctuation, no JSON.
+
+Fig. A2: Prompt templates for point-cloud training and evaluation. We use the
+Qwen3-Omni chat wrapper from Ms-Swift, consisting of a system message and a user
+message, followed by an assistant generation prefix. Point-cloud information is injected
+via placeholder tokens inside the 3D_POINT_CLOUD_EMBEDDING block. For open-ended
+tasks (training and 3D MM-VET), we adopt DEFAULT_SYSTEM_PROMPT; for ModelNet40,
+we use a stricter classification-oriented system prompt that enforces one-label outputs.
+

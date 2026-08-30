@@ -1,0 +1,1041 @@
+arXiv:2605.20584v1 [cs.CV] 20 May 2026         QwenSafe: Multimodal Content Rating
+                                        Description Identification via Preference-Aligned
+
+                                                                        VLMs
+
+                                                         Dishanika Denipitiyage1[0000-0002-8717-098X], Aruna
+                                                             Seneviratne2[0000-0001-6894-7987], and Suranga
+                                                                      Seneviratne1[0000-0002-5485-5595]
+
+                                                                     1 University of Sydney, Sydney, Australia
+                                                    {dishanika.denipitiyage,suranga.seneviratne}@sydney.edu.au
+
+                                                                    2 University of New South Wales, Australia
+                                                                              a.seneviratne@unsw.edu.au
+
+                                                 Abstract. Mobile app marketplaces require developers to disclose stan-
+                                                 dardized content rating descriptors (CRDs) to inform users about poten-
+                                                 tially sensitive or restricted content. Ensuring the accuracy and consis-
+                                                 tency of these disclosures remains challenging due to the multimodal
+                                                 nature of app content, which spans textual descriptions and visual in-
+                                                 terfaces. In this paper, we present QwenSafe, a Vision­Language Model
+                                                 (VLM) designed to automatically identify the presence of Apple-defined
+                                                 CRDs by jointly reasoning over app metadata and screenshots. To en-
+                                                 able scalable training for this task, we introduce metadata2CRD, a data-
+                                                 construction pipeline that synthesizes descriptor-aligned question­answer
+                                                 pairs by combining app descriptions, screenshots, and formal descriptor
+                                                 definitions. We adapt Qwen3-VL-8B using supervised fine-tuning fol-
+                                                 lowed by Direct Preference Optimization (DPO) to align model predic-
+                                                 tions with descriptor-specific evidence and explanations across visual and
+                                                 textual modalities. We evaluate QwenSafe on 12 Apple-defined content
+                                                 rating descriptors and compare it against state-of-the-art vision­ lan-
+                                                 guage models, including Qwen3-VL, LLaVA-1.6, and Gemini-2.5-Flash.
+                                                 QwenSafe consistently outperforms all baselines in binary CRD classifi-
+                                                 cation, achieving improvements in positive-class recall of 111.8%, 36.1%,
+                                                 and 2.1%, respectively. Our results demonstrate that descriptor-aware
+                                                 multimodal alignment substantially improves automated content classi-
+                                                 fication and highlights the potential of vision­language models to support
+                                                 scalable and consistent content rating in mobile app marketplaces.
+
+                                                 Keywords: Mobile Apps, Content Ratings, Harmful Content Classifi-
+                                                 cation, Vision-Language Models, Direct Preference Optimisation
+
+                                        1 Introduction
+
+                                        Mobile applications have become deeply embedded in everyday life, serving both
+                                        adult and child users at an unprecedented scale. With an average of 1,863 new
+2  D. Denipitiyage et al.
+
+applications added daily to Apple's App Store [3] and 1,617 to Google Play [2],
+users are continuously exposed to a rapidly evolving ecosystem of digital services.
+In this setting, inaccurate or inconsistent content introduces a security vulner-
+ability, as mobile platforms rely heavily on developer-provided metadata to en-
+force safeguards such as age-based access control and content restrictions [14].
+This reliance creates an opportunity for adversarial developers to intentionally
+misrepresent application content, enabling policy evasion and bypassing platform
+protections [17, 11, 39]. In profit-driven environments, such strategic misclassifi-
+cation can allow applications to reach broader or unintended audiences, expos-
+ing users--particularly children--to harmful or inappropriate content. Conse-
+quently, these practices undermine the integrity and trustworthiness of mobile
+ecosystems, highlighting the need for robust, security-oriented mechanisms for
+content classification and enforcement.
+
+    The two leading app marketplaces, Google Play Store and Apple App Store,
+have implemented multiple safeguards to protect users, including strict devel-
+oper policies, inspection and vetting procedures prior to publication, providing
+essential app information (e.g., download counts, permissions, ratings, devel-
+oper details, and community reviews), and the assignment of age-appropriateness
+ratings to guide user decision-making. Android leverages the International Age
+Rating Coalition (IARC) [29] framework, wherein a standardised questionnaire
+is used to automatically generate region-specific official age ratings for applica-
+tions, which are subsequently displayed on the Google Play Store. In contrast,
+Apple employs a centralised rating framework across all regions, along with re-
+gional exceptions. These rating schemes assess the presence of sensitive content
+descriptors such as mature themes, sexuality or nudity, violence, gambling, drugs
+and language [4, 23]. The initial evaluation is based on questionnaires completed
+by app developers when submitting their apps, where Apple employs a propri-
+etary questionnaire, while Android utilises the IARC framework. In 2017, Google
+employed text analysis, image understanding, and static and dynamic analysis
+of the APK binary to identify potential threats an app poses to its users [21].
+More recently, in 2023, Google introduced machine learning based initial screen-
+ing to scan apps for policy violations, which reduces the manual workload and
+filters bad actors before they are ever seen by human reviewers [22, 27]. However,
+the reliance on self-reported questionnaires and heterogeneous platform-specific
+review pipelines creates opportunities for adversarial manipulation, where devel-
+opers can intentionally misclassify or under-report sensitive content to bypass
+age restrictions and reach broader user populations.
+
+    Despite Google's efforts to prevent the publication of apps that violate con-
+tent rating schemes, a significant 19.25% of content rating inconsistencies were
+still observed across different agencies [39]. Additionally, 81.25% of apps cate-
+gorised as "family-friendly" [36] were found to embed trackers, despite such prac-
+tices being prohibited for children's apps [39]. The Canadian Centre for Child
+Protection (C3P) found that Google Play often assigns lower age ratings (e.g.,
+"Teen") than the Apple App Store (e.g., "17+"), allowing younger users access to
+apps such as YouTube, KIK, WhisperTM, and Yubo. They also note that Google
+QwenSafe  3
+
+Play provides less detailed content descriptors, limiting its descriptors to inter-
+active elements and in-app purchases, while Apple includes more comprehensive
+content descriptors [11]. Furthermore, the C3P states that Apple uses content
+descriptors similar to the ESRB [10]. Prior work has demonstrated significant
+inconsistencies in age-rating decisions across platforms, highlighting a broader
+measurement gap in how mobile app content is assessed and operationalised at
+scale.
+
+    Therefore, there is a pressing need for a unified and security-oriented mea-
+surement framework that can systematically assess content risk across mobile ap-
+plications and mitigate inconsistencies arising from heterogeneous, self-reported
+rating systems. Such a system would reduce opportunities for adversarial misrep-
+resentation of app content, improve transparency in cross-platform content mod-
+eration, and strengthen the reliability of age-based access control mechanisms.
+In this paper, we introduce an automated multimodal security measurement
+framework for fine-grained content rating descriptor (CRD) inference from app
+metadata. We construct a unified descriptor taxonomy and generate descriptor-
+aligned training data integrating textual descriptions, screenshots, and formal
+descriptor definitions. We adapt the Qwen3-VL-8B model, termed QwenSafe,
+as a multimodal security classifier for CRD reasoning. QwenSafe consists of
+two components: (1) metadata2CRD, which transforms multimodal inputs into
+structured CRD question­answer pairs, and (2) an offline alignment stage us-
+ing supervised fine-tuning and Direct Preference Optimisation (DPO) [37] to
+improve robustness in descriptor-specific reasoning under noisy and potentially
+adversarial inputs. Our contributions are as follows:
+
+ ­ We develop QwenSafe, a multimodal security-oriented model adapted for
+     CRD identification, supported by metadata2CRD, a data construction
+     pipeline that produces descriptor-aligned Q&A pairs by combining app de-
+     scriptions, screenshots, and formal descriptor definitions.
+
+ ­ We apply supervised fine-tuning and DPO-based preference align-
+     ment to Qwen3-VL-8B, enabling the model to identify descriptor presence
+     and explain relevant cues across visual and textual modalities.
+
+ ­ Through evaluation on 12 Apple-defined descriptors, QwenSafe outperforms
+     Qwen3-VL, LLaVA-1.6, and Gemini-2.5-Flash, improving positive class re-
+     call by 111.8%, 36.1%, and 2.1%, respectively, in binary CRD classifica-
+     tion.
+
+2 Background
+
+2.1 Legal Background and App Market Policies
+
+Legislation: This section describes the existing legal/regulatory implementa-
+tions such as the European General Data Protection Regulation (GDPR), the
+Children's Online Privacy Protection Act (COPPA), App Store and Google Play
+Policies around mobile app content rating, age assurance, and protecting minors
+from harmful content. Further, we specifically outline recent changes in mobile
+4  D. Denipitiyage et al.
+
+    USK          3+                        6                 12         16     18
+    PEGI                     3
+   ESRB                                      7               12         16     18
+   IARC                      E              PG
+    ACB                                                           Teen      M Adult
+                                                       E10+
+   Apple
+           0        3+                     7+                12+        16+ 18+
+
+                                       G                                   M   R18+
+                                       PG                               MA15+
+
+                                   4+           9+             13+           16+ 18+ (New)
+                                                               12+                    17+ (Old)
+                                   4+           9+
+                                                             14         16 18 20+
+              2  4              6          8 10 12
+
+                                           Age
+
+Fig. 1. Comparison of age ratings across major authorities (USK, PEGI, ESRB, IARC,
+
+ACB, and Apple)
+
+app content rating in Australia, as this research was conducted by setting the
+geographical location as Australia.
+
+    Children need constant vigilance and effort to protect their personal data, as
+they often do not fully understand the risks of how their data is collected and
+used. According to COPPA §312.4 [35], applications directed at users under the
+age of 13 are required to make reasonable efforts to ensure that a child's parent
+receives direct notice of the app's practices concerning the collection, use, or
+disclosure of personal information. Similarly, under GDPR [20] Art. 8, the pro-
+cessing of a child's ( below the age of 16 years) personal data is lawful only when
+consent is provided by the holder of parental responsibility and Art. 5 requires
+that user personal data be processed "lawfully, fairly and in a transparent man-
+ner in relation to the data subject." These regulatory efforts collectively protect
+the underage audience from intentional or accidental access to age-restricted ap-
+plications. While reputed organisations strictly follow such regulatory guidelines
+and reflect the target audience via content rating labels, there is no guaran-
+tee that not-on-spotlight developers are representing the actual content of their
+apps via content-rating labels [30]. Enforcement actions for such apps, therefore,
+are reactive in nature, as the regulatory efforts are predominantly focused on
+restricting access and securing personal information handling of children rather
+than verifying the content's suitability.
+
+    In Australia, the Online Safety Act 2021 (Cth), Part 9 [8, 18] consolidated
+powers of the eSafety Commissioner to compel removal and restrict access of
+harmful mobile apps, complementing the Broadcasting Services Act 1992 (Cth) [7]
+and its classification regime. The subsequent Online Safety Amendment (Social
+Media Minimum Age) Act 2024 introduced Part 4A, establishing a statutory
+minimum age of sixteen for users of designated social media platforms [19]. By
+requiring providers to take reasonable steps to prevent underage users from cre-
+ating or maintaining accounts, providers to purge existing accounts belonging
+to children, the amendment seeks to reduce children's exposure to harmful or
+QwenSafe  5
+
+age-inappropriate content. This law is intended to apply to companies such as
+Facebook rather than companies offering education and health support.
+
+Age rating: Age rating, also referred to as content rating or maturity rating,
+is defined as evaluating the appropriateness of television programs, films, comic
+books, video games or mobile apps for their intended audience[28, 10, 34] against
+the availability of different content descriptors. In Android apps, the developers
+and the International Age Rating Coalition (IARC) are responsible for assigning
+age ratings. Developers complete a questionnaire provided by the IARC, which
+then automatically generates region-specific ratings for different parts of the
+world. Figure 1 shows the major regional content rating authorities, including
+the Entertainment Software Rating Board (ESRB) [10] in the Americas, the Pan
+European Game Information (PEGI) [28] in Europe and the Middle East, the
+Unterhaltungssoftware Selbstkontrolle (USK) [40] in Germany, the Australian
+Classification Board (ACB) [38] in Australia, and the International Age Rating
+Coalition (IARC) [29]. In Australia, game apps follow ACB ratings (General
+(G), Parental Guidance (PG), Mature (M), Mature Accompanied (MA15+),
+and Restricted (R18+)) and the generic apps follow IARC ratings (3+, 7+,
+12+, 16+, and 18+).
+
+    In contrast, Apple App Store uses its own rating scheme [4, 6]. With the
+release of iOS26 [1], Apple further streamlined the setup process of child ac-
+counts--mandatory for users under 13 and available for all individuals up to the
+age of 18. This update enables parents to authorise the sharing of a child's age
+range with app developers, without disclosing the child's exact date of birth.
+In parallel, Apple revised its age-rating scheme [4] by introducing additional
+categories (13+, 16+, and 18+) alongside the existing 4+ and 9+ tiers, while
+eliminating the former 12+ and 17+ ratings. To support this transition, a new
+developer questionnaire in App Store Connect was also deployed, encompassing
+expanded content descriptors such as medical or wellness information, violent
+material, and the availability of in-app control. However, in this research, we
+focus on Apple's previous content rating scheme, as our dataset was crawled
+before the changes.
+
+Content descriptors: Content descriptors are indicators accompanying age
+ratings that specify the nature of potentially sensitive or objectionable mate-
+rial present in an app. These indicators are defined by a regulatory body or by
+the app market itself. For example, ACB guidelines use a hierarchical descrip-
+tor scheme where the first layer has eight different indicators, themes, violence,
+sex, language, drug use, nudity, online interactivity, and in-game purchases, and
+assess the impact to decide the age rating. More specifically, Android follows
+five Likert-style scales: `very mild', `mild', `available' and `strong' and `very
+strong'. iOS apps follow a similar structure containing seven main descriptors
+(In-App Controls, Capabilities, Mature Themes, Medical or Wellness, Sexuality
+or Nudity, Violence, Horror/Fear Themes, Chance-Based Activities) and con-
+sider `mild/infrequent' or `intense/frequent' presence of the descriptor. Even
+though both app markets have different first layers in their hierarchy, they both
+follows almost similar descriptors in the second layer. However, ACB provides
+6  D. Denipitiyage et al.
+
+   The SimsTM FreePlay                   Netflix
+
+   by Electronic Arts                    by Netflix, Inc.
+
+   Simulated gambling                    In-app purchases
+   In-game purchases
+
+   Infrequent     AGE        AU RATING   Infrequent/Mild               AGE
+                                         Realistic Violence
+                12+            15+                                   12+
+
+               Years Old      Years Old                             Years Old
+
+   Cartoon or Fantasy Violence           Cartoon or Fantasy Violence
+
+   Profanity or Crude Humour             Profanity or Crude Humour
+
+   Mature or Suggestive Themes           Mature or Suggestive Themes
+
+   Horror/Fear Themes                    Horror/Fear Themes
+
+   Alcohol, Tobacco, Drug Use or         Alcohol, Tobacco, Drug Use or
+
+   References                            References
+
+   Sexual Content or Nudity              Sexual Content or Nudity
+
+Fig. 2. Content descriptors of T he SimsT M F reeP lay and N etf lix apps across App
+Store and Play Store.
+
+fine granular second layer compared to apple. For example ACB divides violence
+into 12 sub-categories whereas Apple has only four sub-categories. Compared to
+Android, Apple recently introduces Parental Controls and Age Assurance as a
+protection layer for children under 16 years.
+
+2.2 iOS and Android Content Rating Schemes
+
+Content ratings and descriptors can diverge substantially even for the same ap-
+plication when distributed across iOS and Android, owing to the fact that devel-
+opers respond to different platform-specific questionnaires during the submission
+process. As illustrated in Figure 2, T he SimsT M FreePlay by Electronic Arts re-
+ceives an R18+ rating on Android but only 15+ on iOS, despite representing the
+same title with identical screenshots. The underlying descriptors further high-
+light this discrepancy: Android attributes its classification to simulated gambling
+and in-game purchases, whereas iOS cites sexual content and nudity, alcohol and
+tobacco use, mature or suggestive themes, and several additional factors. Such
+inconsistencies raise a fundamental question about how two rating schemes can
+govern an identical game within the same region and which set of descriptors
+more accurately reflects the app's content. This phenomenon extends beyond
+games. For instance, Netflix is rated 12+ on both platforms, yet the rationale
+differs markedly: Android points solely to in-app purchases, while iOS lists re-
+alistic violence, profanity or crude humour, mature or suggestive themes, sexual
+content and nudity, and several others. More concerning is that developers ap-
+pear to treat each app marketplace as a distinct regulatory environment, even
+when distributing the same product. In practice, households often operate a mix
+of Android and iOS devices, leaving end users--particularly parents--uncertain
+QwenSafe  7
+
+about which rating or set of descriptors to trust when evaluating apps they have
+no prior familiarity with.
+
+    Additionally, we observed several content rating descriptors that are visible
+only in certain app ecosystems. In iOS, if developers claim their game contains
+infrequent nudity or sexual content, that app may no longer receive a content
+rating less than 12+. In Android, very mild nudity or sexual content could be
+present in a general (G) rated game, and more occurrences require parental
+guidance. It is again concerning how Australian regulators are not binding both
+behaviours to avoid this confusion to both app developers and end-users alike. In
+this work, we aim to reduce this gap by comparing both ecosystems and creating
+more references among them.
+
+3 Related Work
+
+Content Rating: Comparatively fewer efforts address content rating as a se-
+curity and measurement problem, where inaccurate or manipulated ratings can
+enable policy evasion and inappropriate content exposure in mobile ecosystems.
+Early work by Chen et al. [14] proposed Automatic Label of Maturity ratings
+(ALM), a semi-supervised text-mining approach that infers maturity ratings
+using app descriptions and user reviews, treating Apple App Store ratings as
+ground truth. However, this method relies primarily on keyword matching and
+lacks semantic understanding. As a result, such approaches are vulnerable to
+evasion through benign wording or deliberate obfuscation in app metadata, lim-
+iting their effectiveness in adversarial settings. Hu et al. [26] extended this line
+of work by introducing a text feature­based SVM classifier with online train-
+ing, but similarly depended exclusively on textual cues. Subsequent studies by
+Liu et al. [32] and Chenyu et al. [43] incorporated additional modalities, in-
+cluding app icons, screenshots, and APK features, to identify children's apps.
+Nevertheless, their feature extraction was limited to surface-level signals such
+as OCR-extracted text, colour distributions, permissions, and APIs, without
+deeper cross-modal reasoning. These limitations restrict their ability to detect
+inconsistencies between declared ratings and actual content.
+
+    More recent work by Sun et al. [39] analysed inconsistencies in content rat-
+ings across geographic regions by mapping rating systems between jurisdictions.
+Complementing these findings, an investigation by the Canadian Centre for Child
+Protection Inc. (C3P) [11] in 2022 reported that app age ratings often vary across
+Apple's App Store, Google Play, and the app's own terms of service, and further
+noted that both major mobile app stores lack transparency in how age ratings
+are determined. Beyond automated methods, longitudinal audits have revealed
+substantial non-compliance with platform and regulatory standards. For exam-
+ple, Xiao [42] reported widespread violations in the UK loot box industry, where
+apps rated as suitable for children (e.g., 4+ or 9+) nonetheless imposed 18+
+age requirements through in-app gating mechanisms. Similarly, Carter et al. [13]
+identified systemic failures in Australia's Mandatory Minimum Classifications
+Scheme for gambling-like content. Collectively, these studies expose a systemic
+8  D. Denipitiyage et al.
+
+measurement gap between developer-declared ratings and actual app content
+available, highlighting the need for automated auditing mechanisms capable of
+identifying misrepresentation at scale.
+Multimodal Harmful Content Detection: Large language models (LLMs)
+and vision­language models (VLMs) have increasingly been applied to security-
+relevant content analysis tasks, including the detection of abusive, deceptive, or
+policy-violating content. Early work [15] evaluated the ability of GPT-3 to iden-
+tify sexist and racist text, demonstrating that few-shot prompting could achieve
+accuracies of approximately 85%. Building on this line of research, Guo et al. [24]
+systematically explored four prompting strategies for online hate speech detec-
+tion using LLMs, reporting substantial F1-score improvements ranging from
+7.9% to 24.2% on the HateXplain dataset [33]. Beyond text-only approaches,
+VLMs extend content understanding by jointly modelling visual and textual sig-
+nals, enabling the detection of multimodal harmful content. The Hateful Memes
+Challenge [31] introduced a benchmark highlighting the limitations of unimodal
+models and the necessity of multimodal reasoning. Pro-Cap [12] employed frozen
+CLIP-based representations to identify hateful meme content, while Vid+RM-
+FT [41] fine-tuned large-scale VLMs (LLaMA-3.2-11B and LLaVA-NextVideo-
+7B) on HateMM and re-annotated Hateful Memes datasets [31].
+
+    Despite this progress, state-of-the-art LLMs and VLMs often require exten-
+sive task-specific fine-tuning, carefully engineered prompting strategies [24], or
+additional supervision to generalise reliably to new domains. Moreover, existing
+work does not address the problem of detecting misrepresentation in structured
+platform metadata, where developers may intentionally under-report sensitive
+content. To the best of our knowledge, this is the first work to model content
+rating of mobile apps as a multimodal security auditing problem, leveraging vi-
+
+sion­language models to detect inconsistencies between declared and inferred con-
+
+tent descriptors in mobile app marketplaces.
+
+4 Data Pipeline
+
+In this section, we formulate our content rating descriptor (CRD) taxonomy
+creation and dataset curation for CRD prediction task.
+
+Content descriptor taxonomy: The CRD taxonomy in Figure 3 (a) is con-
+structed by integrating multiple content rating authorities rather than relying
+on a single framework. Specifically, we analyse descriptor definitions from Ap-
+ple (iOS) and the Australian Classification Board (ACB), and further compare
+them with ESRB and PEGI standards to identify both shared and region-specific
+elements. We define nine primary content categories: Language, Themes, Gam-
+bling, Violence, Sexual content and Nudity, Medical Treatment Information,
+Substance Use, Contest, and Interactive Elements, by extracting concepts com-
+mon across rating systems while preserving unique dimensions (e.g., "Themes"
+in ACB capturing elements, such as fear or horror in PEGI and blood or gore
+in ESRB). Each primary category is further decomposed into 2­6 fine-grained
+sub-categories, resulting in a total of 30 sub-categories.
+                                                                                                                                                                                                                                               QwenSafe  9
+
+SexuUanl rRAIensec-tfAcreiepcrsptesenPUdcusWerecrsheInabtseersact                       Contest                                                InfTroeMraetmdiamtcieaoln/tn      TobacAcTDlocoUrobuhsageoclRcUeosfeeRreenfecreesnces
+                                                                 Share Location                                                                                     Drug Use            Alcohol References
+                                                                   EIlenmteeranctstive                                                                 SubRUsteasfenecroeernces
+
+Sexualised Imagery                                                  Sexual                Content                                                      LanguagMe aTtuhreem/ SeMsugLagCPyetrursritoucrivesfdLeaeHannHuitgmyuu/omauCgoroeuarrse
+    Sexual Scene                                                   Content/             Descriptors
+                                                                    Nudity
+
+  Nudity                                                           Violence                                                Gambling            Themes
+SeRxeufearleVnCcviaoeirosltoelteononncscvoeeeiroxFlueananclteasy
+                                                                RReealaRliefsGteairvceimnovblcileeiolntnceogencReealistic  Simulated Gambling       HorroBr/lFFoeoaadnr tTTaahnhsedyemm/GeSseocsrie-fi
+                                                                                                                                               Animal Cruelty
+
+                                                                                                                           (a)                                                                                                                 (b)
+
+Fig. 3. (a) Content descriptor taxonomy and (b) mapping to 12 different Apple content
+rating descriptors
+
+    This process yields a unified, hierarchical taxonomy that fully covers all 12
+content descriptors defined in the iOS ecosystem (cf. Figure 3 (b)) and all first-
+layer descriptors specified by ACB, while remaining sufficiently abstract to gen-
+eralise across other rating schemes. As a result, the taxonomy can be readily
+applied to regional schemes within the Android ecosystem, particularly those
+based on ESRB and PEGI standards. Its concise yet extensible structure enables
+flexible representation of content across app marketplaces and supports progres-
+sive refinement during data construction and model training. This adaptability
+is critical for maintaining robustness in the presence of evolving content and
+potential inconsistencies in mobile app ecosystems.
+
+Curation of training and testing datasets: The manual reviewing pro-
+cess for iOS apps compared to the automated review in Android has resulted
+in selecting iOS data as ground truth for verifying Android apps in many prior
+research [14]. Following this intuition, we construct our training dataset using
+developer-defined content descriptors, app metadata, and content-rating labels
+from popular iOS applications. We crawled a large-scale dataset of approximately
+1.2 million Apple App Store entries between January and November 2023. From
+this corpus, we selected the top 780 apps from each content-rating category, ex-
+cluding the 4+ category because it does not provide descriptor-level information.
+The selection was stratified across 26 app categories [5], taking the top 30 apps
+per category, where "top" is determined by sorting apps based on: (i) number of
+user ratings, (ii) average star rating, and (iii) popularity rank respectively. We
+argue that highly downloaded applications are less likely to contain incorrect
+10       D. Denipitiyage et al.
+
+    a) Training Dataset Generation                     b) Supervised                    c) Create DPO Dataset                         d) DPO training
+          (Metadata2CRD)                                Fine-tuning
+
+    App  Alcohol Use                                      Pre-trained      Inference on  Supervised Model                             Supervised Model
+                                                       Qwen3 - VL (8B)
+    Description Definition  Screenshot                                                                                       Llama 3
+                                                                  LoRA                                                         Juge
+                                                              Fine-tuning
+                                                                                          Preferred (correct/ aligned)
+                                                       Supervised Model
+                                                                                          Rejected (incorrect/ non-compliant)
+
+          Metadata2CRD                                                                   Q: How prominent is this alcohol use                 DPO
+         Data Construction                                                               in this image and what's its impact?            Optimisation
+
+          Q: How prominent is this alcohol use                             Predicted A: The image does not display                    QwenSafe
+          in this image and what's its impact?
+    A: This indicates a strong impact level, as                            alcohol use                                  rejected
+    selling these products is the app's primary
+    function visible here.                                                 A: This indicates a strong impact level, as
+
+                Gemini3-Flash curated training                             selling these products is the app's primary  chosen
+                                            dataset -
+                                                                           function visible here.
+
+                                                                                                   DPO Training Set -
+
+Fig. 4. The overview of the QwenSafe pipeline. The pipeline involves four stage process.
+a) metadata2CRD: constructing QwenSafe training data from Apple app metadata,
+b) supervised fine tuning Qwen3-VL model, c) DPO dataset generation and d) DPO
+optimisation.
+
+information, as their large user base increases the likelihood of detecting and
+reporting violations, thereby enhancing the reliability of their content rating la-
+bels. For each app, we extract textual information such as short and long app
+descriptions, visual information such as the app icon and app screenshots, and
+developer-defined metadata such as content rating label and content rating de-
+scriptors. To evaluate our pipeline, we construct a iOS test set by selecting the
+next ten most popular apps per category for each content-rating class, yielding
+a dataset of 981 applications.
+
+5 Methodology
+
+In this section, we outline the overall methodology of QwenSafe, which com-
+prises two primary components: (1) training data construction (Figure 4(a and
+c)) and (2) offline model adaptation for content-rating descriptor reasoning (Fig-
+ure 4(b and d)). As detailed in Section 5.1, we construct descriptor-aligned
+question­answer pairs from app metadata to provide supervision for CRD in-
+terpretation. Section 5.2 then describes the two-stage training pipeline, where
+the Qwen3-VL-8B model is adapted through LoRA-based supervised fine-tuning
+followed by mistake-driven Direct Preference Optimisation to align the model
+with descriptor-specific rationales.
+
+5.1 Descriptor-Aligned Q&A dataset Construction
+
+metadata2CRD: As outlined in Section 4, our unified descriptor taxonomy
+contains 30 fine-grained content descriptors. Apple's taxonomy provides only
+12 coarse-grained descriptors, often aggregating multiple fine-grained concepts
+(cf. Figure 3(b)). For example, Apple provides only one aggregated descriptor for
+alcohol, tobacco, or drug use, despite the presence of six separate sub-descriptors
+in our taxonomy. To bridge this gap, we map Apple-provided labels onto our
+QwenSafe  11
+
+hierarchical taxonomy, enabling a consistent representation within a unified CRD
+space.
+
+    We further construct a descriptor-definition corpus by aggregating formal
+guidelines from ESRB, ACB, and Apple [10, 38, 1], associating each descrip-
+tor with a precise textual definition. For each app, we treat screenshots and
+developer-provided descriptions as multimodal inputs.
+
+    Building on this, we introduce metadata2CRD, a structured data generation
+procedure that produces descriptor-aligned question­answer pairs conditioned on
+visual content, textual metadata, and descriptor definitions. Specifically, given
+an app screenshot, its description, and a target descriptor with its definition,
+we prompt Gemini-2.5-Flash [16] to generate reasoning traces that determine
+whether the descriptor is present and justify the decision using supporting vi-
+sual and textual evidence. These generated rationales act as secondary CRD
+annotations, improving interpretability and serving as supervision signals for
+downstream training. Formally, metadata2CRD consists of four sequential rea-
+soning steps:
+
+ ­ Visual Understanding - The model identifies salient visual cues from the app
+     screenshot that can be leveraged to characterise the content.
+
+ ­ Textual Understanding - The app description is analysed to build an un-
+     derstanding of the app's intent and functionality, complementing the visual
+     evidence.
+
+ ­ Descriptor-Definition Matching - Using the given descriptor definitions, the
+     model evaluates whether the combined visual and textual evidence satisfies
+     the criteria for the target descriptor.
+
+ ­ Q&A Generation - The model summarises the above analyses into struc-
+     tured question­answer pairs that:(a) indicate the presence or absence of the
+     descriptor in the image, and (b) justify this decision by citing relevant cues
+     from both modalities.
+
+An overview of the workflow can be found in Figure 4(a). From the secondary
+CRD tags generated by Gemini, we retain only those conversations whose pre-
+dicted descriptors are consistent with the developer-defined labels. After filtering,
+our final training corpus comprises 79,500 high-quality Q&A pairs with corre-
+sponding images.
+
+5.2 Offline Training of QwenSafe
+
+Training: Our training pipeline consists of two stages: (1) LoRA-based super-
+vised fine-tuning (SFT) (cf. Figure 4(b)) and (2) mistake-driven Direct Pref-
+erence Optimization (DPO)(cf. Figure 4(d)). We fine-tune the Qwen3-VL-8B-
+Instruct model using all filtered image­text Q&A pairs generated through our
+metadata2CRD procedure. Because each training example is produced by jointly
+reasoning over screenshots, app descriptions, and descriptor definitions, the re-
+sulting corpus provides highly structured, descriptor-aligned supervisory signals.
+During SFT, the model is trained to minimize the standard next-token cross-
+entropy loss:
+12  D. Denipitiyage et al.
+
+                               1T                                  (1)
+    LSFT                    =  -            log p (yt | x, y<t) ,
+                                 T
+                                       t=1
+
+    where T represents the number of output tokens, y<t = y1, ..., yt-1 repre-
+sents all the output tokens before position t and x represents the input sequence
+containing both visual tokens and text prompts. p is the probability that the
+model assigns to the next token yt given all previous tokens y<t, under the cur-
+rent parameters . In this phase, the vision encoder and base language model
+remain fixed, and only the multimodal projection layer and LoRA adapters on
+selected transformer blocks are updated. This parameter-efficient strategy en-
+ables the VLM to learn CRD-specific reasoning while preserving the pre-trained
+visual and linguistic representations.
+
+    Following the SFT phase, we employ DPO [37] to further align the model
+with the CRD and enhance predictive accuracy. After completing SFT, we run
+the fine-tuned model over the entire SFT corpus and sample multiple responses
+per instance across three inference passes. These samples are compared against
+the reference answers produced by our metadata2CRD procedure, enabling us
+to collect both aligned (correct) and misaligned (incorrect) outputs. To identify
+misaligned responses, we employ Meta-Llama-3-8B-Instruct as a judge. For each
+item, the judge model is prompted with the original reference answer and the
+SFT-generated response and asked to assign an alignment score from 0 to 5 (0
+as complete disagreement and 5 as perfect agreement). Responses with scores
+below 3 are treated as erroneous outputs and selected for DPO training. Each
+DPO pair thus consists of: (i) the ground-truth answer from the metadata2CRD
+process as the winning response, (ii) the misaligned SFT-generated answer as
+the losing response, and (iii) the associated visual-textual input(cf. Figure 4(c)).
+The model is then optimized via the standard DPO objective:
+
+    LDPO(; ref) = -E(x,yw,yl)D [log  (r^(x, yw) - r^(x, yl))]      (2)
+
+    where                      r^ (x,  y)  =    log  (y | x)
+                                                     ref(y | x)
+
+    Here,  denotes the model being optimized, ref is the SFT model, and
+yw and yl represent the preferred and dis-preferred responses, respectively. This
+stage prioritises the model to generate more descriptor-consistent rationales.
+
+6 Experimental Setup
+
+Dataset: Using the procedure described in Section 5.1, we construct a corpus of
+79,500 descriptor-aligned question­answer pairs derived from 2,340 iOS applica-
+tions. This dataset serves as the training dataset for the SFT of the QwenSafe
+model. Following SFT, we further obtain 7,356 mistake-focused image­text pref-
+erence pairs, which are used to train the model through DPO. We used 981 iOS
+apps as the test dataset to evaluate the QwenSafe model.
+                                                                                                      QwenSafe                                                                                                  13
+
+                 *Not Used for QnA  App Screenshot: Used
+
+                Stuff.co.nz                                                                    Qwen3  No.
+                   by Stuff Limited                                                                   The content shown in the image and described in the text does not contain any mature or sugg
+Content Descriptors:                                                                                  estive themes. The app is a news platform covering topics such as politics, sports, weather, bu
+Mild Alcohol, Tobacco or Drug Use or                                                                  siness, and culture -- all of which are presented in a standard journalistic manner without exp
+References                                                                                            licit or suggestive material. The headlines and visuals are factual and appropriate for a genera
+Mild Profanity or Crude Humour                                                                        l audience. Therefore, there is no impact to rate.
+Mild Mature/Suggestive Themes
+Mild Sexual Content and Nudity                                                                 LLaVA Based on the image and description provided, there are no mature or suggestive themes visibl
+                                                                                                           e in the content. The impact of mature or suggestive themes is not applicable in this case.
+           Stuff is the beating heart of news, ideas, inspiration and success in New Zealand.
+           Stuff Ltd is NZ leading media organisation.Features include:App                                 Not available.
+           - Stuff Shorts featuring vertical video and stories designed for your mobileDescription:Gemini The app description and image primarily showcase general news, politics, sports, and lifestyle
+           - News, sports, politics, weather, money, business, celebrities, travel
+                                                                                                           content, with no explicit mention or visual representation of mature or suggestive themes.
+       Does this content contain any mature or suggestive themes? If yes, rate the
+       impact of such themes as one of the following: very mild, mild, or strong ?                             Yes, the content contains mature themes. The impact is mild. The image shows a news app
+                                                                                                               with headlines like "Richlists speak out on why they splash big cash on political parties" and
+                                                                                               QwenSafe "Virgin Australia may soon be allowing pets on planes," which are factual news stories. Whil
+                                                                                                               e these topics are not explicit, they deal with complex real-world issues that are considered m
+                                                                                                               ature, such as political finance and real-world travel restrictions.
+
+Fig. 5. Example illustrating model behaviour on the Mature/Suggestive Themes de-
+scriptor. QwenSafe recognises the subtle cues present in both the screenshot and de-
+scription and accurately labels the impact as mild, demonstrating improved sensitivity
+to low-intensity content.
+
+Evaluation Metrics: The goal of QwenSafe is to reliably detect the presence
+of specific content rating descriptors in mobile app metadata. To assess model
+performance, we formulate the task as 1) binary classification for each CRD,
+where the model's generated textual output is mapped to a positive or negative
+label and 2) multi-class classification, which predicts the CRD impact as either
+strong or mild (see Section 6.1 for details). For each descriptor, we report preci-
+sion and recall for both the positive and negative classes. Among these metrics,
+we prioritise positive recall and negative precision, as they capture the two most
+critical behaviours for safety rating: (i) high positive recall ensures that instances
+containing objectionable or rating-relevant content are correctly identified, while
+(ii) high negative precision reduces false alarms by ensuring that benign content
+is classified as harmful. This aligns the evaluation with the practical require-
+ments of content rating systems, which must avoid both missed violations and
+unnecessary over-flagging.
+Baselines: To evaluate the performance of QwenSafe, we compare against sev-
+eral strong vision­language models (VLMs). Specifically, we evaluate: (i) Qwen3-
+VL-8B [9], the underlying backbone of QwenSafe; (ii) LLaVA-v1.6-Mistral-7B [25],
+a similarly sized open-source VLM capable of joint image­text reasoning; and
+(iii) Gemini-2.5-Flash [16], a state-of-the-art multimodal model from Google
+DeepMind. Gemini-2.5-Flash is included both as a high-capacity reasoning base-
+line and because it is used in our data construction pipeline for generating SFT
+training corpora. For each model, we provide the app screenshot and its cor-
+responding textual description as input, and prompt the model to determine
+the presence or absence of each content rating descriptor. This setup ensures a
+consistent and comparable evaluation across all baselines.
+
+6.1 Evaluation Results
+
+Binary classification. We evaluate the effectiveness of QwenSafe in detecting
+12 different safety-critical CRDs from Apple, framed as a binary verification task
+over app metadata (images and descriptions). A descriptor is considered present
+if any image­text pair indicates its occurrence, reflecting a conservative setting
+14  D. Denipitiyage et al.
+
+Table 1. Binary classification performance comparison. Positive class recall (R+) and
+negative precision (P -) across content rating descriptors for LLaVA-v1.6-mistral-7b-
+hf [25], Qwen3-VL-8B [9], Gemini-2.5-Flash [16], and QwenSafe(ours). Best perfor-
+mance is denoted in bold.(values in percentage).
+
+Content Rating Descriptor    LLaVA Qwen3 Gemini QwenSafe
+                            R+ P - R+ P - R+ P - R+ P -
+
+Alcohol, Tobacco or Drug
+
+Use or References           16.87 85.52 13.86 85.07 43.37 85.22 54.22 91.15
+
+Horror or Fear Themes       45.22 93.22 26.09 91.06 48.70 90.95 40.00 92.38
+
+Mature or Suggestive Themes 16.25 74.65 24.38 76.54 52.30 75.89 55.48 79.78
+
+Medical / Treatment Information 45.05 93.45 36.94 92.55 55.86 92.41 57.66 94.33
+
+Profanity or Crude Humour   22.87 84.54 10.11 82.43 41.49 82.54 46.28 88.55
+
+Cartoon or Fantasy Violence 33.96 88.67 28.30 87.82 55.97 88.69 52.20 91.10
+
+Realistic Violence          34.25 94.98 26.03 94.39 52.05 94.78 60.27 96.64
+
+Sexual Content or Nudity    33.33 90.16 27.54 89.40 42.75 87.83 51.45 92.29
+
+Simulated Gambling          40.54 97.72 16.22 96.82 32.43 96.41 35.14 97.44
+
+Real Gambling               15.79 95.06 12.28 94.87 15.79 93.13 24.56 95.46
+
+Unrestricted Web Access     74.29 97.01 16.19 90.87 87.62 97.89 60.95 93.84
+
+Contests                    71.79 98.85 51.28 98.02 71.79 98.38 74.36 98.62
+
+Average                     37.52 91.15 24.10 89.99 50.01 90.34 51.05 92.63
+
+Table 2. Multi-class classification: Average precision and recall across nine different
+content rating descriptors. We report mild and strong average precision and recall
+for Qwen3-VL-8B [9], Gemini-2.5-Flash [16], and QwenSafe. The best recall for both
+classes is recorded in bold (values in percentage).
+
+                               Model Pmild Rmild Pstrong Rstrong
+                               Qwen3 73.98 4.58 40.74 45.91
+                               Gemini 83.94 20.91 30.04 49.05
+                               QwenSafe 49.50 34.03 27.31 55.25
+
+for safety auditing. Figure 5 illustrates that QwenSafe correctly identifies mature
+suggestive themes with supporting rationale, whereas general-purpose VLMs fail
+to detect their presence. As shown in Table 1, QwenSafe consistently outperforms
+baseline VLMs. Compared to Qwen3-VL-8B, QwenSafe improves positive-class
+recall (R+) by 111.8%, indicating substantially better coverage of descriptor-
+relevant content, while also increasing negative-class precision (P -) by 2.9%,
+reducing false positives. Relative to LLaVA-v1.6-7B, QwenSafe achieves a 36.1%
+gain in R+, highlighting its effectiveness in detecting safety-critical signals. Both
+LLaVA and Qwen3 exhibit lower recall and comparatively high negative preci-
+sion, suggesting a tendency to under-predict descriptor presence. This reflects
+the limitations of general-purpose VLMs for CRD-specific reasoning. Gemini-2.5-
+Flash performs competitively (50.01% R+, 90.3% P -), yet QwenSafe surpasses
+it by at least 2.1% on both metrics, demonstrating stronger alignment with
+descriptor-specific cues.
+
+Multi-class classification. Table 2 reports average precision and recall for
+mild and strong severity levels across nine descriptors (excluding gambling, un-
+                                                                                                       QwenSafe                                    15
+
+                    (i)                                         (ii)                                              Rokkr
+                                                                                                                  Age rating: 12+
+Number of apps  10                                                    Crock Pot Recipes Easy                      CRD:
+                                                                      Age rating: 9+                              Mild Sexual content or nudity
+                5                                                     CRDs: Mild Cartoon or
+                                                                      fantasy violence                           Non-disclosed CRDs:
+                    abcd efg                                          Mild Profanity or crude humour             Mild Horror/ fear theme
+                           Content rating descriptors                                                            Mild Cartoon or fantasy violence
+                                                                      Non-disclosed CRD:                         Mild Realistic Violence
+                    Content Ratings                                   Mild Alcohol, tobacco, or                  Mild Mature/ suggestive themes
+                                                                      drug use/ reference
+                    4+   9+          12+  17+                                                          SaveTik: Tik Tock
+                                                                      Girl games: Dress Up Makeover    Video Saver
+                    Content Rating Descriptors                        Age rating: 12+                  Age Rating: 4+
+                    a - Alcohol, tobacco or drug use/reference        CRD: Mild Alcohol, tobacco or    CRD: None
+                    b - Horror/ fear themes                           drug use/ reference
+                    c - Mature/ suggestive themes                                                      Non-disclosed CRDs:
+                    d - Medical/ treatment information                Non-disclosed CRD:               Mild mature/suggestive themes
+                    e - Profanity or crude humour                     Mild Mature/ suggestive themes   Mild sexual content or nudity
+                    f - Cartoon or fantasy violence
+                    g - Realistic violence                             That's Life! Magazine                 Ziny TV Movies
+                                                                       Age rating: 4+                        Age rating: 9+
+                                                                       CRD: None                             CRD: Mild Horror fear/themes
+                                                                                                             Non-disclosed CRDs:
+                                                                       Non-disclosed CRDs:                   Mild Mature/ suggestive themes
+                                                                       Mild Mature/ suggestive themes        Mild Realistic violence
+                                                                       Mild Sexual content or nudity         Mild Cartoon or fantasy violence
+                                                                       Mild Realistic violence
+
+Fig. 6. Analysis of non-disclosed CRDs identified by QwenSafe. (i) Distribution of
+applications containing non-disclosed CRDs across Apple age rating categories (4+,
+9+, 12+, and 17+) and descriptor types. (ii) Representative examples of applications
+where QwenSafe detects CRDs that are not declared in the app metadata.
+
+restricted web access, and contests, as Apple does not provide severity annota-
+tions). Full per-category results are provided in Appendix Table 3.
+
+    QwenSafe achieves the best overall performance across both severity levels. In
+particular, it improves mild-class recall by 62.75% relative to Gemini and attains
+the highest strong-class recall (0.5525), exceeding Gemini by 12.64%. In contrast,
+Qwen3-VL exhibits the lowest recall for both mild class (Rmild = 4.58%) and
+strong class(Rstrong = 45.91%), comparatively the recall of QwenSafe is at least
+20.3% higher. This trend is consistent with its binary performance, where limited
+recall suggests weak sensitivity to fine-grained CRD cues. However, both Gemini
+and Qwen3 show limited ability to distinguish between severity levels, suggesting
+that general-purpose VLMs capture coarse content signals but lack alignment
+for graded descriptor reasoning.
+
+    Whereas QwenSafe provides consistently higher recall across both mild and
+strong classes, indicating improved sensitivity to descriptor presence and sever-
+ity. Although mild cases remain challenging--particularly when metadata lacks
+explicit cues--QwenSafe maintains robust performance. These results demon-
+strate that QwenSafe enables fine-grained, reliable identification of harmful app
+content through metadata2CRD-driven training, supporting automated enforce-
+ment of platform safety policies in mobile ecosystems.
+
+6.2 Non-Disclosed Descriptors.
+
+Apple's age-rating system requires developers to disclose the presence of specific
+content rating descriptors (CRDs). However, some descriptors may appear in
+the app's visual content but remain unreported in the app metadata. We re-
+16  D. Denipitiyage et al.
+
+fer to these as non-disclosed descriptors. To quantify and analyse such cases,
+we evaluate all apps in our test set using QwenSafe and assess the presence of
+all 12 Apple-defined CRDs, regardless of what developers reported. Figure 6 (i)
+summarises the number of apps containing non-disclosed CRDs for each descrip-
+tor, while Figure 6 (ii) presents representative examples identified by QwenSafe.
+According to Apple's guidelines, apps rated 4+ are expected to contain no ob-
+jectionable material. However, our analysis reveals 21 apps within the 4+ cate-
+gory that exhibit at least one non-disclosed CRD. Notably, Apple's age rating
+definitions specify that apps containing mild cartoon or fantasy violence, mild
+profanity or crude humour, or mild mature, suggestive, or horror-themed con-
+tent must be rated 9+ or higher. As illustrated in Fig. 6(ii), we identify multiple
+4+ applications that display visible mature or suggestive themes, rendering them
+inappropriate for the intended age group. We further observe similar inconsisten-
+cies in higher age categories. Specifically, within the 9+ category, we identify 14
+applications with non-disclosed CRDs. These include applications with alcohol
+references as well as a media streaming application for which QwenSafe detects
+additional descriptors, including realistic violence, that are not reflected in the
+declared metadata. While Apple permits mild or infrequent mature or suggestive
+themes for the 9+ category, we identify five applications in which such content
+is present but not disclosed. Comparable patterns of missing descriptors are also
+observed in applications rated 12+ and 17+.
+
+    Apple states that applications undergo manual review prior to publication
+on the App Store. Nevertheless, our evaluation indicates that 9.37% of appli-
+cations in the test set contain at least one non-disclosed CRD. As discussed in
+Sec. 6.1 and illustrated in Fig. 5, even state-of-the-art vision­language models
+such as Gemini and Qwen3 exhibit limited effectiveness in reliably identifying
+CRDs and their severity levels. This gap introduces potential safety risks, par-
+ticularly for younger users. In contrast, QwenSafe demonstrates the ability to
+systematically detect undisclosed descriptors and align predictions with Apple's
+
+content rating definitions, providing a more reliable and policy-aligned solution
+
+for this downstream safety-critical task.
+
+7 Conclusion
+
+We introduce QwenSafe, a vision­language model for automatic identification
+of safety-critical content signals in mobile applications, supported by meta-
+data2CRD, a scalable data construction pipeline that generates descriptor-aligned
+supervision from multimodal app metadata without relying on static and run-
+time behaviours. By combining supervised fine-tuning with DPO-based prefer-
+ence alignment, QwenSafe consistently outperforms strong vision­language base-
+lines across 12 Apple-defined descriptors, with substantial gains in positive-class
+recall, indicating improved detection of potentially harmful or misreported con-
+tent by app developers. These results demonstrate the effectiveness of descriptor-
+aware multimodal alignment for automated content classification and highlight
+the potential of vision­language models to support automated, scalable enforce-
+ment of safety and compliance in mobile ecosystems.
+            QwenSafe  17
+
+References
+
+ 1. Apple Newsroom.: Apple expands tools to help parents protect kids
+     and teens online. (2025), https://www.apple.com/au/newsroom/2025/06/
+     apple-expands-tools-to-help-parents-protect-kids-and-teens-online/#:
+     ~:text=12%20June%202025-,Apple%20expands%20tools%20to%20help%
+     20parents%20protect%20kids%20and%20teens,they%20set%20up%20their%
+     20device.
+
+ 2. 42matters: Google play statistics and trends 2025 (2025), https://42matters.
+     com/google-play-statistics-and-trends.
+
+ 3. 42matters: ios apple app store statistics and trends 2025 (2025), https://
+     42matters.com/ios-apple-app-store-statistics-and-trends.
+
+ 4. Apple Inc.: Age ratings values and definitions (2025), https:
+     //developer.apple.com/help/app-store-connect/reference/
+     age-ratings-values-and-definitions
+
+ 5. Apple Inc.: Choosing a category. https://developer.apple.com/app-store/
+     categories/ (2025)
+
+ 6. Apple Inc.: Set an app age rating. https://developer.apple.com/help/
+     app-store-connect/manage-app-information/set-an-app-age-rating (2025)
+
+ 7. Australasian Legal Information Institute: Online content regulation. https://www.
+     austlii.edu.au/cgi-bin/viewdb/au/legis/cth/consol\_act/bsa1992214/
+     (1992)
+
+ 8. Australasian Legal Information Institute: ONLINE SAFETY ACT 2021
+     - SECT 105. https://www.austlii.edu.au/cgi-bin/viewdoc/au/legis/cth/
+     consol\_act/osa2021154/s105.html (2021)
+
+ 9. Bai, S., et al.: Qwen3-vl technical report. arXiv preprint arXiv:2511.21631 (2025)
+10. Board, E.S.R.: Rating guide (1994), https://www.esrb.org/ratings-guide/
+11. Canadian centre for child protection: Reviewing the enforcement of app age rat-
+
+     ings in apple's app store and google play. https://content.c3p.ca/pdfs/C3P\
+     _AppAgeRatingReport\_en.pdf (2022)
+12. Cao, R., Hee, M.S., Kuek, A., Chong, W.H., Lee, R.K.W., Jiang, J.: Pro-cap: Lever-
+     aging a frozen vision-language model for hateful meme detection. In: Proceedings
+     of the 31st ACM international conference on multimedia. pp. 5244­5252 (2023)
+13. Carter, M., Zhangshao, T., Hardwick, T., Egliston, B., Xiao, L.Y.: Investigating
+     mobile games' compliance with australia's 2024 mandatory minimum age classifi-
+     cations scheme for gambling-like mechanics. Available at SSRN (2025)
+14. Chen, Y., Xu, H., Zhou, Y., Zhu, S.: Is this app safe for children? a comparison
+     study of maturity ratings on Android and iOS applications. In: Proceedings of the
+     22nd international conference on World Wide Web. pp. 201­212 (2013)
+15. Chiu, K.L., Collins, A., Alexander, R.: Detecting hate speech with gpt-3. arXiv
+     preprint arXiv:2103.12407 (2021)
+16. Comanici, G., Bieber, E., Schaekermann, M., Pasupat, I., Sachdeva, N., Dhillon,
+     I., Blistein, M., Ram, O., Zhang, D., Rosen, E., et al.: Gemini 2.5: Pushing the
+     frontier with advanced reasoning, multimodality, long context, and next generation
+     agentic capabilities. arXiv preprint arXiv:2507.06261 (2025)
+17. Denipitiyage, D., Silva, B., Seneviratne, S., Seneviratne, A., Chawla, S.: Detect-
+     ing content rating violations in android applications: A vision-language approach.
+     arXiv preprint arXiv:2502.15739 (2025)
+18. eSafety commissioner, Australia: Illegal and restricted online content. "https://
+     www.esafety.gov.au/key-topics/Illegal-restricted-content (2024)
+18  D. Denipitiyage et al.
+
+19. eSafety commissioner, Australia: Illegal and restricted online content (2024)
+20. European General Data Protection Regulation: General data protection regulation
+
+     gdpr. (2016), https://gdpr-info.eu/
+21. Google: App Discovery with Google Play, Part 3: Machine Learning
+
+     to Fight Spam and Abuse at Scale. https://research.google/blog/
+     app-discovery-with-google-play-part-3-machine-learning-to-fight-spa/
+     m-and-abuse-at-scale/ (Mar 2015)
+22. Google: Keeping google play safe for users and developers: June 29, 2023
+     (2023), https://support.google.com/googleplay/android-developer/answer/
+     13721042?hl=en
+23. Google: Apps & games content ratings on google play (2025), https://support.
+     google.com/googleplay/answer/6209544?hl=en
+24. Guo, K., Hu, A., Mu, J., Shi, Z., Zhao, Z., Vishwamitra, N., Hu, H.: An inves-
+     tigation of large language models for real-world hate speech detection. In: 2023
+     International Conference on Machine Learning and Applications (ICMLA). pp.
+     1568­1573. IEEE (2023)
+25. Haotian Liu, Chunyuan Li, Y.L., Lee, Y.J.: Improved baselines with visual instruc-
+     tion tuning (2023)
+26. Hu, B., Liu, B., Gong, N.Z., Kong, D., Jin, H.: Protecting your children from
+     inappropriate content in mobile apps: An automatic maturity rating framework.
+     In: Proceedings of the 24th ACM International on Conference on Information and
+     Knowledge Management. pp. 1111­1120 (2015)
+27. Ibrahim, H.: Google play review times: Expectations and tips
+     to streamline approval (Nov 2024), https://median.co/blog/
+     google-play-review-times-what-to-expect-and-how-to-streamline-approval
+28. Interactive Software Federation of Europe (ISFE): Pegi-pan-european game infor-
+     mation. http://www.pegi.info/en/index/id/952 (2003)
+29. International Age Rating Coalition: How iarc works. (2025), https://www.
+     globalratings.com/how-iarc-works.aspx
+30. Jensen, K.T.: 11 iphone apps that got banned and why (2022), https://au.pcmag.
+     com/iphone-apps/95993/11-iphone-apps-that-got-banned-and-why
+31. Kiela, D., Firooz, H., Mohan, A., Goswami, V., Singh, A., Ringshia, P., Testuggine,
+     D.: The hateful memes challenge: Detecting hate speech in multimodal memes.
+     Advances in neural information processing systems 33, 2611­2624 (2020)
+32. Liu, M., Wang, H., Guo, Y., Hong, J.: Identifying and analyzing the privacy of apps
+     for kids. In: Proceedings of the 17th International Workshop on Mobile Computing
+     Systems and Applications. pp. 105­110 (2016)
+33. Mathew, B., Saha, P., Yimam, S.M., Biemann, C., Goyal, P., Mukherjee, A.: Hatex-
+     plain: A benchmark dataset for explainable hate speech detection. In: Proceedings
+     of the AAAI conference on artificial intelligence. vol. 35, pp. 14867­14875 (2021)
+34. Motion Picture Association: Film rating (1968), https://www.motionpictures.
+     org/film-ratings/
+35. National Archives: Children's online privacy protection rule (2022), https://www.
+     ecfr.gov/current/title-16/chapter-I/subchapter-C/part-312
+36. Play Store: Creating apps and games for children and families. https://play.
+     google.com/console/about/programs/families/ (2015)
+37. Rafailov, R., Sharma, A., Mitchell, E., Manning, C.D., Ermon, S., Finn, C.: Direct
+     preference optimization: Your language model is secretly a reward model. Advances
+     in neural information processing systems 36, 53728­53741 (2023)
+QwenSafe  19
+
+38. Regional Development Department of Infrastructure, Transport and Communi-
+     cation.: The advisory categories for films and computer games. (2025), https:
+     //www.classification.gov.au/classification-ratings/what-are-ratings
+
+39. Sun, R., Xue, M., Tyson, G., Wang, S., Camtepe, S., Nepal, S.: Not seen, not heard
+     in the digital world! measuring privacy practices in children's apps. In: Proceedings
+     of the ACM Web Conference 2023. pp. 2166­2177 (2023)
+
+40. Unterhaltungssoftware Selbstkontrolle: SK age categories. (2025), https://usk.
+     de/en/the-usk/faqs/age-categories/.
+
+41. Wang, H., Tan, R.Y., Lee, R.K.W.: Cross-modal transfer from memes to videos:
+     Addressing data scarcity in hateful video detection. In: Proceedings of the ACM
+     on Web Conference 2025. pp. 5255­5263 (2025)
+
+42. Xiao, L.Y., Lund, M.L.: Non-compliance with and non-enforcement of uk loot
+     box industry self-regulation on the apple app store: a longitudinal study on poor
+     implementation. Royal Society Open Science 12(5), 250704 (2025)
+
+43. Zhou, C., Zhan, X., Li, L., Liu, Y.: Automatic maturity rating for Android apps.
+     In: Proceedings of the 13th Asia-Pacific Symposium on Internetware. pp. 16­27
+     (2022)
+
+A Appendix
+
+Due to space constraints, we provide the complete multi-class classification re-
+sults across all descriptors in Table 3. This table reports mild and strong precision
+and recall for all methods, complementing the summarised results in Section 6.1.
+                        Table 3. Multi-class classification performance across content rating descriptors. We report mild and strong precision and recall for
+
+                        Qwen3-VL-8B [9], Gemini-2.5-Flash [16], and QwenSafe. We exclude gambling, unrestricted web access, and contests because Apple does
+
+                        not provide impact levels for these descriptors. The best recall for both classes is recorded in bold.
+
+                        Content Rating Descriptor    Qwen3  Gemini                                                              QwenSafe
+
+                                                     Pmild Rmild Pstrong Rstrong Pmild Rmild Pstrong Rstrong Pmild Rmild Pstrong Rstrong
+
+                        Alcohol, Tobacco or Drug
+
+                        Use/ References              71.43 6.76 66.67 33.33 92.59 33.78 50.00 50.00 69.52 49.32 52.94 50.00
+
+                        Horror or Fear Themes        75.00 5.77 22.73 45.45 76.19 15.38 11.43 36.36 50.00 23.08 28.57 72.73
+
+                        Mature or Suggestive Themes 88.89 3.48 55.00 62.26 80.77 27.39 35.71 47.17 31.95 36.96 31.52 54.72
+
+                        Medical / Treatment Information 100.00 3.37 44.74 77.27 80.00 17.98 38.10 72.73 26.55 33.71 35.90 63.64
+
+                        Profanity or Crude Humour    90.00 5.45 33.33 13.04 82.93 20.61 16.22 26.09 81.11 44.24 22.22 8.70
+
+                        Cartoon or Fantasy Violence  90.48 13.29 25.00 37.50 85.11 27.97 16.67 43.75 54.22 31.47 20.45 56.25
+
+                        Realistic Violence           50.00 1.52 5.88 14.29 90.00 13.64 10.71 42.86 35.59 31.82 5.17 42.86
+
+                        Sexual Content or Nudity     100.00 1.63 33.33 80.00 92.86 21.14 29.03 60.00 63.24 34.96 25.00 73.33
+
+D. Denipitiyage et al.  Simulated Gambling           0.00 0.00 80.00 50.00 75.00 10.34 62.50 62.50 33.33 20.69 24.00 75.00
+
+                        Average                      73.98 4.58 40.74 45.91 83.94 20.91 30.04 49.05 49.50 34.03 27.31 55.25
+
+20
+

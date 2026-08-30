@@ -1,0 +1,156 @@
+Score Jacobian Chaining: Lifting Pretrained 2D Diffusion Models for 3D Generation
+
+Haochen Wang1 Xiaodan Du1 Jiahao Li1 Raymond A. Yeh2 Greg Shakhnarovich1
+
+1TTI-Chicago
+
+2Purdue University
+
+A zoomed out high-quality photo of Temple of Heaven
+
+A high quality photo of a delicious burger
+
+arXiv:2212.00774v1 [cs.CV] 1 Dec 2022
+
+A high quality photo of a Victorian style wooden chair with velvet upholstery
+
+A high quality photo of a classic silver muscle car
+
+Figure 1. Results for text-driven 3D generation using Score Jacobian Chaining with Stable Diffusion as the pretrained model.
+
+Abstract
+A diffusion model learns to predict a vector field of gradients. We propose to apply chain rule on the learned gradients, and back-propagate the score of a diffusion model through the Jacobian of a differentiable renderer, which we instantiate to be a voxel radiance field. This setup aggregates 2D scores at multiple camera viewpoints into a 3D score, and repurposes a pretrained 2D model for 3D data generation. We identify a technical challenge of distribution mismatch that arises in this application, and propose a novel estimation mechanism to resolve it. We run our algorithm on several offthe-shelf diffusion image generative models, including the recently released Stable Diffusion trained on the large-scale LAION 5B dataset.
+1. Introduction
+We introduce a method that converts a pretrained 2D diffusion generative model on images into a 3D generative model of radiance fields, without requiring access to any 3D data. The key insight is to interpret diffusion models as
+* Equal contribution.
+
+learned predictors of a gradient field, often referred to as the score function of the data log-likelihood. We apply the chain rule on the estimated score, hence the name Score Jacobian Chaining (SJC).
+Following Hyvärinen and Dayan [15], the score is defined as the gradient of the log-density function with respect to the data. Diffusion models of various families [12, 49, 51, 53] can all be interpreted [18, 21, 53] as modeling x log p(x) i.e. the denoising score at noise level . For readability, we refer to the denoising score as the score. Generating a sample from a diffusion model involves repeated evaluations of the score function from large to small  level, so that a sample x gradually moves closer to the data manifold. It can be loosely interpreted as gradient descent, with precise control on the step sizes so that data distribution evolves to match the annealed  level (ancestral sampler [12], SDE and probability-flow ODE [53], etc.). While there are other perspectives to a diffusion model [12, 49], here we are primarily motivated from the viewpoint that diffusion models produce a gradient field.
+A natural question to ask is whether the chain rule can be applied to the learned gradients. Consider a diffusion model on images. An image x may be parameterized by some
+
+1
+
+function f with parameters , i.e., x = f (). Applying the
+
+chain
+
+rule
+
+through
+
+the
+
+Jacobian
+
+x 
+
+converts
+
+a
+
+gradient
+
+on
+
+image x into a gradient on the parameter . There are many
+
+potential use cases for pairing a pretrained diffusion model
+
+with different choices of f . In this work we are interested
+
+in exploring the connection between 3D and multiview 2D
+
+by choosing f to be a differentiable renderer, thus creating a
+
+3D generative model using only pretrained 2D resources.
+
+Many prior works [2, 58, 60] perform 3D generative mod-
+
+eling by training on 3D datasets [5, 23, 55, 59]. This ap-
+
+proach is often as challenging as it is format-ambiguous. In
+
+addition to the high data acquisition cost of 3D assets [9],
+
+there is no universal data format: point clouds, meshes, volu-
+
+metric radiance field, etc, all have computational trade-offs.
+
+What is common to these 3D assets is that they can be ren-
+
+dered into 2D images. An inverse rendering system, or a
+
+differentiable renderer [24, 26, 29, 34, 39], provides access
+
+to the Jacobian J
+
+x 
+
+of a rendered image x
+
+at camera
+
+viewpoint  with respect to the underlying 3D parameteriza-
+
+tion . Our method uses differentiable rendering to aggregate
+
+2D image gradients over multiple viewpoints into a 3D asset
+
+gradient, and lifts a generative model from 2D to 3D. We
+
+parameterize a 3D asset  as a radiance field stored on voxels
+
+and choose f to be the volume rendering function.
+
+A key technical challenge is that computing the 2D score
+
+by directly evaluating a diffusion model on a rendered image
+
+x leads to an out-of-distribution (OOD) problem. Gener-
+
+ally, diffusion models are trained as denoisers and have only
+
+seen noisy inputs during training. On the other hand, our
+
+method requires evaluating the denoiser on non-noisy ren-
+
+dered images from a 3D asset during optimization, and it
+
+leads to the OOD problem. To address the issue, we propose
+
+Perturb-and-Average Scoring, an approach to estimate the
+
+score for non-noisy images.
+
+Empirically, we first validate the effectiveness of Perturb-
+
+and-Average Scoring at solving the OOD problem and ex-
+
+plore the hyperparameter choices on a simple 2D image can-
+
+vas. Here we identify open problems on using unconditioned
+
+diffusion models trained on FFHQ and LSUN Bedroom.
+
+Next, we use Stable Diffusion, a model pretrained on the
+
+web-scale LAION dataset to perform SJC for 3D generation,
+
+as shown in Fig. 1. Our contributions are as follows:
+
+· We propose a method for lifting a 2D diffusion model to 3D via an application of the chain rule.
+
+· We illustrate the challenge of OOD when using a pretrained denoiser and propose Perturb-and-Average Scoring to resolve it.
+
+· We point out the subtleties and open problems on applying Perturb-and-Average Scoring as gradient for optimization.
+
+· We demonstrate the effectiveness of SJC for the task of 3D text-driven generation.
+
+2. Related Works
+Diffusion models have recently advanced to image generation on Internet-scale datasets [10, 36, 42, 44­47]. A diffusion model could be interpreted as either a VAE [12, 49] or a denoising score-matcher [51, 53, 56]. Notably, models trained under one regime can be directly used for inference and sampling by the other [18, 53]; they are in practice largely equivalent. Neural radiance fields (NeRF) is a family of inverse rendering algorithms that have excelled at multiview 3D reconstruction tasks including view synthesis and surface geometry estimation [31, 34, 40, 57, 61]. Conceptually, a 3D asset is represented as a dense grid of RGB colors and spatial density  , and rendered into images in a way analogous to alpha compositing [32]. NeRF parameterizes the (RGB,  ) volume with a neural network, but querying the network densely in 3D incurs significant compute costs. Alternatively, Voxel NeRFs [6, 27, 54, 62] store the volume on voxels and observe no loss in end task performance [54, 62]. Querying voxels is a simple memory operation that is much faster than a feedforward pass of a neural network. Here we use a customized voxel radiance field with hyperparameters based on DvGO [54] and TensoRF [6].
+2D-supervised 3D GANs pioneered [35, 43, 64] the approach of training 3D generative models using only unstructured 2D images, and promise greater scalability in terms of data. Rather than supervising directly on the 3D asset a model generates, these methods supervise the 2D renderings of the generated 3D asset, often using an adversarial loss [3, 4, 38, 48, 65]. In other words, only images are needed as training data. However, training such a 3D generative model from scratch is still challenging [37]. Recent empirical evaluation remains mostly on human and animal faces [3]. Our method does the opposite: we take an image generative model that is already pretrained on large amounts of 2D data and use it to guide the iterative optimization of a 3D asset. Optimization-based generation makes it much slower compared to 3D GANs, but it becomes possible to harness powerful off-the-shelf 2D generative models such as Stable Diffusion [45] for greater content diversity.
+CLIP-guided, optimization-based 3D generative models share a similar philosophy of optimizing 3D assets by guiding on 2D renderings [14, 16, 17, 20, 25, 33]. Among them, DreamFields [16] and PureClipNeRF [25] also use NeRF as their differentiable renderers. In this case, the 2D guidance comes from CLIP [42], a pretrained image-text matching model. These works optimize the 3D assets so that the image renderings match a user-provided text prompt. Since CLIP is not a 2D generative model per se, such a pipeline usually creates some abstract distilled content [28] that looks very different from real images. In contrast, we use diffusion models, which are proper 2D generative models, to create
+
+2
+
+

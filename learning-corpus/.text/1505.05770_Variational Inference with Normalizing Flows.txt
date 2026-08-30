@@ -1,0 +1,728 @@
+                                          Variational Inference with Normalizing Flows
+
+                                          Danilo Jimenez Rezende                                           DANILOR@GOOGLE.COM
+                                          Shakir Mohamed                                                    SHAKIR@GOOGLE.COM
+
+                                          Google DeepMind, London
+
+arXiv:1505.05770v6 [stat.ML] 14 Jun 2016                          Abstract                                 of many physical and chemical systems. Despite these suc-
+                                                                                                           cesses and ongoing advances, there are a number of disad-
+                                                The choice of approximate posterior distribution           vantages of variational methods that limit their power and
+                                                is one of the core problems in variational infer-          hamper their wider adoption as a default method for statis-
+                                                ence. Most applications of variational inference           tical inference. It is one of these limitations, the choice of
+                                                employ simple families of posterior approxima-             posterior approximation, that we address in this paper.
+                                                tions in order to allow for efficient inference, fo-
+                                                cusing on mean-field or other simple structured            Variational inference requires that intractable posterior dis-
+                                                approximations. This restriction has a signifi-            tributions be approximated by a class of known probability
+                                                cant impact on the quality of inferences made              distributions, over which we search for the best approxima-
+                                                using variational methods. We introduce a new              tion to the true posterior. The class of approximations used
+                                                approach for specifying flexible, arbitrarily com-         is often limited, e.g., mean-field approximations, implying
+                                                plex and scalable approximate posterior distribu-          that no solution is ever able to resemble the true posterior
+                                                tions. Our approximations are distributions con-           distribution. This is a widely raised objection to variational
+                                                structed through a normalizing flow, whereby a             methods, in that unlike other inferential methods such as
+                                                simple initial density is transformed into a more          MCMC, even in the asymptotic regime we are unable re-
+                                                complex one by applying a sequence of invertible           cover the true posterior distribution.
+                                                transformations until a desired level of complex-
+                                                ity is attained. We use this view of normalizing           There is much evidence that richer, more faithful posterior
+                                                flows to develop categories of finite and infinites-       approximations do result in better performance. For exam-
+                                                imal flows and provide a unified view of ap-               ple, when compared to sigmoid belief networks that make
+                                                proaches for constructing rich posterior approxi-          use of mean-field approximations, deep auto-regressive
+                                                mations. We demonstrate that the theoretical ad-           networks use a posterior approximation with an auto-
+                                                vantages of having posteriors that better match            regressive dependency structure that provides a clear im-
+                                                the true posterior, combined with the scalability          provement in performance (Mnih & Gregor, 2014). There
+                                                of amortized variational approaches, provides a            is also a large body of evidence that describes the detri-
+                                                clear improvement in performance and applica-              mental effect of limited posterior approximations. Turner
+                                                bility of variational inference.                           & Sahani (2011) provide an exposition of two commonly
+                                                                                                           experienced problems. The first is the widely-observed
+                                          1. Introduction                                                  problem of under-estimation of the variance of the poste-
+                                                                                                           rior distribution, which can result in poor predictions and
+                                          There has been a great deal of renewed interest in varia-        unreliable decisions based on the chosen posterior approx-
+                                          tional inference as a means of scaling probabilistic mod-        imation. The second is that the limited capacity of the pos-
+                                          eling to increasingly complex problems on increasingly           terior approximation can also result in biases in the MAP
+                                          larger data sets. Variational inference now lies at the core of  estimates of any model parameters (and this is the case e.g.,
+                                          large-scale topic models of text (Hoffman et al., 2013), pro-    in time-series models).
+                                          vides the state-of-the-art in semi-supervised classification
+                                          (Kingma et al., 2014), drives the models that currently pro-     A number of proposals for rich posterior approximations
+                                          duce the most realistic generative models of images (Gre-        have been explored, typically based on structured mean-
+                                          gor et al., 2014; 2015; Rezende et al., 2014; Kingma &           field approximations that incorporate some basic form of
+                                          Welling, 2014), and are a default tool for the understanding     dependency within the approximate posterior. Another po-
+                                                                                                           tentially powerful alternative would be to specify the ap-
+                                          Proceedings of the 32 nd International Conference on Machine     proximate posterior as a mixture model, such as those de-
+                                          Learning, Lille, France, 2015. JMLR: W&CP volume 37. Copy-       veloped by Jaakkola & Jordan (1998); Jordan et al. (1999);
+                                          right 2015 by the author(s).                                     Gershman et al. (2012). But the mixture approach limits
+                                 Variational Inference with Normalizing Flows
+
+the potential scalability of variational inference since it re-  we will focus on inference over the latent variables only.
+quires evaluation of the log-likelihood and its gradients for    This bound is often referred to as the negative free energy
+each mixture component per parameter update, which is            F or as the evidence lower bound (ELBO). It consists of
+typically computationally expensive.                             two terms: the first is the KL divergence between the ap-
+                                                                 proximate posterior and the prior distribution (which acts
+This paper presents a new approach for specifying approx-        as a regularizer), and the second is a reconstruction error.
+imate posterior distributions for variational inference. We      This bound (3) provides a unified objective function for op-
+begin by reviewing the current best practice for inference       timization of both the parameters  and  of the model and
+in general directed graphical models, based on amortized         variational approximation, respectively.
+variational inference and efficient Monte Carlo gradient es-
+timation, in section 2. We then make the following contri-       Current best practice in variational inference performs
+butions:                                                         this optimization using mini-batches and stochastic gra-
+                                                                 dient descent, which is what allows variational infer-
+   · We propose the specification of approximate poste-          ence to be scaled to problems with very large data
+      rior distributions using normalizing flows, a tool for     sets. There are two problems that must be addressed
+      constructing complex distributions by transforming a       to successfully use the variational approach: 1) effi-
+      probability density through a series of invertible map-    cient computation of the derivatives of the expected log-
+      pings (sect. 3). Inference with normalizing flows pro-     likelihood Eq(z)[log p(x|z)], and 2) choosing the
+      vides a tighter, modified variational lower bound with     richest, computationally-feasible approximate posterior
+      additional terms that only add terms with linear time      distribution q(·). The second problem is the focus of this
+      complexity (sect 4).                                       paper. To address the first problem, we make use of two
+                                                                 tools: Monte Carlo gradient estimation and inference net-
+   · We show that normalizing flows admit infinitesimal          works, which when used together is what we refer to as
+      flows that allow us to specify a class of posterior ap-    amortized variational inference.
+      proximations that in the asymptotic regime is able to
+      recover the true posterior distribution, overcoming one    2.1. Stochastic Backpropagation
+      oft-quoted limitation of variational inference.
+                                                                 The bulk of research in variational inference over the years
+   · We present a unified view of related approaches for         has been on ways in which to compute the gradient of the
+      improved posterior approximation as the application        expected log-likelihood Eq(z)[log p(x|z)]. Whereas
+      of special types of normalizing flows (sect 5).            we would have previously resorted to local variational
+                                                                 methods (Bishop, 2006), in general we now always com-
+   · We show experimentally that the use of general nor-         pute such expectations using Monte Carlo approximations
+      malizing flows systematically outperforms other com-       (including the KL term in the bound, if it is not analytically
+      peting approaches for posterior approximation.             known). This forms what has been aptly named doubly-
+                                                                 stochastic estimation (Titsias & Lazaro-Gredilla, 2014),
+2. Amortized Variational Inference                               since we have one source of stochasticity from the mini-
+                                                                 batch and a second from the Monte Carlo approximation of
+To perform inference it is sufficient to reason using the        the expectation.
+marginal likelihood of a probabilistic model, and requires
+the marginalization of any missing or latent variables in        We focus on models with continuous latent variables, and
+the model. This integration is typically intractable, and        the approach we take computes the required gradients us-
+instead, we optimize a lower bound on the marginal like-         ing a non-centered reparameterization of the expectation
+lihood. Consider a general probabilistic model with ob-          (Papaspiliopoulos et al., 2003; Williams, 1992), combined
+servations x, latent variables z over which we must inte-        with Monte Carlo approximation -- referred to as stochas-
+grate, and model parameters . We introduce an approxi-           tic backpropagation (Rezende et al., 2014). This approach
+mate posterior distribution for the latent variables q(z|x)      has also been referred to or as stochastic gradient vari-
+and follow the variational principle (Jordan et al., 1999) to    ational Bayes (SGVB) (Kingma & Welling, 2014) or as
+obtain a bound on the marginal likelihood:                       affine variational inference (Challis & Barber, 2012).
+
+log p(x) = log p(x|z)p(z)dz      (1)                             Stochastic backpropagation involves two steps:
+
+= log  q  (z|x)  p  (x|z)p(z)dz  (2)                                · Reparameterization. We reparameterize the latent
+       q  (z|x)                                                        variable in terms of a known base distribution and
+                                                                       a differentiable transformation (such as a location-
+ -IDKL[q(z|x) p(z)]+Eq [log p(x|z)] = -F(x), (3)                       scale transformation or cumulative distribution func-
+                                                                       tion). For example, if q(z) is a Gaussian distribution
+where we used Jensen's inequality to obtain the final equa-            N (z|µ, 2), with  = {µ, 2}, then the location-scale
+tion, p(x|z) is a likelihood function and p(z) is a prior
+over the latent variables. We can easily extend this for-
+mulation to posterior inference over the parameters , but
+Variational Inference with Normalizing Flows
+
+      transformation using the standard Normal as a base          is conditioned on z1 and is also parameterized by a deep
+      distribution allows us to reparameterize z as:              neural network (figure 2). This model class is very gen-
+                                                                  eral and includes other models such as factor analysis and
+         z  N (z|µ, 2)  z = µ +  ,  N (0, 1)                      PCA, non-linear factor analysis, and non-linear Gaussian
+                                                                  belief networks as special cases (Rezende et al., 2014).
+   · Backpropagation with Monte Carlo. We can now
+      differentiate (backpropagation) w.r.t. the parameters       DLGMs use continuous latent variables and is a model
+       of the variational distribution using a Monte Carlo        class perfectly suited to fast amortized variational inference
+      approximation with draws from the base distribution:        using the lower bound (3) and stochastic backpropagation.
+                                                                  The end-to-end system of DLGM and inference network
+         Eq(z)[f(z)]  EN ( |0,1)[f(µ +  )] .                      can be viewed as an encoder-decoder architecture, and this
+                                                                  is the perspective taken by Kingma & Welling (2014) who
+A number of general purpose approaches based on Monte             present this combination of model and inference strategy
+Carlo control variate (MCCV) estimators exist as an alter-        as a variational auto-encoder. The inference networks used
+native to stochastic backpropagation, and allow for gradi-        in Kingma & Welling (2014); Rezende et al. (2014) are
+ent computation with latent variables that may be contin-         simple diagonal or diagonal-plus-low rank Gaussian distri-
+uous or discrete (Williams, 1992; Mnih & Gregor, 2014;            butions. The true posterior distribution will be more com-
+Ranganath et al., 2013; Wingate & Weber, 2013). An im-            plex than this assumption allows for, and defining multi-
+portant advantage of stochastic backpropagation is that, for      modal and constrained posterior approximations in a scal-
+models with continuous latent variables, it has the lowest        able manner remains a significant open problem in varia-
+variance among competing estimators.                              tional inference.
+
+2.2. Inference Networks                                           3. Normalizing Flows
+
+A second important practice is that the approximate pos-          By examining the bound (3), we can see that the optimal
+terior distribution q(·) is represented using a recognition       variational distribution that allows IDKL[q p] = 0 is one
+model or inference network (Rezende et al., 2014; Dayan,          for which q(z|x) = p(z|x), i.e. q matches the true pos-
+2000; Gershman & Goodman, 2014; Kingma & Welling,                 terior distribution. This possibility is obviously not realiz-
+2014). An inference network is a model that learns an             able given the typically used q(·) distributions, such as in-
+inverse map from observations to latent variables. Us-            dependent Gaussians or other mean-field approximations.
+ing an inference network, we avoid the need to compute            Indeed, one limitation of the variational methodology due
+per data point variational parameters, but can instead com-       to the available choices of approximating families, is that
+pute a set of global variational parameters  valid for in-        even in an asymptotic regime we can not obtain the true
+ference at both training and test time. This allows us to         posterior. Thus, an ideal family of variational distributions
+amortize the cost of inference by generalizing between the        q(z|x) is one that is highly flexible, preferably flexible
+posterior estimates for all latent variables through the pa-      enough to contain the true posterior as one solution. One
+rameters of the inference network. The simplest inference         path towards this ideal is based on the principle of nor-
+models that we can use are diagonal Gaussian densities,           malizing flows (Tabak & Turner, 2013; Tabak & Vanden-
+q(z|x) = N (z|µ(x), diag(2 (x))), where the mean                  Eijnden, 2010).
+function µ(x) and the standard-deviation function (x)
+are specified using deep neural networks.                         A normalizing flow describes the transformation of a prob-
+                                                                  ability density through a sequence of invertible mappings.
+2.3. Deep Latent Gaussian Models                                  By repeatedly applying the rule for change of variables,
+                                                                  the initial density `flows' through the sequence of invert-
+In this paper, we study deep latent Gaussian models               ible mappings. At the end of this sequence we obtain a
+(DLGM), which are a general class of deep directed graph-         valid probability distribution and hence this type of flow is
+ical models that consist of a hierarchy of L layers of Gaus-      referred to as a normalizing flow.
+sian latent variables zl for layer l. Each layer of latent vari-
+ables is dependent on the layer above in a non-linear way,        3.1. Finite Flows
+and for DLGMs, this non-linear dependency is specified by
+deep neural networks. The joint probability model is:             The basic rule for transformation of densities considers an
+                                                                  invertible, smooth mapping f : IRd  IRd with inverse
+                                                              L   f -1 = g, i.e. the composition g  f (z) = z. If we use
+                                                                  this mapping to transform a random variable z with distri-
+  p(x, z1, . . . , zL) = p (x|f0(z1)) p (zl|fl(zl+1)) (4)         bution q(z), the resulting random variable z = f (z) has a
+
+                                                            l=1
+
+where the Lth Gaussian distribution is not dependent on
+any other random variables. The prior over latent vari-
+ables is a unit Gaussian p(zl) = N (0, I) and the observa-
+tion likelihood p(x|z) is any appropriate distribution that
+                                                  Variational Inference with Normalizing Flows
+
+distribution :                                                       partial differential equation describing how the initial den-
+
+                     f -1                              f  -1         sity  q0(z)  evolves  over `time':              qt  (z)             =  Tt[qt(z)], where
+                det                               det z                                                           t
+                                                             ,
+q(z ) = q(z)          z    = q(z)                               (5)  T describes the continuous-time dynamics.
+
+where the last equality can be seen by applying the chain            Langevin Flow. One important family of flows is given by
+                                                                     the Langevin stochastic differential equation (SDE):
+rule (inverse function theorem) and is a property of Jaco-
+                                                                             dz(t) = F(z(t), t)dt + G(z(t), t)d(t), (9)
+bians of invertible functions. We can construct arbitrarily
+                                                                     where d(t) is a Wiener process with E[i(t)] = 0 and
+complex densities by composing several simple maps and               E[i(t)j(t )] = i,j(t - t ), F is the drift vector and
+successively applying (5). The density qK(z) obtained by
+successively transforming a random variable z0 with distri-          D = GG is the diffusion matrix. If we transform a
+bution q0 through a chain of K transformations fk is:                random variable z with initial density q0(z) through the
+                                                                     Langevin flow (9), then the rules for the transformation
+                zK = fK  . . .  f2  f1(z0)                      (6)
+                                                                     of densities is given by the Fokker-Planck equation (or
+                                              K   det   fk   ,  (7)
+                                                       zk-1          Kolmogorov equations in probability theory). The density
+ln qK (zK ) = ln q0(z0) - ln                                         qt(z) of the transformed samples at time t will evolve as:
+
+                                             k=1
+
+where equation (6) will be used throughout the paper as a               qt(z)=    -             [Fi  (z,  t)qt]+  1                      2   zj  [Dij  (z,  t)qt  ]  .
+shorthand for the composition fK (fK-1(. . . f1(x))). The            t                  zi                        2                      zi
+path traversed by the random variables zk = fk(zk-1) with                            i                               i,j
+initial distribution q0(z0) is called the flow and the path
+formed by the successive distributions qk is a normalizing           In machine learning, we most often use the Langevin flow
+                                                                     with F (z, t) = -zL(z) and G(z, t) = 2ij, where
+flow. A property of such transformations, often referred             L(z) is an unnormalised log-density of our model.
+
+to as the law of the unconscious statistician (LOTUS), is            Importantly, in this case the stationary solution for qt(z)
+that expectations w.r.t. the transformed density qK can be           is given by the Boltzmann distribution: q(z)  e-L(z).
+computed without explicitly knowing qK. Any expectation              That is, if we start from an initial density q0(z) and
+EqK [h(z)] can be written as an expectation under q0 as:
+                                                                     evolve its samples z0 through the Langevin SDE, the re-
+
+EqK [h(z)] = Eq0 [h(fK  fK-1  . . .  f1(z0))], (8)                   seu-lLti(nzg),pio.ein. ttshzetruweilplobsetedriisotrr.ibTuhteisd  according to  q(z) 
+                                                                                                                                       approach has  been ex-
+
+which does not require computation of the the logdet-                plored for sampling from complex densities by Welling &
+Jacobian terms when h(z) does not depend on qK.
+                                                                     Teh (2011); Ahn et al. (2012); Suykens et al. (1998).
+We can understand the effect of invertible flows as a se-
+quence of expansions or contractions on the initial density.         Hamiltonian Flow. Hamiltonian Monte Carlo can also be
+For an expansion, the map z = f (z) pulls the points z
+away from a region in IRd, reducing the density in that re-          described in terms of a normalizing flow on an augmented
+gion while increasing the density outside the region. Con-
+versely, for a contraction, the map pushes points towards            space z~ = (z, ) with dynamics resulting from the Hamil-
+the interior of a region, increasing the density in its interior
+while reducing the density outside.                                  tonian  H(z,    )  =  -L(z)          -  1    M; HMC is also widely
+                                                                                                             2
+The formalism of normalizing flows now gives us a sys-
+tematic way of specifying the approximate posterior distri-          used in machine learning, e.g., Neal (2011). We will use the
+butions q(z|x) required for variational inference. With an
+appropriate choice of transformations fK, we can initially           Hamiltonian flow to make a connection to the recently in-
+use simple factorized distributions such as an independent
+Gaussian, and apply normalizing flows of different lengths           troduced Hamiltonian variational approach from Salimans
+to obtain increasingly complex and multi-modal distribu-
+tions.                                                               et al. (2015) in section 5.
+
+3.2. Infinitesimal Flows                                             4. Inference with Normalizing Flows
+
+It is natural to consider the case in which the length of the        To allow for scalable inference using finite normalizing
+normalizing flow tends to infinity. In this case, we obtain          flows, we must specify a class of invertible transformations
+an infinitesimal flow, that is described not in terms of a fi-       that can be used and an efficient mechanism for computing
+nite sequence of transformations -- a finite flow, but as a          the determinant of the Jacobian. While it is straightforward
+                                                                     to build invertible parametric functions for use in equa-
+                                                                     tion (5), e.g., invertible neural networks (Baird et al., 2005;
+                                                                     Rippel & Adams, 2013), such approaches typically have
+                                                                     a complexity for computing the Jacobian determinant that
+                                                                     scales as O(LD3), where D is the dimension of the hidden
+                                                                     layers and L is the number of hidden layers used. Further-
+                                                                     more, computing the gradients of the Jacobian determinant
+                                                                     involves several additional operations that are also O(LD3)
+                             Variational Inference with Normalizing Flows
+
+and involve matrix inverses that can be numerically unsta-                    q0             Planar             Radial
+ble. We therefore require normalizing flows that allow for
+low-cost computation of the determinant, or where the Ja-                         K=1        K=2     K=10  K=1  K=2          K=10
+cobian is not needed at all.
+                                                               Unit Gaussian
+
+4.1. Invertible Linear-time Transformations                    Uniform
+
+We consider a family of transformations of the form:                          Figure 1. Effect of normalizing flow on two distributions.
+
+           f (z) = z + uh(w z + b),                   (10)
+
+where  = {w  IRD, u  IRD, b  IR} are free pa-
+rameters and h(·) is a smooth element-wise non-linearity,
+with derivative h (·). For this mapping we can compute
+the logdet-Jacobian term in O(D) time (using the matrix
+
+determinant lemma):
+
+           (z) = h (w z + b)w                         (11)
+
+det     f  = | det(I + u(z)  )| = |1 + u     (z)|. (12)
+
+        z
+
+                                                                                  Inference network        Generative model
+
+From (7) we conclude that the density qK(z) obtained by        Figure 2. Inference and generative models. Left: Inference net-
+transforming an arbitrary initial density q0(z) through the    work maps the observations to the parameters of the flow; Right:
+sequence of maps fk of the form (10) is implicitly given       generative model which receives the posterior samples from the
+                                                               inference network during training time. Round containers repre-
+by:                                                            sent layers of stochastic variables whereas square containers rep-
+                                                               resent deterministic layers.
+           zK = fK  fK-1  . . .  f1(z)
+                                                               4.2. Flow-Based Free Energy Bound
+                                               K
+                                                               If we parameterize the approximate posterior distribution
+  ln qK (zK ) = ln q0(z) - ln |1 + uk k(zk-1)|. (13)           with a flow of length K, q(z|x) := qK (zK ), the free en-
+                                                               ergy (3) can be written as an expectation over the initial
+                                              k=1              distribution q0(z):
+
+The flow defined by the transformation (13) modifies the
+initial density q0 by applying a series of contractions and
+expansions in the direction perpendicular to the hyperplane
+w z+b = 0, hence we refer to these maps as planar flows.
+
+As an alternative, we can consider a family of transforma-                    F (x) = Eq(z|x)[log q(z|x) - log p(x, z)]
+tions that modify an initial density q0 around a reference
+point z0. The transformation family is:                                           = Eq0(z0) [ln qK (zK ) - log p(x, zK )]
+
+f (z) = z + h(, r)(z - z0),                           (14)                        = Eq0(z0) [ln q0(z0)] - Eq0(z0) [log p(x, zK )]
+
+     f  = [1 + h(, r)]d-1 [1 + h(, r) + h (, r)r)] ,                                         K
+det z
+                                                                                  - Eq0(z0)          ln |1 + uk k(zk-1)| . (15)
+
+where r = |z - z0|, h(, r) = 1/( + r), and the param-                                        k=1
+eters of the map are  = {z0  IRD,   IR+,   IR}.
+This family also allows for linear-time computation of the     Normalizing flows and this free energy bound can be used
+determinant. It applies radial contractions and expansions     with any variational optimization scheme, including gener-
+around the reference point and are thus referred to as radial  alized variational EM. For amortized variational inference,
+flows. We show the effect of expansions and contractions       we construct an inference model using a deep neural net-
+on a uniform and Gaussian initial density using the flows      work to build a mapping from the observations x to the
+(10) and (14) in figure 1. This visualization shows that we    parameters of the initial density q0 = N (µ, ) (µ  IRD
+can transform a spherical Gaussian distribution into a bi-     and   IRD) as well as the parameters of the flow .
+modal distribution by applying two successive transforma-
+tions.                                                         4.3. Algorithm Summary and Complexity
+
+Not all functions of the form (10) or (14) will be invert-     The resulting algorithm is a simple modification of the
+ible. We discuss the conditions for invertibility and how to   amortized inference algorithm for DLGMs described by
+satisfy them in a numerically stable way in the appendix.      (Kingma & Welling, 2014; Rezende et al., 2014), which
+                                                               we summarize in algorithm 1. By using an inference net-
+Variational Inference with Normalizing Flows
+
+Algorithm 1 Variational Inf. with Normalizing Flows             tor z and h is a neural network with parameters . This
+                                                                form results in a Jacobian that has a zero upper triangu-
+   Parameters:  variational,  generative                        lar part, resulting in a determinant of 1. In order to build
+   while not converged do                                       a transformation capable of mixing all components of the
+                                                                initial random variable z0, such flows must alternate be-
+      x  {Get mini-batch}                                       tween different partitionings of zk. The resulting density
+      z0  q0(·|x)                                               using the forward and inverse transformations is given by :
+      zK  fK  fK-1  . . .  f1(z0)
+      F (x)  F (x, zK )                                                ln qK (fK  fK-1  . . .  f1(z0)) = ln q0(z0), (18)
+        -F (x)                                                             ln qK (z ) = q0(g1  g2  . . .  gK (z )). (19)
+        -F (x)
+   end while                                                    We will compare NICE to the general transformation ap-
+                                                                proach described in section 2.1. Dinh et al. (2014) assume
+work we are able to form a single computational graph           the partitioning is of the form z = [zA = z1:d, zB =
+which allows for easy computation of all the gradients          zd+1:D]. To enhance mixing of the components in the flow,
+of the parameters of the inference network and the gen-         we introduce two mechanisms for mixing the components
+erative model. The estimated gradients are used in con-         of z before separating them in the disjoint subgroups zA
+junction with preconditioned stochastic gradient-based op-      and zB. The first mechanism applies a random permutation
+timization methods such as RMSprop or AdaGrad (Duchi            (NICE-perm) and the second applies a random orthogonal
+et al., 2010), where we use parameter updates of the form:      transformation (NICE-orth)1.
+(t+1, t+1)  (t, t) + t(gt , gt), with  is a diago-
+nal preconditioning matrix that adaptively scales the gradi-    The Hamiltonian variational approximation (HVI) devel-
+ents for faster minimization.                                   oped by Salimans et al. (2015) is an instance of an in-
+                                                                finitesimal volume-preserving flow. For HVI, we consider
+The algorithmic complexity of jointly sampling and com-         posterior approximations q(z, |x) that make use of addi-
+puting the log-det-Jacobian terms of the inference model        tional auxiliary variables . The latent variables z are inde-
+scales as O(LN 2) + O(KD), where L is the number of             pendent of the auxiliary variables  and using the change
+deterministic layers used to map the data to the parame-        of variables rule, the resulting distribution is: q(z ,  ) =
+ters of the flow, N is the average hidden layer size, K is      |J|q(z)q(), where z ,  = f (z, ) using a transforma-
+the flow-length and D is the dimension of the latent vari-      tion f . Salimans et al. (2015) obtain a volume-preserving
+ables. Thus the overall algorithm is at most quadratic mak-     invertible transformation by exploiting the use of such tran-
+ing the overall approach competitive with other large-scale     sition operators in the MCMC literature, in particular the
+systems used in practice.                                       methods of Langevin and Hybrid Monte Carlo. This is an
+                                                                extremely elegant approach, since we now know that as the
+5. Alternative Flow-based Posteriors                            number of iterations of the transition function tends to in-
+                                                                finity, the distribution q(z ) will tend to the true distribu-
+Using the framework of normalizing flows, we can provide        tion p(z|x). This is an alternative way to make use of the
+a unified view of recent proposals for designing more flexi-    Hamiltonian infinitesimal flow described in section 3.2. A
+ble posterior approximations. At the outset, we distinguish     disadvantage of using the Langevin or Hamiltonian flow
+between two types of flow mechanisms that differ in how         is that they require one or more evaluations of the likeli-
+the Jacobian is handled. The work in this paper considers       hood and its gradients (depending in the number of leapfrog
+general normalizing flows and presents a method for linear-     steps) per iteration during both training and test time.
+time computation of the Jacobian. In contrast, volume-
+preserving flows design the flow such that its Jacobian-        6. Results
+determinant is equal to one while still allowing for rich pos-
+terior distributions. Both these categories allow for flows     Throughout this section we evaluate the effect of using nor-
+that may be finite or infinitesimal.                            malizing flow-based posterior approximations for inference
+                                                                in deep latent Gaussian models (DLGMs). Training was
+The Non-linear Independent Components Estimation                performed by following a Monte Carlo estimate of the gra-
+(NICE) developed by Dinh et al. (2014) is an instance of        dient of an annealed version of the free energy (20), with
+a finite volume-preserving flow. The transformations used       respect the model parameters  and the variational param-
+are neural networks f (·) with easy to compute inverses g(·)    eters  using stochastic backpropoagation. The Monte
+of the form:
+                                                                    1 Random orthogonal transformations can be generated by
+f (z) = (zA, zB + h(zA)),                            (16)       sampling a matrix with independent unit-Gaussian entries Ai,j 
+                                                                N (0, I) and then performing a QR-factorization. The resulting
+g(z ) = (zA, zB - h(zA)).                            (17)       Q-matrix will be a random orthogonal matrix (Genz, 1998).
+
+where z = (zA, zB) is an arbitrary partitioning of the vec-
+                                         Variational Inference with Normalizing Flows
+
+                                                                                   K=2                K = 8 K = 32                             K=2                           K = 8 K = 32
+
+         Table 1. Test energy functions.                               1
+
+Potential U (z)
+
+                         e z + e z -                1 +2 2
+1:  1    z -2  2             1  1-2 2    -       1  0.6                2
+    2                        2  0.6              2                     3
+          0.4    - ln
+
+2:  1  z2-w1(z) 2
+    2
+             0.4
+
+         e z z + e z z z -
+3: - ln  1        2 -w1( ) 2    -  1     2-w1( )+w2( ) 2
+         2           0.35          2               0.35
+
+         e z z + e z z z -                                             4
+4: - ln  1        2 -w1( ) 2    -  1     2-w1( )+w3( ) 2
+         2            0.4          2               0.35                   (a)
+
+                      2z1                     1     z( 1-1)  2                                  (b) Norm. Flow                                                               (c) NICE
+                                              2
+with w1(z) =   sin       4   , w2(z)  =  3e-            0.6   ,
+w3(z) = 3      z1 -1         (x) =
+                        and           1/(1 + e-x).                     3           Architecture        0.5                        Architecture                                                                                                                                               Architecture                                              Architecture
+                 0.3                                                   2                PF                                             PF                                     0.0                                                                                                                 PF                    0.0                                  PF
+                                                                                                       0.0                                                                                                                                                                                                             -0.4
+                                                                                     NICE-orth                                      NICE-orth                                -0.4                                                                                                              NICE-orth               -0.8                               NICE-orth
+                                                                                        NICE-perp     -0.5                             NICE-perp                                                                                                                                                  NICE-perp            -1.2                                  NICE-perp
+                                                                                        RF                                             RF                                                                                                                                                         RF                                                         RF
+                                                                       Variational Bound (nats)                                                                              -0.8
+Carlo estimate is computed using a single sample of the                                                                               Variational Bound (nats)1                                                                                                                                                                     
+latent variables per data-point per parameter update.                                                                                                                                                 Variational Bound (nats)
+                                                                                                                                                                                                                                                                     Variational Bound (nats)
+
+                                                                                                      -1.0                                                                                                                                                                                                                                                              
+                                                                                                                                                                           
+                                                                       0                            
+
+A simple annealed version of the free energy is used since                     10  20           30                            10  20           30                                                    10                                                                                      20  30                                 10  20           30
+this was found to provide better results. The modified
+bound is:                                                                          Flow length                                    Flow length                                                            Flow length                                                                                                                    Flow length
+
+                                                                                       (d) Comparison of KL-divergences.
+
+zK = fK  fK-1  . . .  f1(z)                                            Figure 3. Approximating four non-Gaussian 2D distributions.
+                                                                       The images represent densities for each energy function in table
+F t (x) = Eq0(z0) ln pK (zK ) - log p(x, zK )                          1 in the range (-4, 4)2. (a) True posterior; (b) Approx poste-
+                                                                       rior using the normalizing flow (13); (c) Approx posterior using
+       = Eq0(z0) [ln q0(z0)] - tEq0(z0) [log p(x, zK )]                NICE (19); (d) Summary results comparing KL-divergences be-
+                                                                       tween the true and approximated densities for the first 3 cases.
+                      K
+                                                                       which show distributions that have characteristics such as
+       - Eq0(z0)         ln |1 + uTk k(zk-1)|                    (20)  multi-modality and periodicity that cannot be captured with
+                                                                       typically-used posterior approximations.
+                   k=1
+                                                                       Figure 3(b) shows the performance of normalizing flow
+where t  [0, 1] is an inverse temperature that follows a               approximations for these densities using flow lengths of
+schedule t = min(1, 0.01 + t/10000), going from 0.01 to                2, 8 and 32 transformations. The non-linearity h(z) =
+                                                                       tanh(z) in equation (10) was used for the mapping and
+1 after 10000 iterations.                                              the initial distribution was a diagonal Gaussian, q0(z) =
+                                                                       N (z|µ, 2I). We see a substantial improvement in the ap-
+The deep neural networks that form the conditional prob-               proximation quality as we increase the flow length. Fig-
+ability between random variables consist of determinis-                ure 3(c) shows the same approximation using the volume-
+tic layers with 400 hidden units using the Maxout non-                 preserving transformation used in NICE (Dinh et al., 2014)
+linearity on windows of 4 variables (Goodfellow et al.,                for the same number of transformations. We show sum-
+2013) . Briefly, the Maxout non-linearity with window-                 mary statistics for the planar flow (13), and NICE (18) for
+size  takes an input vector x  IRd and computes:                       random orthogonal matrices and with random permutation
+Maxout(x)k = maxi{k,(k+1)} xi for k = 0 . . . d/.                      matrices in 3(d). We found that NICE and the planar flow
+                                                                       (13) may achieve the same asymptotic performance as we
+We use mini-batches of 100 data points and RMSprop                     grow the flow-length, but the planar flow (13) requires far
+optimization (with learning rate = 1 × 10-5 and                        fewer parameters. Presumably because all parameters of
+momentum = 0.9) (Kingma & Welling, 2014; Rezende                       the flow (13) are learned, in contrast to NICE which re-
+et al., 2014). Results were collected after 500, 000 parame-           quires an extra mechanism for mixing the components that
+ter updates. Each experiment was repeated 100 times with               is not learned but randomly initialized. We did not observe
+different random seeds and we report the averaged scores               a substantial difference between using random orthogonal
+and standard errors. The true marginal likelihood is esti-             matrices or random permutation matrices in NICE.
+mated by importance sampling using 200 samples from the
+inference network as in (Rezende et al., 2014, App. E).
+
+6.1. Representative Power of Normalizing Flows                         6.2. MNIST and CIFAR-10 Images
+
+To provide an insight into the representative power of den-            The MNIST digit dataset (LeCun & Cortes, 1998) contains
+sity approximations based on normalizing flows, we pa-                 60,000 training and 10,000 test images of ten handwritten
+rameterize a set of unnormalized 2D densities p(z) 
+exp[-U (z)] which are listed in table 1.
+
+In figure 3(a) we show the true distribution for four cases,
+                                                                           Variational Inference with Normalizing Flows
+
+97           Architecture                                Architecture                                                                                          Architecture        Table 3. Test set performance on the CIFAR-10 data.
+                  NF          7                                                                                                                                     NF                            K = 0 K = 2 K = 5 K = 10
+                                                                                                                                            90
+              q NICE-perm                                      NF                                                                                               q NICE-perm        - ln p(x) -293.7 -308.6 -317.9 -320.7
+Variational Bound (nats)                                                                                                                    89
+95                                                        KL(q;truth) (nats)qq NICE-perm                                                                 q
+
+                                                                                                                    -log-likelihood (nats)q
+
+          q                   6        q                                                                                                    88              q
+
+93           q             q               q                                                                                                                   q             q
+                                                                    q
+
+                                                                                                                                            87
+
+91                            5                                                                                                             86
+
+    0     20 40 60 80            0     20  40           60             80                                                                   85              20 40 60 80         but with 30 latent variables. Since this data is non-binary,
+                                                                                                                                                  0           Flow length
+                                                                                                                                                                                we use a logit-normal observation likelihood, p(x|µ, ) =
+             Flow length                   Flow length
+
+(a) Bound F(x)                (b) IDKL(q; p(z|x))                                                                                               (c) - ln p(x)                   i  N (logxiti((x1i-)|xµi)i,i) ,  where  logit(x)  =  log    x  .  We  sum-
+                                                                                                                                                                                                                                          1-x
+
+                                                                                                                                                                                marize the results in table 3 where we are again able to
+
+             Figure 4. Effect of the flow-length on MNIST.                                                                                                                      show that an increase in the flow length K systematically
+
+                                                                                                                                                                                improves the test log-likelihoods, resulting in better poste-
+
+Table 2. Comparison of negative log-probabilities on the test set                                                                                                               rior approximations.
+
+for the binarised MNIST data.                                                                                                                   - ln p(x)                       7. Conclusion and Discussion
+         Model
+
+          DLGM diagonal covariance                                                                                                               89.9                           In this work we developed a simple approach for learn-
+          DLGM+NF (k = 10)                                                                                                                       87.5                           ing highly non-Gaussian posterior densities by learning
+          DLGM+NF (k = 20)                                                                                                                       86.5                           transformations of simple densities to more complex ones
+          DLGM+NF (k = 40)                                                                                                                       85.7                           through a normalizing flow. When combined with an amor-
+          DLGM+NF (k = 80)                                                                                                                       85.1                           tized approach for variational inference using inference
+          DLGM+NICE (k = 10)                                                                                                                     88.6                           networks and efficient Monte Carlo gradient estimation, we
+          DLGM+NICE (k = 20)                                                                                                                     87.9                           are able to show clear improvements over simple approxi-
+          DLGM+NICE (k = 40)                                                                                                                     87.3                           mations on different problems. Using this view of normal-
+          DLGM+NICE (k = 80)                                                                                                                     87.2                           izing flows, we are able to provide a unified perspective of
+                                                                                                                                                                                other closely related methods for flexible posterior estima-
+                Results below from (Salimans et al., 2015)                                                                                           88.08                      tion that points to a wide spectrum of approaches for de-
+                                                                                                                                                     86.40                      signing more powerful posterior approximations with dif-
+          DLGM + HVI (1 leapfrog step)                                                                                                               85.51                      ferent statistical and computational tradeoffs.
+          DLGM + HVI (4 leapfrog steps)
+          DLGM + HVI (8 leapfrog steps)                                                                                                                                         An important conclusion from the discussion in section 3
+                                                                                                                                                                                is that there exist classes of normalizing flows that allow us
+                  Results below from (Gregor et al., 2014)                                                                                           84.71                      to create extremely rich posterior approximations for vari-
+                                                                                                                                                     84.13                      ational inference. With normalizing flows, we are able to
+          DARN nh = 500                                                                                                                                                         show that in the asymptotic regime, the space of solutions
+          DARN nh = 500, adaNoise                                                                                                                                               is rich enough to contain the true posterior distribution. If
+                                                                                                                                                                                we combine this with the local convergence and consis-
+digits (0 to 9) that are 28 × 28 pixels in size. We used the                                                                                                                    tency results for maximum likelihood parameter estimation
+binarized dataset as in (Uria et al., 2014). We trained differ-                                                                                                                 in certain classes of latent variables models (Wang & Tit-
+ent DLGMs with 40 latent variables for 500, 000 parameter                                                                                                                       terington, 2004), we see that we are now able overcome the
+updates.                                                                                                                                                                        objections to using variational inference as a competitive
+                                                                                                                                                                                and default approach for statistical inference. Making such
+The performance of a DLGM using the (planar) nor-                                                                                                                               statements rigorous is an important line of future research.
+malizing flow (DLGM+NF) approximation is com-
+pared to the volume-preserving approaches using NICE                                                                                                                            Normalizing flows allow us to control the complexity of the
+(DLGM+NICE) on exactly the same model for different                                                                                                                             posterior at run-time by simply increasing the flow length
+flow-lengths K, and we summarize the performance in fig-                                                                                                                        of the sequence. The approach we presented considered
+ure 4. This graph shows that an increase in the flow-length                                                                                                                     normalizing flows based on simple transformations of the
+systematically improves the bound F, as shown in figure                                                                                                                         form (10) and (14). These are just two of the many maps
+4(a), and reduces the KL-divergence between the approx-                                                                                                                         that can be used, and alternative transforms can be designed
+imate posterior q(z|x) and the true posterior distribution                                                                                                                      for posterior approximations that may require other con-
+p(z|x) (figure 4(b)). It also shows that the approach us-                                                                                                                       straints, e.g., a restricted support. An important avenue of
+ing general normalizing flows outperforms that of NICE.                                                                                                                         future research lies in describing the classes of transforma-
+We also show a wider comparison in table 2. Results are                                                                                                                         tions that allow for different characteristics of the posterior
+included for the Hamiltonian variational approach as well,                                                                                                                      and that still allow for efficient, linear-time computation.
+but the model specification is different and thus gives an
+indication of attainable performance for this approach on                                                                                                                       Ackowledgements: We thank Charles Blundell, Theo-
+this data set.                                                                                                                                                                  phane Weber and Daan Wierstra for helpful discussions.
+
+The CIFAR-10 natural images dataset (Krizhevsky & Hin-
+ton, 2010) consists of 50,000 training and 10,000 test RGB
+images that are of size 3x32x32 pixels from which we ex-
+tract 3x8x8 random patches. The color levels were con-
+verted to the range [ , 1 - ] with = 0.0001. Here we
+used similar DLGMs as used for the MNIST experiment,
+Variational Inference with Normalizing Flows
+
+References                                                       networks on CIFAR-10. Unpublished manuscript, 2010.
+
+Ahn, S., Korattikara, A., and Welling, M. Bayesian poste-     LeCun, Y. and Cortes, C. The MNIST database of hand-
+   rior sampling via stochastic gradient Fisher scoring. In      written digits, 1998.
+   ICML, 2012.
+                                                              Mnih, A. and Gregor, K. Neural variational inference and
+Baird, L., Smalenberger, D., and Ingkiriwang, S. One-step        learning in belief networks. In ICML, 2014.
+   neural network inversion with PDF learning and emula-
+   tion. In IJCNN, volume 2, pp. 966­971. IEEE, 2005.         Neal, R. M. MCMC using hamiltonian dynamics. Hand-
+                                                                 book of Markov Chain Monte Carlo, 2011.
+Bishop, C. M. Pattern recognition and machine learning.
+   springer New York, 2006.                                   Papaspiliopoulos, O., Roberts, G. O., and Sko¨ld, M. Non-
+                                                                 centered parameterisations for hierarchical models and
+Challis, E. and Barber, D. Affine independent variational        data augmentation. In Bayesian Statistics 7, 2003.
+   inference. In NIPS, 2012.
+                                                              Ranganath, R., Gerrish, S., and Blei, D. M. Black box
+Dayan, P. Helmholtz machines and wake-sleep learning.            variational inference. In AISTATS, 2013.
+   Handbook of Brain Theory and Neural Network. MIT
+   Press, Cambridge, MA, 44(0), 2000.                         Rezende, D. J., Mohamed, S., and Wierstra, D. Stochas-
+                                                                 tic backpropagation and approximate inference in deep
+Dinh, L., Krueger, D., and Bengio, Y. NICE: Non-linear           generative models. In ICML, 2014.
+   independent components estimation. arXiv preprint
+   arXiv:1410.8516, 2014.                                     Rippel, O. and Adams, R. P. High-dimensional probability
+                                                                 estimation with deep density models. arXiv:1302.5125,
+Duchi, J., Hazan, E., and Singer, Y. Adaptive subgradient        2013.
+   methods for online learning and stochastic optimization.
+   JMLR, 12:2121­2159, 2010.                                  Salimans, T., Kingma, D. P., and Welling, M. Markov chain
+                                                                 Monte Carlo and variational inference: Bridging the gap.
+Genz, A. Methods for generating random orthogonal ma-            In ICML, 2015.
+   trices. Monte Carlo and Quasi-Monte Carlo Methods,
+   1998.                                                      Suykens, J. A. K., Verrelst, H., and Vandewalle, J. On-
+                                                                 line learning Fokker-Planck machine. Neural processing
+Gershman, S., Hoffman, M., and Blei, D. Nonparametric            letters, 7(2):81­89, 1998.
+   variational inference. In ICML, 2012.
+                                                              Tabak, E. G. and Turner, C. V. A family of nonparametric
+Gershman, S. J. and Goodman, N. D. Amortized inference           density estimation algorithms. Communications on Pure
+   in probabilistic reasoning. In Annual Conference of the       and Applied Mathematics, 66(2):145­164, 2013.
+   Cognitive Science Society, 2014.
+                                                              Tabak, E. G and Vanden-Eijnden, E. Density estimation
+Goodfellow, I. J., Warde-Farley, D., Mirza, M., Courville,       by dual ascent of the log-likelihood. Communications in
+   A., and Bengio, Y. Maxout networks. ICML, 2013.               Mathematical Sciences, 8(1):217­233, 2010.
+
+Gregor, K., Danihelka, I., Mnih, A., Blundell, C., and Wier-  Titsias, M. and Lazaro-Gredilla, M. Doubly stochastic vari-
+   stra, D. Deep autoregressive networks. In ICML, 2014.         ational Bayes for non-conjugate inference. In ICML,
+                                                                 2014.
+Gregor, Karol, Danihelka, Ivo, Graves, Alex,
+   Jimenez Rezende, Danilo, and Wierstra, Daan. Draw:         Turner, R. E. and Sahani, M. Two problems with vari-
+   A recurrent neural network for image generation. In           ational expectation maximisation for time-series mod-
+   ICML, 2015.                                                   els. In Barber, D., Cemgil, T., and Chiappa, S. (eds.),
+                                                                 Bayesian Time series models, chapter 5, pp. 109­130.
+Hoffman, M. D., Blei, D. M, Wang, C., and Paisley, J.            Cambridge University Press, 2011.
+   Stochastic variational inference. JMLR, 14(1):1303­
+   1347, 2013.                                                Uria, B., Murray, I., and Larochelle, H. A deep and
+                                                                 tractable density estimator. In ICML, 2014.
+Jaakkola, T. S. and Jordan, M. I. Improving the mean field
+   approximation via the use of mixture distributions. In     Wang, B. and Titterington, D. M. Convergence and asymp-
+   Learning in graphical models, pp. 163­173. 1998.              totic normality of variational Bayesian approximations
+                                                                 for exponential family models with missing values. In
+Jordan, M. I., Ghahramani, Z., Jaakkola, T. S., and Saul,        UAI, 2004.
+   L. K. An introduction to variational methods for graphi-
+   cal models. Machine learning, 37(2):183­233, 1999.         Welling, M. and Teh, Y. W. Bayesian learning via stochas-
+                                                                 tic gradient Langevin dynamics. In ICML, 2011.
+Kingma, D. P. and Welling, M. Auto-encoding variational
+   Bayes. In ICLR, 2014.                                      Williams, Ronald J. Simple statistical gradient-following
+                                                                 algorithms for connectionist reinforcement learning.
+Kingma, D. P., Mohamed, S., Rezende, D. J., and Welling,         Machine learning, 8(3-4):229­256, 1992.
+   M. Semi-supervised learning with deep generative mod-
+   els. In NIPS, pp. 3581­3589, 2014.                         Wingate, D. and Weber, T. Automated variational infer-
+                                                                 ence in probabilistic programming. In NIPS Workshop
+Krizhevsky, A. and Hinton, G. Convolutional deep belief          on Probabilistic Programming, 2013.
+                                                     Variational Inference with Normalizing Flows
+
+A. Invertibility conditions                                                          To obtain a scalar equation for the norm r, we can subtract
+                                                                                     both sides of (24) and take the norm of both sides. This
+We describe the constraints required to have invertible                              gives
+maps for the planar and radial normalizing flows described
+in section 3.                                                                                        |y - z0| = r            .  (26)
+                                                                                                                   1+ +r
+
+A.1. Planar flows
+
+Functions of the form (10) are not always invertible de-                             A sufficient condition for (26) to be invertible is for its r.h.s.
+pending on the non-linearity and parameters chosen. When
+using h(x) = tanh(x), a sufficient condition for f (z) to be                         r  1  +         to be a non-decreasing function, which im-
+invertible is that w u  -1.                                                                   +r
+
+                                                                                     plies        -  (r+)2  .  Since r    0, it suffices to impose
+                                                                                                         
+                                                                                       -. This constraint is imposed by reparametrizing 
+                                                                                     as ^ = - + m(), where m(x) = log(1 + ex).
+This can be seen by splitting z as a sum of a vector z per-
+pendicular to w and a vector z , parallel to w. Substituting
+z = z + z into (10) gives
+
+                f (z) = z + z + uh(w z + b).                               (21)
+
+This equation can be solved for z given z and y = f (z),
+having a unique solution
+
+                   z = y - z - uh(w z + b).                                (22)
+
+The parallel component can be further expanded as z =
+    w
+  ||w||2  ,  where          IR.  The      equation   that      must    be  solved
+
+for  is derived by taking the dot product of (21) with w,
+
+yielding the scalar equation
+
+                   wT f (z) =  + wT uh( + b).                              (23)
+
+A sufficient condition for (23) to be invertible w.r.t  is that
+
+its r.h.s  + wT uh( + b) to be a non-decreasing function.
+
+This corresponds to the condition 1+wT uh (+b)  0 
+
+wT  u        -  h    1   .  Since   0     h  (    +  b)        1,  it  suffices  to
+                   (+b)
+
+have wT u  -1.
+
+We enforce this constraint by taking an arbitrary vec-
+
+tor u and modifying its component parallel to w, pro-
+
+ducing a new vector u^ such that w u^ > -1. The
+
+modified vector can be compactly written as u^(w, u) =
+                                      w
+u+  m(w         u) - (w     u)      ||w||2   ,  where  the     scalar  function
+
+m(x) is given by m(x) = -1 + log(1 + ex).
+
+A.2. Radial flows
+
+Functions of the form (14) are not always invertible de-
+pending on the values of  and . This can be seen by
+splitting the vector z as z = z0 + rz^, where r = |z - z0|.
+Replacing this into (14) gives
+
+                    f  (z)  =  z0   +  rz^   +      rz^  r  .              (24)
+                                                  +
+
+This equation can be uniquely solved for z^ given r and y =
+f (z),
+
+                            z^ = y - z0 .                                  (25)
+                                               
+                                 r     1  +  +r
+

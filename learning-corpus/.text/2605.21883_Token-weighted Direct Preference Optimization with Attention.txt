@@ -1,0 +1,1297 @@
+                                        Token-weighted Direct Preference Optimization with Attention
+
+                                          Chengyu Huang1 Zhuohang Li2 Sheng-Yen Chou1 Claire Cardie1
+                                                               1Cornell University 2Vanderbilt University
+
+                                            {ch2263,sc3379,ctc9}@cornell.edu, zhuohang.li@vanderbilt.edu
+
+                                                              Abstract                            (; )
+
+                                             Direct Preference Optimization (DPO) aligns          = - ,, ~       (|)  -      ( | )
+                                             Large Language Models with human prefer-                           (|)         ( | )
+arXiv:2605.21883v2 [cs.CL] 26 May 2026       ences without the need for a separate reward
+                                             model. However, DPO treats all tokens in re-         (; )
+                                             sponses equally, neglecting the differing impor-
+                                             tance of individual tokens. Existing token-level     = - ,, ~    ||  ||     ( |)  -  | |  ||          (|)
+                                             PO methods compute the token weights us-                                   ( |)                       ( | )
+                                             ing either token-position-based heuristic func-                                           
+                                             tions or probability estimates given by a sep-
+                                             arately trained model, which lacks robustness                        =1                   =1
+                                             and incurs extra training cost. In contrast, we
+                                             propose Token-weighted DPO (TwDPO)--a                          Results with  =LLaMA-3-8B-Instruct
+                                             novel training objective grounded on token-
+                                             weighted RL--and AttentionPO--an instanti-           Figure 1: AttentionPO weighs each token by attention,
+                                             ation of TwDPO that uses attention from the          surpassing DPO and various other baselines.
+                                             LLM itself to estimate token weights. Atten-
+                                             tionPO prompts the LLM to serve as a pair-           Optimization (DPO) (Rafailov et al., 2023) have
+                                             wise judge and check where the model at-             emerged. DPO's training objective is derived from
+                                             tends when comparing the responses. This             the policy gradient, but it learns the reward land-
+                                             design makes AttentionPO content-aware, ad-          scape directly from preference pairs, avoiding the
+                                             justing weights based on response content,           need for an external reward model.
+                                             and efficient, incurring only two extra forward
+                                             passes per example. Experiment results show             Despite the advancements introduced by DPO
+                                             that AttentionPO significantly improves perfor-      and its variants--including IPO (Azar et al., 2024),
+                                             mance on AlpacaEval, MT-Bench, and Arena-            KTO (Ethayarajh et al., 2024), and SimPO (Meng
+                                             Hard, surpassing existing Preference Optimiza-       et al., 2024)--these methods generally treat every
+                                             tion methods. GitHub: https://github.com/            token within a response as equally important (Meng
+                                             HCY123902/AttentionPO                                et al., 2024). This uniform weighting neglects the
+                                                                                                  fact that different tokens contribute variably to the
+                                        1 Introduction                                            overall quality of a response (Meng et al., 2024).
+                                                                                                  Consequently, traditional PO methods fail to pro-
+                                        The alignment of Large Language Models (LLMs)             vide the fine-grained credit assignment necessary
+                                        with human preferences and values is critical for         to account for the specific importance of individual
+                                        ensuring the quality and safety of generated out-         tokens to human preference.
+                                        puts. Early efforts in this domain utilized policy-
+                                        gradient reinforcement learning (RL) algorithms              Recent research has attempted to enable token-
+                                        like Proximal Policy Optimization (PPO) (Schul-           level credit assignment through various estimation
+                                        man et al., 2017; Ouyang et al., 2022). However,          techniques. Grounded in token-level policy gra-
+                                        these traditional RL methods require training a sep-      dient methods, TDPO adds sequence KL terms
+                                        arate reward model on annotated preference pairs          to the DPO objective (Zeng et al., 2024). Other
+                                        to provide feedback during training (Ouyang et al.,       approaches, such as TIS-DPO (Liu et al., 2025),
+                                        2022). To address this complexity, Preference Op-         SePO (Yang et al., 2025), and cDPO (Lin et al.,
+                                        timization (PO) methods such as Direct Preference         2024), estimate token importance by contrasting
+                                                                                                  probabilities between different policies or models.
+
+                                                                                               1
+Alternatively, TI-DPO utilizes gradient norms and          (§ 2.6); (3) We apply TwDPO using the attention
+Gaussian priors (Yang et al., 2026), while D2PO            weight distribution. See Figure 2 for visualization.
+employs heuristic temporal decay functions that pri-
+oritize earlier tokens (Shao et al., 2025). However,       2.1 Notations
+many of these methods either require the training of       We initialize our main policy  with a reference
+additional models to estimate weights (Yang et al.,        model ref . We train  on a preference dataset
+2025; Liu et al., 2025; Lin et al., 2024) or rely on       D = {x(i), yw(i), yl(i)}Ni=1, where each example con-
+heuristic functions based on token positions rather        tains a prompt x(i), a preferred response yw(i) and
+than the specific semantic content of the tokens           a dispreferred response yl(i). Each response y con-
+(Yang et al., 2026; Shao et al., 2025).                    sists of tokens {y1, · · · , y|y|}.
+
+   In this work, we propose Token-weighted DPO             2.2 Preliminaries
+(TwDPO), a training objective that is theoretically-
+grounded on token-weighted RL, and Atten-                  Direct Preference Optimization is an offline vari-
+tionPO, an instantiation of TwDPO that utilizes            ant of traditional policy gradient methods to align
+the attentions from the LLM itself to estimate to-         LLMs with human preferences. It avoids the need
+ken weights. By obtaining attention weights for            for a separate reward model. Instead, it trains
+response tokens from a pairwise judge prompt, At-          LLMs as reward models themselves, on the an-
+tentionPO provides a content-aware importance              notated preference pairs. In particular, DPO maxi-
+metric. These weights are then normalized and ap-          mizes the model's predicted probability of yw being
+plied during the credit assignment process to better       preferred over yl. Formally, given the preference
+align the model with human preferences.                    dataset D, DPO trains  using the following ob-
+                                                           jective:
+   Experimental results demonstrate the effec-
+tiveness of our proposed approach. Atten-                    L = -E(x,yw,yl)D log p(yw  yl|x) . (1)
+tionPO achieves significant performance improve-
+ments across several models and standard bench-            where p(yw  yl|x) is the model's predicted pref-
+marks. On LLaMA-3-8B-Base-SFT (Grattafiori                 erence probability. Following the Bradley-Terry
+et al., 2024; Meng et al., 2024), AttentionPO im-          model (Bradley and Terry, 1952),
+proves performance by 12% (win rate against GPT-
+4-1106-preview (Hurst et al., 2023)) on AlpacaEval           p (yw    yl|x)     =            exp(r(x, yw))              (2)
+(Li et al., 2023; Dubois et al., 2024), 1.05 (LLM-                                 exp(r(x, yw)) + exp(r(x, yl))
+judged score) on MT-Bench (Zheng et al., 2023),
+and 40% (win rate against GPT-4-0314) on Are-                                   = (r(x, yw) - r(x, yl)).
+naHard (Li et al., 2024, 2025). On LLaMA-3-8B-
+Insturct, AttentionPO improves performance by              where r(x, yw) is model's predicted reward and
+27% on AlpacaEval, 1.41 on MT-Bench, and 14%                is the sigmoid function. Further, DPO derives
+on ArenaHard. AttentionPO also surpasses strong
+baselines such as SimPO (up to 4% on AlpacaEval;           the model's predicted reward to be r(x, y) =
+0.20 on MT-Bench). AttentionPO highlights the
+value of using intrinsic model attentions for precise,       log    (y|x)    +   log (Z (x)),  where  Z (x)     is  a  par-
+token-level preference optimization.                              ref (y|x)
+
+2 Methodology                                              tition function depending only on x. Thus, the final
+
+We first introduce the notations (§ 2.1) and prelimi-      DPO objective is to minimize
+naries (§ 2.2), then present our TwDPO objective
+(§ 2.3) and its math derivations (§ 2.4). Finally,                L = -E(x,yw,yl)D  log      log (yw|x) -
+we discuss an instantiation of the TwDPO, Atten-                                                   ref (yw|x)
+tionPO, which uses attentions as weights. Atten-                                                                        (3)
+tionPO takes three steps: (1) First, we prompt the                                       log (yl|x) .
+initial LLM to act as a pairwise judge to extract the                                               ref (yl|x)
+attention weights (§ 2.5); (2) We post-process the
+attention weights to obtain a weight distribution          Equation 3 can be rewritten into the token-level
+                                                           form:
+
+                                                           L = -E(x,yw,yl)D log       |yw |          (ywt |x, yw<t)     -
+                                                                                                    ref (ywt |x, yw<t)
+                                                                                           log
+
+                                                                                      t=1
+
+                                                                                      |yl |    log   (ylt|x, yl<t)      .
+                                                                                      t=1           ref (ylt|x, yl<t)
+
+                                                                                                                        (4)
+
+                                                        2
+ Pairwise Judge Prompt (A=, B= )                                                                               (1) Attention Weights       (2) Post Processing                (3) Token-weighted
+P... jaobiYriswoutoiwseeivllaJlbuueadgtegivweehnPicarhnosawmnesrwpAetra(inAsdb=aenttsewr...,erBB=. You)r             Extraction                                                     Training
+                                                                                                                                                Normalize;
+...QYueosutiwonil:lWbehgativisenthaencswapeirtaAl oafnCd aannasdwae?r B. Your                                                              Fix Attention Sink;
+job is to evaluate which answer is better ...
+QAuensstwioenr:AW: hat is the capital of Canada?                                                                                                                          = - ,, ~  
+
+Answer A: The capital is Ottawa .                                                                               0.1                        0.6                       |   |    ||       (|, < )
+ Answer B:                                                                                                                                 0.4                                        ( |, < )
+                                                                                                               0.05                        0.2                                
+Answer B: I think it is Toronto .
+                                                                                                                  0                          0                                =1
+
+                                                                                                               0.1                         0.6                                        -
+
+                                                                                                               0.05                        0.4                                ||
+
+                                                                                                                                           0.2                           | |           (|, < )
+                                                                                                                                                                                      (|, < )
+                                                                                                               0                           0                                  =1
+
+                                                                                                                                                                                      
+
+                                         A
+                                          
+
+Figure 2: Workflow of AttentionPO. First, we prompt ref to act as a pairwise judge and indicate which response
+is better in a single output token yverdict. We extract ref 's attentions at layer L that attend from yverdict to the
+response tokens of both yw and yl. Prompting and weight extraction are repeated two times with the position of
+yw and yl swapped, and the final attention weights Aw and Al are averaged over the two rounds. Second, we
+post-process the weights by applying normalization and fixing the attention sink. Finally, we apply TwDPO with the
+
+post-processed attention weights.
+
+Note that DPO assigns an equal weight of 1 to all                                                                                   maximizes response reward with KL constraints:
+
+the    (yt |x,y<t )  terms.  This        does                                                             not  consider  the          max              [r(x,    y)]  -     DKL(      (y|x)||ref  (y|x))
+     ref (yt|x,y<t)                                                                                                                      
+                                                                                                                                           ExD,y(·|x)
+varying degrees of importance of different tokens
+
+to the final response quality.                                                                                                        = max ExD,y(·|x)          r(x, y)  -      |y|   (yt|x, y<t)     .
+                                                                                                                                                                                t=1  ref (yt|x, y<t)
+
+2.3 Token-weighted DPO                                                                                                                                                                            (6)
+
+Instead, our objective multiplies each probability                                                                                     Instead, we show that our objective 5 gives a
+ratio term in Equation 4 with a token weight at:                                                                                    model equivalent to the near-optimal policy pro-
+                                                                                                                                    duced by a token-weighted RL objective. We start
+L = -ED  log          |yw |  |yw |  awt  log   (ywt |x, yw<t)                                                                       by reformulating objective 6. For a given prompt
+                             t=1              ref (ywt |x, yw<t)                                                                    x, a policy , and a reference model ref , our ob-
+                                                                                                                                    jective is to find an optimal policy that maximizes
+                     |yl |                                                                                                  (5)     the reward under a token-weighted KL penalty. As
+                     t=1                                                                                                            we will show in § 2.4.3, this objective naturally in-
+           -|yl|             altlog       (ylt|x, yl<t)                                                              .              duces a token-weighted reward function r. Our KL
+                                         ref (ylt|x, yl<t)                                                                          penalty weighs the log-probability ratios at each
+                                                                                                                                    token step t by the weight at:
+2.4 Mathematical Derivation
+                                                                                                                                                max ExD,y(·|x) r(x, y)-
+We closely follow the proof of Rafailov et al. (2023)                                                                                              
+to derive the token-weighted DPO objective from
+a token-weighted RL objective. First, we find the                                                                                                      |y|                (yt|x, y<t)             (7)
+closed-form expression of the near-optimal policy                                                                                                      t=1               ref (yt|x, y<t)
+ and reward function r attained by the token-                                                                                                   |y|             at  log                   .
+weighted RL objective (§ 2.4.1). Next, we derive
+the token-weighted DPO objective (§ 2.4.2).                                                                                         Note that at is a proper distribution and sums up
+
+2.4.1 Deriving the Near Optimum of the                                                                                              to 1. In light of this, we scale the KL term by the
+        Token-weighted Objective
+                                                                                                                                    sequence length |y| so that the total weight of the
+DPO (Rafailov et al., 2023) derives the equiva-
+lence between their optimal policy and the one                                                                                      logprob ratio terms |y|              |y|  at  equals  |y|,  which
+attained by a sequence-level RL objective, which                                                                                                                         t=1
+
+                                                                                                                                    is consistent with the DPO objective 6.
+
+                                                                                                                                      To solve this mathematically, we define a
+
+                                                                                                                                    sequence-level "weighted" log-probability for both
+
+                                                                                                                                 3
+the policy and the reference model:                                                 Crucially, the partition function terms  log Z(x)
+                                                                                    cancel out, leaving:
+                                     |y|
+                                                                                    p(yw  yl|x) =           |yw |  awt        (ywt |x, yw<t)
+     log ~(y|x) = |y| at log (yt|x, y<t),                                                                   t=1              ref (ywt |x, yw<t)
+
+                               t=1                                         (8)                       |yw |              log
+
+                                    |y|
+
+   log ~ref (y|x) = |y| at log ref (yt|x, y<t).                                                     |yl |   atl          (ylt|x, yl<t)
+                                                                                                    t=1                 ref (ylt|x, yl<t)
+                               t=1                                                  -|yl|                          log                     .
+
+Substituting these into our objective, we can follow                                                                                       (12)
+the standard derivation steps:
+                                                                                    To frame this as a maximum likelihood objective
+                                                     ~(y|x)                         for training a parameterized policy , we take the
+max ExD Ey(·|x)           r(x, y) -  log                                            negative log-likelihood over the preference dataset
+                                             ~ref (y|x)                             D. This leads to our final objective in Equation 5.
+
+                                         ~(y|x) 1
+= min ExDEy(·|x)          log                        - r(x, y)
+                                         ~ref (y|x) 
+                                                                                    2.4.3 Properties
+= min ExDEy(·|x)          log                        ~(y|x)
+                                                                                    Reward function is token-weighted. Equa-
+                                           1   ~ref  (y|x)  exp(  1  r(x,  y))      tion 10 shows that r weighs tokens by at. For
+                                         Z(x)                                       tokens with higher at, their logprob ratio between
+                                                                                    (yt|x, y<t) and ref (yt|x, y<t) significantly af-
+                     - log Z(x) ,                                                   fect r, while tokens with lower at affect r less.
+
+where Z(x) =         y   ~ref       (y|x)      exp(  1  r(x,     y))  is   the
+                                                     
+
+partition function.                                                                 Token-weighted KL penalty enables locally-
+                                                                                    adaptive trust region. Our KL penalty in objec-
+The near optimal weighted policy ~ (we an-                                          tive 7 scales the KL divergence at the token level
+                                                                                    via at. Consequently, the model is granted greater
+alyze the error bounds between ~ and the in-                                        freedom to deviate from the reference policy on
+                                                                                    low-importance tokens, while being strictly con-
+tractable true optimal policy in Appendix B) that                                   strained on high-importance ones. While restrict-
+                                                                                    ing the most critical tokens may seem counterintu-
+minimizes this expression satisfies:                                                itive, this adaptive weighting is essential because
+                                                                                    important tokens dominate the implicitly derived
+~(y|x)   =    1                                         1                  .        reward function, and thus are highly susceptible to
+            Z(x) ~ref (y|x) exp                           r(x, y)                   reward hacking and over-optimization. The token-
+                                                                                    weighted KL term acts as a locally adaptive regula-
+                                                                                    tor: for high-weight tokens, the massive incentives
+                                                                                    to deviate are safely balanced by proportionally
+                                                                           (9)      stricter penalties, ensuring the model only updates
+                                                                                    when the expected reward justifies the risk.
+By taking the logarithm of both sides and rear-
+                                                                                       The above suggests that objective 7 is indeed a
+ranging the terms, we can express the true reward                                   token-weighted RL objective in terms of both the
+r(x, y) entirely in terms of the optimal policy:                                    reward function and KL penalty. Consequently,
+                                                                                    both its derived policy and the near-optimal policy
+r(x, y) =  log ~(y|x) +  log Z(x). (10)                                             derived from objective 5 learn more signals from
+                    ~ref (y|x)                                                      important tokens, which is what we desire. We
+                                                                                    further provide an analysis on the gradient in Ap-
+Substituting the expanded definition of our                                         pendix C. While we use attention as the weights,
+weighted log-probabilities back into this reward                                    there are no assumptions about how the weights
+expression yields:                                                                  are derived, and AttentionPO is only one possible
+                                                                                    instantiation.
+                               |y|  (yt|x, y<t)             +  log Z(x).
+
+r(x, y) = |y| at log                ref (yt|x, y<t)
+
+                t=1
+
+                                                                           (11)
+
+2.4.2 Deriving the Objective Under the
+         Bradley-Terry Model
+
+We substitute our token-weighted reparameteriza-
+tion of r(x, y) into the Bradley-Terry preference
+model (Equation 2):
+
+p(yw  yl|x) = (r(x, yw) - r(x, yl))
+
+                                                                              
+                  |yw |
+=                         log        (ywt |x, yw<t)         +     log Z(x)          2.5 Token Weights Extraction Through
+   |yw| awt                         ref (ywt |x, yw<t)                                    Attention Scores
+
+                   t=1                                                              We hypothesize that if we ask the LLM to judge the
+                                                                                    response quality, the tokens that get more attention
+         |yl |                                                        
+         t=1
+-  |yl|         alt  log   (ylt|x, yl<t)             +      log  Z (x)        .
+                          ref (ylt|x, yl<t)
+
+                                                                                 4
+are more important. As such, we prompt ref with                             we experiment with Llama-3-8B-Base-SFT from
+a general pairwise judge prompt (See Appendix 6)                            Meng et al. (2024) (princeton-nlp/Llama-3-Base-
+                                                                            8B-SFT), which is supervised-finetuned from the
+that asks it to predict which of yw and yl has better                       pretrained model LLaMA-3-8B (Grattafiori et al.,
+quality. We explicitly require ref to output the                            2024) on UltraChat-200K (Ding et al., 2023); and
+identifier ("A" or "B") of the better response, and                         LLaMA-3-8B-Instruct (Grattafiori et al., 2024)
+                                                                            (meta-llama/Meta-Llama-3-8B-Instruct).
+we denote this single token as yverdict. To avoid
+bias, we hide the preference labels in the prompt                              For the SFT model (Llama-3-8B-Base-SFT),
+                                                                            we apply AttentionPO on the UltraFeedback
+and call ref two rounds, each round with the po-                            binarized dataset (Cui et al., 2024) (Hugging-
+sitions of yw and yl swapped. For each round, we                            FaceH4/ultrafeedback_binarized). This dataset
+do a single forward pass and obtain the attention                           contains 61,135/2,000 training/validation examples
+                                                                            covering diverse instruction-following tasks such
+weights at a fixed layer L. We extract the attention                        as creative writing, document-assisted writing, and
+                                                                            open-ended QA. Each query is accompanied by
+weights from yverdict to all the tokens in yw and                           four responses generated by diverse LLMs and
+denote them as Awround_r = [aw1 , · · · , a|wyw|]. Simi-                    graded by GPT-4 in terms of instruction-following,
+larly, we extract the attention weights from yverdict                       helpfulness, honesty, and truthfulness. yw is set to
+to all the tokens in yl as Arl ound_r = [a1l , · · · , a|lyl|].             the response with the highest overall score, and yl
+For simplicity, we compute the final attention                              is chosen randomly from the remaining three.
+
+weight of each token as the mean attention weight                              For the Instruction-Tuned model (LLaMA-3-8B-
+                                                                            Instruct), we use the dataset produced by Meng
+for that token across attention heads.                                      et al. (2024) (princeton-nlp/llama3-ultrafeedback).
+   For rounds r  {1, 2} ,This produces Arwound_1,                           It contains 59,876/1,961 training/validation exam-
+                                                                            ples. The questions are subsampled from the bina-
+Awround_2, Alround_1, Alround_2. The final attention                        rized datasets, but for each question, five responses
+is the average of the two rounds:                                           are sampled from ref and then scored by a reward
+                                                                            model PairRM (Jiang et al., 2023b). yw is set to
+         awt  =       1  awt,round_1  +  1  awt,round_2,                    the response with the highest score and yl is set to
+                      2                  2                                  the one with the lowest score.
+                                                              (13)
+                      1                  1                                  Attention Weights. We set L to the index of the
+         alt  =       2  alt,round_1  +  2  alt,round_2.                    last layer for every model (i.e., we take the atten-
+                                                                            tion weights from the last layer). To fix the at-
+2.6 Post-Processing                                                         tention sink issue, we use K = 1 and K = 5.
+                                                                            That is, for response y that has at least 5 tokens,
+Normalization. ref also attends to other tokens                             we set the attention weight of its first token to
+                                                                            1/|y|. The rationale is that for our models, the atten-
+in the pairwise judge prompt and so neither Aw nor                          tion sink primarily concentrates on the first token.
+                                                                            For LLaMA3-8B-Base-SFT, significant attention
+Al form a proper distribution (i.e., it does not sum                        weights are on the first token (12.55%), whereas the
+                                                                            weights on the second (3.35%) and third (2.55%) to-
+up to 1.0). Therefore, we normalize the attention                           kens are much smaller. For LLaMA-3-8B-Instruct,
+                                                                            the proportion is 8.25%/2.11%/1.55% for the first,
+weights Aw and Al: awt  awt /(                 |yw |  awq ),  alt           second, and third tokens, respectively.
+                                               q=1
+                                                                               We show detailed statistics of the attention
+alt/(  |yl|  aql  ).                                                        weights in Table 1. The standard deviation of
+       q=1                                                                  the weights from both SFT and Instruct models
+                                                                            is above 0.01, suggesting that the weights vary
+Fixing Attention Sink. Attention sink is a phe-                             across tokens. We also show the ten most weighted
+                                                                            tokens in Table 2. For the SFT model, 7/10 tokens
+nomenon where the LLMs predominantly attend                                 are related to binary judgment words (e.g., "Yes",
+
+to the initial tokens (Xiao et al., 2024). Manual in-
+
+spection on our dataset D suggests that these initial
+
+tokens are usually of low importance, consisting
+
+of starting phrases. As such, for any response with
+at least K tokens, we reset the attention weights
+
+of the first K tokens of each response y to the av-
+
+erage weight 1/|y| and renormalize the remaining
+
+tokens:
+
+t  {K + 1, · · · , |yw|}, atw  awt          1  -   K
+                                                  |yw |
+
+                                            |yw |        aqw       (14)
+                                            q=K+1
+
+t  {K + 1, · · · , |yl|}, aql  aql          1  -   K
+                                                  |yl |
+
+                                            |yl |        alq
+                                            q=K+1
+
+3 Experiment Setup
+
+Models and Datasets. We follow the settings
+from Meng et al. (2024). For the initial model ref ,
+
+                                                                         5
+            ref =LLaMA-3-8B-Base-SFT ref =LLaMA-3-8B-Instruct
+
+            Std Max              Len                    Std Max              Len
+
+            yw 0.0177 0.1242 269.0895 0.0126 0.0915 356.9848
+            yl 0.0175 0.1202 235.3978 0.0137 0.0959 365.8176
+
+Table 1: Statistics of the attention weights after post-processing in § 2.6. Std: Standard deviation of token weights
+within a response. Max: Maximum weights; Len: Response length; Metrics are averaged across the training set.
+
+       ref =LLaMA-3-8B-Base-SFT                                ref =LLaMA-3-8B-Instruct
+
+       yw                 yl                                   yw                    yl
+
+Token       Weight Token         Weight                 Token        Weight Token Weight
+
+True        0.1237  Ye           0.8212                 (Note        0.1269  (Note       0.1276
+idence      0.1227  Neutral      0.1213                 YES          0.0918  Yes         0.0853
+Neutral     0.1184  ye           0.1065                 "What        0.0844  "What       0.0673
+POS         0.1148  Completion   0.0987                 doesn        0.0643  doesn       0.0618
+False       0.1016  idence       0.0886                 wouldn       0.0606  No          0.0598
+Completion  0.0997  No           0.0845                 False        0.0572  !C C        0.0529
+No          0.0990  True         0.0796                 Yes          0.0563  didn        0.0528
+Negative    0.0788  Ent          0.0721                 No           0.0556  wouldn      0.0510
+Positive    0.0668  Negative     0.0692                 Explanation  0.0505  don         0.0497
+Yes         0.0591  False        0.0686                 don          0.0492  "The        0.0447
+
+Table 2: Most weighted tokens after post-processing in § 2.6. Weight: Weights averaged across all occurrences of
+the token in the training set. We only keep tokens that occur at least 100 times.
+
+"True") for both yw and yl. The highly weighted         generated response on a scale of 1 to 10. For Are-
+tokens of the Instruct model not only include these     naHard, we report the win rate of our model against
+but also negation words (e.g., "doesn").                GPT4-0314. We use GPT-4o-mini (Achiam et al.,
+                                                        2024) as the judge model for these benchmarks.
+Training Details. We set learning rate to 1e - 6        See more evaluation details in Appendix E.
+with a cosine scheduler and a warmup ratio of 0.1.
+We use the AdamW optimizer (Loshchilov and              4 Results
+Hutter, 2019). The KL regularizer  is set to 0.005.
+See more details in Appendix E.                         We first present the main results (§ 4.1), followed
+                                                        by comparing our method with other choices of
+Baselines. We compare AttentionPO against               token weights (§ 4.2), and finally conducting an
+the initial model ref and models trained with           ablation study (§ 4.3).
+common PO methods, including RRHF (Yuan
+et al., 2023), SLiC-HF (Zhao et al., 2023), DPO         4.1 Main Results
+(Rafailov et al., 2023), TDPO (Zeng et al., 2024),
+TI-DPO (Yang et al., 2026), IPO (Azar et al.,           As shown in Table 3, AttentionPO significantly
+2024), CPO (Xu et al., 2024), KTO (Ethayarajh           improves the performance over the base model
+et al., 2024), ORPO (Hong et al., 2024), R-DPO          ref in all settings. On LLaMA-3-8B-Base-SFT,
+(Park et al., 2024), and SimPO (Meng et al., 2024).     performance increases by 12% on AlpacaEval, 1.05
+Except TDPO and TI-DPO, we adopt the training           on MT-Bench, 40% on ArenaHard. On LLaMA-
+hyperparameters from Meng et al. (2024), which          3-8B-Instruct, performance increases by 27% on
+have been separately searched to be optimal.            AlpacaEval, 0.41 on MT-Bench, and 14% on Are-
+                                                        naHard. Furthermore, AttentionPO outperforms
+Evaluation. Following prior work (Meng et al.,          the baselines in most settings. For the SFT model,
+2024; Yang et al., 2025; Huang and Goyal, 2025),        AttentionPO ranks first on ArenaHard, second on
+we evaluate the models on AlpacaEval (Li et al.,        MT-Bench, and third on AlpacaEval. For the In-
+2023), MT-Bench (Zheng et al., 2023), and Arena-        struct model, AttentionPO outperforms all base-
+Hard (Li et al., 2024). For AlpacaEval, we report       lines on AlpacaEval and MT-Bench. Across the
+the raw and length-controlled win rate of our model     benchmarks, AttentionPO achieves the best overall
+against GPT-4-1106-preview. For MT-Bench, we            rank for both models.
+report the LLM-judged quality score of our model's
+
+                                                     6
+                                          ref =LLaMA-3-8B-Base-SFT                                               ref =LLaMA-3-8B-Instruct
+
+                     AlpacaEval                       MT ArenaHard Avg Rank                          AlpacaEval  MT ArenaHard Avg Rank 
+
+                     LR  WR  Score  WR                                                               LR  WR  Score  WR 
+
+    Base             9.20 4.63 5.47                                      9.92                 12.75  33.60 32.60 6.78  37.57               11.25
+    +RRHF            11.29 6.63 6.18                                     26.00                8.25   43.75 37.65 6.63  41.91               9.00
+    +SLiC-HF         16.73 12.08 5.95                                    13.08                9.00   38.38 37.03 6.76  42.76               9.12
+    +DPO             22.88 17.70 6.54                                    38.54                2.75   49.02 44.72 6.73  53.98               5.50
+    +TDPO            11.96 6.18 5.68                                     12.09                10.75  37.74 37.34 6.64  41.00               10.50
+    +TI-DPO          9.94 4.77 5.29                                      10.14                12.25  35.41 34.57 6.80  38.73               9.75
+    +IPO             20.69 19.73 6.23                                    34.56                4.25   48.94 47.47 6.99  50.50               4.00
+    +CPO             18.94 24.56 6.13                                    36.04                4.62   41.26 45.13 6.67  52.07               6.75
+    +KTO             18.24 15.05 5.93                                    18.28                8.00   43.10 39.73 6.79  48.98               6.38
+    +ORPO            19.36 13.47 5.72                                    17.32                8.25   40.92 36.95 6.76  44.64               8.88
+    +R-DPO           20.94 15.57 6.33                                    28.72                4.75   52.11 46.98 6.79  54.98               3.12
+    +SimPO           32.26 19.11 6.13                                    47.01                3.38   56.79 47.73 6.51  54.94               4.75
+    +AttentionPO     21.55 20.23 6.52                                    49.72                2.00   60.77 58.29 7.19  52.06               2.00
+
+Table 3: Main results. Base: ref ; MT: MT-Bench; AlpacaEval: LR is the length-controlled win rate and WR is the
+raw win rate against GPT-4-1106-Preview; MT-Bench: LLM-judged quality score of the model's responses, on a
+scale of 1 to 10; ArenaHard: Win rate against GPT-4-0314. Avg Rank: arithmetic mean of the method's ranks across
+all individual metrics. AttentionPO achieves the best overall ranking across both Base-SFT and Instruct settings.
+
+         AlpacaEval             MT-Bench                                 ArenaHard               last layer achieving the best results. We leave
+                                                                                                 more investigation on this to future work.
+6059.25         61.6160.77 7.2                        7.19 5552.5334.98                52.06
+                                                                                                 Attention rollout (w/ attn rollout). Atten-
+      54.43                                           50                        49.13            tion rollout aggregates the attentions across all the
+50 49.02 51.02                                                                                   layers to estimate the total attentions from tokens
+                     7.0                  6.94                           46.86                   in the final output layer to tokens in the initial in-
+40                                                                                               put layer. Table 4 shows that using their aggre-
+   33.60             6.84                             45 44.34                                   gated weights underperforms our method. This is
+                                                                                                 potentially associated with our previous observa-
+                     6.8        6.786.79              40 37.57                                   tion that middle-layer attentions are not suitable for
+                                6.73                                                             AttentionPO, since attention rollout incorporates
+                                                6.70                                             attentions from these layers into the final weights.
+
+30                                                    35                                         Verbalized self-judged weights (w/ verbal w).
+    1 8 16 24 32 1 8 16 24 32 1 8 16 24 32                                                       Instead of using attention, we ask ref to verbally
+                                                                                                 assign an importance score on a scale of 1 to 5 to
+                     Base                 DPO         AttentionPO                                each token in the response. We observe that it is
+                                                                                                 difficult for the model to precisely give a score for
+Figure 3: Results for different layers. x-axis: index of                                         every token (e.g., malformed scoring report; not
+the layer from which attention weights are extracted;                                            being able to recall every token in the response).
+y-axis: benchmark performance.                                                                   Therefore, we adapt a coarser granularity and ask
+                                                                                                 the model to first partition the response into parts
+4.2 Impact of Token Weight Sources                                                               and then assign a score for each part (See prompts
+                                                                                                 in Appendix I). Even with a coarser granularity,
+There are alternative ways to obtain token-level                                                 ref still cannot perfectly recall the response to-
+weights. Prior work (Lin et al., 2024; Yang et al.,                                              kens. We filter out examples where fewer than
+2025; Liu et al., 2025; Shao et al., 2025; Yang et al.,                                          90% of the tokens are matched with a verbalized
+2026) either requires training a separate model to                                               weight for either yw or yl. After filtering, we get
+estimate weights or relies on strong heuristics. In-                                             10,111/343 train/validation examples. To compen-
+stead, we stick to our setting where the weights                                                 sate for a smaller dataset, we increase the number
+are attained through self-judging, but we experi-                                                of training epochs from 1 to 5 and validate at each
+ment with various changes to the current design.                                                 epoch. Table 4 shows that this method outperforms
+This includes (1) Extracting the attention weights                                               ours on ArenaHard but underperforms on AlpacaE-
+from a different hidden layer L of ref ; (2) Using                                               val and MT-Bench. A potential reason is the use of
+attention rollout (Abnar and Zuidema, 2020) to ag-
+gregate the weights across different hidden layers;
+(3) Prompting ref to verbally assign a weight for
+each token. For these experiments, we use LLaMA-
+3-8B-Instruct as an example.
+
+Changing layers. LLaMA-3-8B-Instruct con-
+sists of 32 hidden layers. We use L = 32 for
+our main experiments. Here, we experiment with
+L  {1, 8, 16, 24, 32} and present the results in
+Figure 3. We find that the first and last layers
+perform better than the middle ones, with the
+
+                                                                                              7
+                     ref =LLaMA-3-8B-Instruct                           objective. Instead of maximizing the total rewards
+                                                                        of the entire rollout y, the dual-RL objective of
+                  AlpacaEval          MT ArenaHard                      objective 15 (which is the same as objective 7 but
+                                                                        with |y| removed in both the reward function and
+                  LR  WR  Score  WR                                     the KL penalty) maximizes the average per-token
+                                                                        reward of y, undermining the total rewards.
+Base              33.60 32.60 6.78                      37.57
++DPO              49.02 44.72 6.73                      53.98           5 Related Work
++AttentionPO      60.77 58.29 7.19                      52.06
+                  54.84 54.87 6.71                      48.23           Preference Optimization. Aligning LLMs with
+ w/ attn rollout  57.95 57.76 6.89                      61.41           human preferences originally relied on RLHF via
+ w/ verbal w                                                            PPO (Ouyang et al., 2022; Schulman et al., 2017),
+                                                                        which requires a separate reward model. Mod-
+Table 4: Results with different weight sources.                         ern Preference Optimization (PO) methods bypass
+                                                                        this by training the policy directly on preference
+                     ref =LLaMA-3-8B-Instruct                           pairs (yw, yl) using contrastive objectives. For in-
+                                                                        stance, RRHF (Yuan et al., 2023) and SLiC-HF
+                  AlpacaEval          MT ArenaHard                      (Zhao et al., 2023) apply ranking losses, while
+                                                                        DPO (Rafailov et al., 2023) derives a reference-
+                  LR  WR  Score  WR                                     normalized objective from policy gradients. Subse-
+                                                                        quent variants introduce bounded objectives (IPO
+Base              33.60 32.60 6.78                      37.57           (Azar et al., 2024)), pointwise formulations (KTO
++DPO              49.02 44.72 6.73                      53.98           (Ethayarajh et al., 2024)), auxiliary SFT objectives
++AttentionPO      60.77 58.29 7.19                      52.06           (CPO (Xu et al., 2024), ORPO (Hong et al., 2024)),
+                  61.14 57.27 6.93                      51.64           length penalties (R-DPO (Park et al., 2024)), or
+ w/ attn sink     62.00 55.69 6.79                      44.59           reference-free length normalization with reward
+ w/ len norm                                                            margins (SimPO (Meng et al., 2024)). However,
+                                                                        these methods weight all response tokens equally,
+         Table 5: Ablation Results.                                     failing to capture token-level importance.
+
+a coarser granularity. We leave more investigation                      Token-level PO. To enable fine-grained credit as-
+on the viability of this approach to future work.                       signment, recent work explores token-level weight-
+                                                                        ing. TDPO (Zeng et al., 2024) incorporates token-
+4.3 Ablation Study                                                      level sequential KL terms. TIS-DPO (Liu et al.,
+                                                                        2025), SePO (Yang et al., 2025), and cDPO (Lin
+Restoring the attention sink (w/ attn sink).                            et al., 2024) estimate token importance by con-
+We restore the attention sink, in which case the first                  trasting probabilities between reference/negative
+token occupies roughly 8.25% of the total weights.                      models and oracle/positive models. TI-DPO (Yang
+Table 5 shows that this variant underperforms our                       et al., 2026) combines Gaussian priors with logit
+method on all benchmarks, indicating the benefits                       gradient norms. Alternatively, heuristic approaches
+of averaging out the attention sink.                                    like D2PO (Shao et al., 2025) decay weights based
+                                                                        on token position. Nonetheless, these methods ei-
+Adding length normalization (w/ len norm).                              ther demand expensive auxiliary models or rely on
+Prior work (Yang et al., 2025; Meng et al., 2024)                       rigid, position-based heuristics rather than seman-
+argues that DPO is biased toward lengthy responses                      tic content.
+(i.e., lengthy responses receive more gradient up-
+dates than concise ones). They add a length nor-                        6 Conclusion
+malizer to the objective. Similarly, we remove the
+|y| multiplier in front of the logprob ratio term for                   We propose TwDPO--a token-weighted DPO
+yw and yl, giving a weighted, length-normalized                         objective, theoretically grounded on token-
+variant:                                                                weighted RL--and AttentionPO--an instantiation
+                                                                        of TwDPO that prompts the model to judge the
+L = -ED  log         |yw |  atw  log   (ywt |x, yw<t)                   response qualities and extract attentions from the
+                     t=1              ref (ywt |x, yw<t)
+
+                     |yl |                                     (15)
+                     t=1
+                  -         atl log   (ylt|x, yl<t)
+                                     ref (ylt|x, yl<t)
+
+Adding the length normalization effectively re-
+duces the KL regularization constant . There-
+fore, we increase  to 2.0 for this baseline. For
+these experiments, we use LLaMA-3-8B-Instruct
+as an example. Table 5 shows that applying length
+normalization significantly hurts performance on
+MT-Bench and AreaHard. One speculated reason
+for this is the misalignment with the original RL
+
+                                                                     8
+model itself to weigh the response tokens. Exper-               Sun. 2024. Ultrafeedback: Boosting language mod-
+iment results show that AttentionPO significantly               els with scaled ai feedback. In Proceedings of Inter-
+improves the performance of the base model across               national Conference on Machine Learning.
+AlpacaEval, MT-Bench, and ArenaHard, outper-
+forming various prior PO methods. We hope Atten-             Ning Ding, Yulin Chen, Bokai Xu, Yujia Qin,
+tionPO paves the way for highly-performant and                  Shengding Hu, Zhiyuan Liu, Maosong Sun, and
+efficient preference alignment with humans.                     Bowen Zhou. 2023. Enhancing chat language models
+                                                                by scaling high-quality instructional conversations.
+Limitations                                                     In Proceedings of the 2023 Conference on Empirical
+                                                                Methods in Natural Language Processing.
+Due to computational constraints, we do not ex-
+periment with our method on larger models. In                Yann Dubois, Balázs Galambosi, Percy Liang, and Tat-
+addition, our training and evaluation focus on the              sunori B Hashimoto. 2024. Length-controlled al-
+instruction-following task. Analysing the perfor-               pacaeval: A simple way to debias automatic evalu-
+mance and generalizability of AttentionPO on other              ators. In Proceedings of Conference on Language
+models and tasks is an important future direction.              Modeling.
+
+   Moreover, the search space for the optimal                Kawin Ethayarajh, Winnie Xu, Niklas Muennighoff,
+choice of attention weights for TwDPO is large.                 Dan Jurafsky, and Douwe Kiela. 2024. Kto: Model
+For example, while we simply take the mean across               alignment as prospect theoretic optimization. In Pro-
+attention heads, future work could investigate se-              ceedings of International Conference on Machine
+lecting a specific head or group of heads for weight            Learning.
+extraction. However, we argue that such a choice
+of attention heads is likely model-dependent and             Aaron Grattafiori, Abhimanyu Dubey, Abhinav Jauhri,
+may not transfer across settings.                               Abhinav Pandey, Abhishek Kadian, Ahmad Al-
+                                                                Dahle, Aiesha Letman, Akhil Mathur, Alan Schelten,
+References                                                      and Alex Vaughan et al. 2024. The llama 3 herd of
+                                                                models. arXiv preprint arXiv:2407.21783.
+Samira Abnar and Willem Zuidema. 2020. Quantify-
+   ing attention flow in transformers. In Proceedings        Jiwoo Hong, Noah Lee, and James Thorne. 2024. Orpo:
+   of the 58th Annual Meeting of the Association for            Monolithic preference optimization without refer-
+   Computational Linguistics.                                   ence model. In Proceedings of the 2024 Conference
+                                                                on Empirical Methods in Natural Language Process-
+Josh Achiam, Steven Adler, Sandhini Agarwal, Lama               ing.
+   Ahmad, Ilge Akkaya, Florencia Leoni Aleman,
+   Diogo Almeida, Janko Altenschmidt, Sam Altman,            Chengyu Huang and Tanya Goyal. 2025. Dcrm: A
+   and Shyamal Anadkat et al. 2024. Gpt-4o system               heuristic to measure response pair quality in prefer-
+   card. arXiv preprint arXiv:2410.21276.                       ence optimization. In Findings of the Association for
+                                                                Computational Linguistics: EMNLP 2025.
+Mohammad Gheshlaghi Azar, Mark Rowland, Bilal
+   Piot, Daniel Guo, Daniele Calandriello, Michal            Aaron Hurst, Adam Lerer, Adam P. Goucher, Adam
+   Valko, and Rémi Munos. 2024. A general theoretical           Perelman, Aditya Ramesh, Aidan Clark, AJ Ostrow,
+   paradigm to understand learning from human pref-             Akila Welihinda, Alan Hayes, and Alec Radford
+   erences. In Proceedings of the 27th International            et al. 2023. Gpt-4 technical report. arXiv preprint
+   Conference on Artificial Intelligence and Statistics.        arXiv:2303.08774.
+
+R. A. Bradley and M. E. Terry. 1952. Rank analysis of        Jain and Wallace. 2019. Attention is not explanation.
+   incomplete block designs: I. the method of paired            In Proceedings of the 2019 Conference on Empirical
+   comparisons. Biometrika, 39:324­345.                         Methods in Natural Language Processing and the 9th
+                                                                International Joint Conference on Natural Language
+Kevin Clark, Urvashi Khandelwal, Omer Levy, and                 Processing (EMNLP-IJCNLP).
+   Christopher D. Manning. 2019. What does bert look
+   at? In Proceedings of the 2019 ACL Workshop               Albert Q. Jiang, Alexandre Sablayrolles, Arthur Men-
+   BlackboxNLP: Analyzing and Interpreting Neural               sch, Chris Bamford, Devendra Singh Chaplot, Diego
+   Networks for NLP.                                            de las Casas, Florian Bressand, Gianna Lengyel, Guil-
+                                                                laume Lample, Lucile Saulnier, Lélio Renard Lavaud,
+Ganqu Cui, Lifan Yuan, Ning Ding, Guanming Yao,                 Marie-Anne Lachaux, Pierre Stock, Teven Le Scao,
+   Bingxiang He, Wei Zhu, Yuan Ni, Guotong Xie,                 Thibaut Lavril, Thomas Wang, Timothée Lacroix,
+   Ruobing Xie, Yankai Lin, Zhiyuan Liu, and Maosong            and William El Sayed. 2023a. Mistral 7b. arXiv
+                                                                preprint arXiv:2310.06825.
+
+                                                             Dongfu Jiang, Xiang Ren, and Bill Yuchen Lin. 2023b.
+                                                                Llm-blender: Ensembling large language models
+                                                                with pairwise ranking and generative fusion. In Pro-
+                                                                ceedings of the 61st Annual Meeting of the Associa-
+                                                                tion for Computational Linguistics (Volume 1: Long
+                                                                Papers).
+
+                                                          9
+Tianle Li, Wei-Lin Chiang, Evan Frick, Lisa Dunlap,            John Schulman, Filip Wolski, Prafulla Dhariwal,
+   Tianhao Wu, Banghua Zhu, Joseph E Gonzalez, and                Alec Radford, and Oleg Klimov. 2017. Proxi-
+   Ion Stoica. 2025. From crowdsourced data to high-              mal policy optimization algorithms. arXiv preprint
+   quality benchmarks: Arena-hard and benchbuilder                arXiv:1707.06347.
+   pipeline. In Proceedings of International Conference
+   on Machine Learning.                                        Sofia Serrano and Noah A. Smith. 2019. Is attention
+                                                                  interpretable? In Proceedings of the 57th Annual
+Tianle Li, Wei-Lin Chiang, Evan Frick, Lisa Dunlap,               Meeting of the Association for Computational Lin-
+   Banghua Zhu, Joseph E. Gonzalez, and Ion Stoica.               guistics.
+   2024. From live data to high-quality benchmarks:
+   The arena-hard pipeline.                                    Ruichen Shao, Bei Li, Gangao Liu, Yang Chen, Xi-
+                                                                  ang Zhou, Jingang Wang, Xunliang Cai, and Peng
+Xuechen Li, Tianyi Zhang, Yann Dubois, Rohan Taori,               Li. 2025. Earlier tokens contribute more: Learning
+   Ishaan Gulrajani, Carlos Guestrin, Percy Liang, and            direct preference optimization from temporal decay
+   Tatsunori B. Hashimoto. 2023. Alpacaeval: An au-               perspective. In Proceedings of International Confer-
+   tomatic evaluator of instruction-following models.             ence on Learning Representations.
+   https://github.com/tatsu-lab/alpaca_eval.
+                                                               Lewis Tunstall, Edward Beeching, Nathan Lambert,
+Zicheng Lin, Tian Liang, Jiahao Xu, Qiuzhi Lin, Xing              Nazneen Rajani, Kashif Rasul, Younes Belkada,
+   Wang, Ruilin Luo, Chufan Shi, Siheng Li, Yujiu                 Shengyi Huang, Leandro von Werra, Clémentine
+   Yang, and Zhaopeng Tu. 2024. Critical tokens matter:           Fourrier, and et al Nathan Habib. 2023. Zephyr:
+   Token-level contrastive estimation enhances llm's rea-         Direct distillation of lm alignment. arXiv preprint
+   soning capability. arXiv preprint arXiv:2411.19943.            arXiv:2310.16944.
+
+Aiwei Liu, Haoping Bai, Zhiyun Lu, Yanchao Sun, Xi-            Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob
+   ang Kong, Simon Wang, Jiulong Shan, Albin Madap-               Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz
+   pally Jose, Xiaojiang Liu, Lijie Wen, Philip S. Yu,            Kaiser, and Illia Polosukhin. 2017. Attention is all
+   and Meng Cao. 2025. Tis-dpo: Token-level impor-                you need. In Advances in Neural Information Pro-
+   tance sampling for direct preference optimization              cessing Systems.
+   with estimated weights. In Proceedings of Interna-
+   tional Conference on Learning Representations.              Jesse Vig. 2019. A multiscale visualization of attention
+                                                                  in the transformer model. In Proceedings of the 57th
+Ilya Loshchilov and Frank Hutter. 2019. Decoupled                 Annual Meeting of the Association for Computational
+   weight decay regularization. In Proceedings of Inter-          Linguistics: System Demonstrations.
+   national Conference on Learning Representations.
+                                                               Gregor Wiedemann, Steffen Remus, Avi Chawla, and
+R. Thomas McCoy, Ellie Pavlick, and Tal Linzen. 2019.             Chris Biemann. 2019. Does bert make any sense?
+   Right for the wrong reasons: Diagnosing syntactic              interpretable word sense disambiguation with con-
+   heuristics in natural language inference. In Proceed-          textualized embeddings. In Conference on Natural
+   ings of the 57th Annual Meeting of the Association             Language Processing.
+   for Computational Linguistics.
+                                                               Guangxuan Xiao, Yuandong Tian, Beidi Chen, Song
+Yu Meng, Mengzhou Xia, and Danqi Chen. 2024.                      Han, and Mike Lewis. 2024. Efficient streaming
+   Simpo: Simple preference optimization with a                   language models with attention sinks. In Proceedings
+   reference-free reward. In Advances in Neural In-               of International Conference on Machine Learning.
+   formation Processing Systems.
+                                                               Haoran Xu, Amr Sharaf, Yunmo Chen, Weiting Tan,
+Long Ouyang, Jeff Wu, Xu Jiang, Diogo Almeida, Car-               Lingfeng Shen, Benjamin Van Durme, Kenton Mur-
+   roll L. Wainwright, Pamela Mishkin, Chong Zhang,               ray, and Young Jin Kim. 2024. Contrastive prefer-
+   Sandhini Agarwal, Katarina Slama, Alex Ray, John               ence optimization: Pushing the boundaries of llm
+   Schulman, Jacob Hilton, Fraser Kelton, Luke Miller,            performance in machine translation. In Proceedings
+   Maddie Simens, Amanda Askell, Peter Welinder,                  of International Conference on Machine Learning.
+   Paul Christiano, Jan Leike, and Ryan Lowe. 2022.
+   Training language models to follow instructions with        Kailai Yang, Zhiwei Liu, Qianqian Xie, Jimin Huang,
+   human feedback. arXiv preprint arXiv:2203.02155.               Erxue Min, and Sophia Ananiadou. 2025. Selec-
+                                                                  tive preference optimization via token-level reward
+Ryan Park, Rafael Rafailov, Stefano Ermon, and                    function estimation. In Proceedings of Empirical
+   Chelsea Finn. 2024. Disentangling length from qual-            Methods in Natural Language Processing.
+   ity in direct preference optimization. In Proceedings
+   of Findings of the Association for Computational            Ning Yang, Hai Lin, Yibo Liu, Baoliang Tian, Guoqing
+   Linguistics.                                                   Liu, and Haijun Zhang. 2026. Token-importance
+                                                                  guided direct preference optimization. In Proceed-
+Rafael Rafailov, Archit Sharma, Eric Mitchell, Stefano            ings of International Conference on Learning Repre-
+   Ermon, Christopher D. Manning, and Chelsea Finn.               sentations.
+   2023. Direct preference optimization: Your language
+   model is secretly a reward model. In Advances in
+   Neural Information Processing Systems.
+
+                                                           10
+Zheng Yuan, Hongyi Yuan, Chuanqi Tan, Wei Wang,
+   Songfang Huang, and Fei Huang. 2023. Rrhf: Rank
+   responses to align language models with human feed-
+   back without tears. In Advances in Neural Informa-
+   tion Processing Systems.
+
+Yongcheng Zeng, Guoqing Liu, Weiyu Ma, Ning Yang,
+   Haifeng Zhang, and Jun Wang. 2024. Token-level
+   direct preference optimization. In Proceedings of
+   International Conference on Machine Learning.
+
+Yao Zhao, Rishabh Joshi, Tianqi Liu, Misha Khalman,
+   Mohammad Saleh, and Peter J. Liu. 2023. Slic-hf:
+   Sequence likelihood calibration with human feed-
+   back. arXiv preprint arXiv:2305.10425.
+
+Lianmin Zheng, Wei-Lin Chiang, Ying Sheng, Siyuan
+   Zhuang, Zhanghao Wu, Yonghao Zhuang, Zi Lin,
+   Zhuohan Li, Dacheng Li, Eric P. Xing, Hao Zhang,
+   Joseph E. Gonzalez, and Ion Stoica. 2023. Judging
+   llm-as-a-judge with mt-bench and chatbot arena. In
+   Advances in Neural Information Processing Systems,
+   Datasets and Benchmarks Track.
+
+                                                             11
+A Extended Related Work                                    a pre-defined Gaussian prior distribution with the
+                                                           gradient norm of the last token's maximum logit
+Preference Optimization. The alignment with                with respect to each token. Certain methods use
+human preferences and values is critical for LLM-          heuristics to assign weights. For example, D2PO
+generated output. Early work (Ouyang et al., 2022)         (Shao et al., 2025) gives earlier tokens more weight
+trains LLM using policy-gradient RL-algorithm              than later ones. However, many of these methods
+such as PPO (Schulman et al., 2017). However,              require training extra models to estimate weights.
+these methods require training a separate reward           The rest compute weights using heuristic functions,
+model on annotated preference pairs to provide             which are purely based on token positions rather
+RL rewards. Preference Optimization (PO) meth-             than the tokens themselves.
+ods avoid the need for an extra reward model and
+train the main policy directly on the preference           Attention Weights. Early studies on transform-
+pairs to learn the reward landscape. On a high             ers (Vaswani et al., 2017) indicate that specific
+level, PO methods use a contrastive learning ob-           attention heads capture linguistic properties like
+jective between a preferred response yw and a dis-         coreference resolution, framing attention weights
+preferred response yl. For example, RRHF (Yuan             as transparent windows into model reasoning
+et al., 2023) and SLiC-HF (Zhao et al., 2023) use          (Clark et al., 2019). However, subsequent research
+ranking losses. DPO (Rafailov et al., 2023) drives         challenges this notion by demonstrating that at-
+its training objective from policy gradient, which         tention distributions can be manipulated without
+normalizes the model's probability with the refer-         altering model predictions, implying that attention
+ence model's probability. IPO (Azar et al., 2024)          correlates with but does not cause model outputs
+uses a bounded objective in contrast to DPO. KTO           (Jain and Wallace, 2019; Serrano and Smith, 2019).
+(Ethayarajh et al., 2024) avoids the pairwise as-          Counter-counter-arguments suggest attention re-
+sumption and uses a pointwise formulation. CPO             mains a useful, albeit incomplete, diagnostic sig-
+(Xu et al., 2024) and ORPO (Hong et al., 2024)             nal when contextualized (Wiedemann et al., 2019).
+add an SFT term in addition to the contrastive term.       While individual attention heads specialize (Vig,
+R-DPO (Park et al., 2024) adds an extra term to the        2019), they operate redundantly. Furthermore, at-
+original DPO objective to avoid the length exploita-       tention patterns are frequently associated with su-
+tion. SimPO (Meng et al., 2024) modifies DPO               perficial heuristics rather than deep semantic under-
+by removing dependencies on the reference model,           standing (McCoy et al., 2019). When aggregated
+incorporating length normalization, and adding a           across multiple layers with residual connections,
+reward margin term. However, all the methods               the aggregated attentions show a higher correlation
+above assign equal weights to every response token,        with gold token importance scores, compared with
+which cannot account for the fine-grained impor-           raw attentions (Abnar and Zuidema, 2020). These
+tance of each token to the overall response quality.       findings suggest that attention could potentially
+                                                           provide a complementary view of information flow.
+Token-level PO. Various attempts are made to               In summary, whether attention is interpretable is
+enable fine-grained, token-level credit assignment         still under debate. As such, in this work, we do not
+during PO training. TDPO (Zeng et al., 2024) is            explicitly assume the interpretability of attentions.
+grounded on token-level policy gradient methods.
+It adds two sequence KL terms to the original DPO          B Theoretical Analysis and Error Bounds
+objective. TIS-DPO (Liu et al., 2025) and cDPO
+(Lin et al., 2024) estimate the token importance           Because the sequence-level expectation Ey in
+via contrasting the probability to produce the token       the TwDPO objective is coupled with token-
+from a positive policy with the one from a negative        weighted log-probabilities, deriving an exact an-
+policy, given the same prefix. The positive and            alytical closed-form solution for the optimal policy
+negative policies are induced either from prompts          is intractable without invoking complex token-level
+or training. SePO (Yang et al., 2025) takes a sim-         dynamic programming. In this section, we estab-
+ilar approach, but it trains an oracle model with          lish a formal theoretical guarantee for TwDPO by
+DPO on a subset of the original training set and           framing it as a bounded perturbation around the
+contrasts the probability from the oracle against the      standard Direct Preference Optimization (DPO) ob-
+one from the reference model. TI-DPO (Yang et al.,         jective (Rafailov et al., 2023). We first bound the
+2026) estimates the token weights by combining             divergence between the true, intractable TwDPO
+
+                                                       12
+optimal policy opt and the standard DPO optimal                      JDPO() and a descriptive perturbation term:
+policy DPO. We then bound the distance between
+our empirical autoregressive heuristic policy ~                      JTwDPO() = ExD Ey(·|x)
+
+and DPO, concluding with a unified Total Varia-                                          |y|                                       
+tion (TV) distance bound between the empirical
+                                                                     r(x,       y)  -        (1      +  t)  log   (yt | x, y<t)    
+heuristic and the true optimum.                                                                                  ref(yt | x, y<t)
+                                                                                         t=1
+
+                                                                     = JDPO() - ExDEy(·|x) [R(; x, y)] ,
+
+B.1 Objective Formulation and Perturbation                           where the point-wise sequence perturbation
+       Setup                                                         R(; x, y) is defined as:
+
+Let D denote the dataset of prompts x, and let                       R(; x, y)  =   |y|  t log        (yt | x, y<t)      (20)
+y = (y1, y2, . . . , y|y|) represent a generated se-                                t=1              ref(yt | x, y<t) .
+quence of length |y|. For a given prompt x, policy
+, and reference policy ref, the TwDPO objective                      B.2 Bounding the Objective Discrepancy
+JTwDPO() modifies the standard sequence-level
+KL penalty by weighting individual token steps                       We now bound the magnitude of the expected per-
+using attention weights at:                                          turbation term. Under Assumptions 1 and 2, the
+                                                                     sequence-level perturbation can be upper-bounded
+     JTwDPO() = ExD Ey(·|x)                                          via the triangle inequality:
+
+                          |y|                     
+                          t=1
+     r(x,     y)  -  |y|       at  log   (yt | x, y<t)     ,                                    |y|       (yt | x, y<t)
+                                        ref(yt | x, y<t)                                             log ref(yt | x, y<t)
+                                                                     |R(; x, y)|  |t| ·
+                                                           (16)
+                                                                                               t=1
+
+                                                                                    |y|
+
+where  > 0 is the global scaling parameter. By                                   C = |y|C.
+
+definition, the token attention weights are normal-                                 t=1
+
+ized such that       |y|  at   =   1.   Let us define the                                                             (21)
+                     t=1
+effective token weights as wt = |y|at, satisfying
+                                                                        Taking the expectation over the prompt and se-
+1    |y|  wt  =  1.                                                  quence distributions, the discrepancy between the
+|y|  t=1                                                             two objectives is strictly bounded by:
+
+     We parameterize the deviation of these attention
+
+weights from a uniform distribution as a perturba-                      |JTwDPO() - JDPO()|  CExDEy(·|x)[|y|].
+tion vector t:                                                                                                                           (22)
+
+                                        |y|                          For ease of notation, let B() = CE[|y|] de-
+
+     wt = 1 + t, where                       t = 0. (17)             note the policy-dependent bound constraint.
+
+                                   t=1
+
+Assumption 1 (Bounded Attention Deviation).                          B.3 Distance Bound for True Optima
+There exists a constant   0 such that the maxi-
+mum token-level attention perturbation is strictly                   Let opt = arg max JTwDPO() be the true, in-
+bounded for all sequences:                                           tractable optimal policy under the token-weighted
+                                                                     framework, and let DPO = arg max JDPO() be
+                     max |t|  .                   (18)               the analytical optimal policy for the standard DPO
+                     t                                               objective.
+
+Assumption 2 (Bounded Trust Region Log-Ratios).                         From the exact mathematical properties of KL-
+The log-probability ratio between any valid policy                   constrained reinforcement learning objectives, the
+ under consideration and the reference policy ref                    suboptimality gap of any arbitrary policy  evalu-
+is bounded at the token level by a finite constant                   ated under JDPO is exactly equal to its generalized
+C > 0:                                                               KL divergence from the optimal DPO policy:
+
+                                                                     JDPO(DPO) - JDPO()                                  (23)
+
+                     (yt | x, y<t)                                   = ExD [DKL((· | x)  DPO(· | x))] .
+
+     max      log ref(yt       | x, y<t)      C.  (19)                  Evaluating the true optimal policy opt using the
+                                                                     identity in Equation 23 yields:
+        t
+
+   Using this formulation, we decompose the                          JDPO(DPO) - JDPO(opt)                               (24)
+TwDPO objective into the standard DPO objective
+                                                                     = ExD [DKL(opt(· | x)  DPO(· | x))] .
+
+                                                                 13
+   By the definition of functional optimality, opt                                Recall that the standard sequence-level DPO op-
+maximizes JTwDPO, meaning JTwDPO(opt)                                          timal policy satisfies:
+JTwDPO(DPO). We construct a double inequal-
+ity chain by introducing the objective boundaries                                   log  DPO(y | x)   =  1                        (31)
+B(opt) and B(DPO):                                                                        ref(y | x)      r(x, y) - log ZDPO(x).
+
+JDPO(opt) + B(opt)  JTwDPO(opt)                         (25)                   Subtracting Equation 31 from Equation 30 isolates
+                            JTwDPO(DPO)                                        the log-ratio between our heuristic policy and the
+                            JDPO(DPO) - B(DPO).                                standard DPO policy:
+
+   Rearranging the outermost components of this                                log   ~(y |  x)    =  log ZDPO(x)-log Z(x)-R(~; x, y).
+inequality gives an upper bound on the DPO objec-                                   DPO(y   | x)
+tive gap:
+                                                                                                                                  (32)
+
+                                                                                  Let Z(x) = log ZDPO(x) - log Z(x). Taking
+                                                                               the expectation of Equation 32 under ~ yields the
+
+JDPO(DPO) - JDPO(opt)  B(DPO) + B(opt). (26)                                   forward KL divergence:
+
+   Substituting this directly back into the identity                              DKL(~  DPO) = Z(x) - Ey~ [R(~; x, y)] .
+in Equation 24, we obtain:                                                                                                                         (33)
+
+            ExD [DKL(opt(· | x)  DPO(· | x))]                                  Similarly, taking the expectation of Equation 32
+                                                                     (27)
+                                                                               under the standard DPO policy yields the reverse
+                     C EDPO [|y|] + Eopt [|y|] .
+                                                                               KL divergence:
+   Dividing both sides by the regularization param-
+eter  establishes our first localized distance guar-                           -DKL(DPO  ~) = Z(x) - EyDPO [R(~; x, y)] .
+antee.                                                                                                                                             (34)
+
+Lemma 1 (Optima Distance Bound). The expected                                     Subtracting Equation 34 from Equation 33 can-
+KL divergence between the true optimal token-                                  cels the intractable partition scaling term Z(x):
+weighted policy opt and the standard DPO policy
+DPO is linearly bounded by the maximum attention                                 DKL(~  DPO) + DKL(DPO  ~)
+perturbation :                                                                    = EyDPO [R(~; x, y)] - Ey~ [R(~; x, y)] . (35)
+
+     ExD [DKL(opt(· | x)  DPO(· | x))]                                            Since the reverse KL divergence is strictly non-
+                                                            (28)               negative (DKL(DPO  ~)  0), we drop it to
+                                                                               establish an upper bound, and apply the triangle
+             C EDPO [|y|] + Eopt [|y|] .                                       inequality across expectations:
+
+B.4 Bounding the Autoregressive Heuristic                                         DKL(~  DPO)  |EyDPO [R(~; x, y)]| +
+       Policy                                                                                                   |Ey~ [R(~; x, y)]|
+
+We now address our empirical heuristic policy, de-                                                       CEyDPO [|y|] + CEy~ [|y|].
+noted as ~. While ~ is derived via a localized
+                                                                                  Taking the expectation across the entire prompt
+parameterization mapping, it is generated sequen-                              distribution D establishes our second localization
+                                                                               lemma.
+tially in an autoregressive fashion, ensuring that
+                                                                               Lemma 2 (Heuristic Distance Bound). The ex-
+~(y | x) =          |y|  ~(yt    |  x, y<t)  constitutes     a                 pected KL divergence between the empirical autore-
+                    t=1                                                        gressive heuristic policy ~ and the closed-form
+                                                                               standard DPO policy DPO is strictly bounded by:
+mathematically proper, normalized probability dis-
+                                                                                             ExD [DKL(~(· | x)  DPO(· | x))]
+tribution over sequence space ( y ~(y | x) = 1).                                                                                                    (36)
+
+By definition, our empirical token-weighted op-                                                      C (EDPO [|y|] + E~ [|y|]) .
+
+timal parameterization satisfies the equality:                                 B.5 Unified Suboptimality Guarantee via
+                                                                                      Total Variation Distance
+|y|         ~(yt | x, y<t)    =  1                      (29)
+            ref(yt | x, y<t)       r(x, y) - log Z(x).                         We now unify Lemma 1 and Lemma 2 to bound the
+    wt log                                                                     final distance between our empirical heuristic pol-
+                                                                               icy ~ and the true intractable optimal policy opt.
+t=1                                                                            We map our KL bounds to Total Variation (TV)
+
+Expanding wt = 1 + t yields:
+
+log  ~(y | x)    +  R(~; x, y)   =  1          -  log Z(x).
+     ref(y | x)                       r(x, y)
+
+                                    
+
+                                                        (30)
+
+                                                                           14
+distance using Pinsker's inequality, which states                              (  0), the empirical policy behaves predictably
+                                                                               and stays bounded within a localized neighborhood
+that for any distributions P and Q, DTV(P, Q)                                  of the true mathematical optimum.
+
+1  DKL(P    Q).                                                                C Gradient Analysis
+2
+                                                                               The gradient of objective 5 is:
+Applying Pinsker's inequality to Lemma 1 and
+
+Lemma 2 gives:
+
+ExD[DTV(opt, DPO)]
+
+ ExD        1                                                                  L = -E(x,yw,yl)D  r (x, yl) - r (x, yw)
+            2 DKL (opt(· | x)  DPO(· | x))
+
+            C                               (37)
+
+ ExD        2 EyDPO [|y|] + Eyopt [|y|]                                                |yw |
+
+      C                                                                        |yw| awt log(ywt |x, yw<t)-
+ 2 EDPO [|y|] + Eopt [|y|] ,
+                                                                                        t=1
+where the first inequality comes from Pinsker's
+inequality, the second comes from equation 28 with                                    |yl |
+D containing only a single query x, the third comes
+from Jensen's inequality.                                                      |yl| atl log(ylt|x, yl<t) ,
+
+   Similarly, applying Pinsker's inequality, equa-                                    t=1
+tion 36 with D containing only a single query x,
+and Jensen's inequality, we get                                                                                         (41)
+
+                                                                               where r (x, y) = |y|  |y|  at  log    (yt |x,y<t )  .
+                                                                                                     t=1           ref (yt|x,y<t)
+
+                                                                               Similar to DPO, the (r (x, yl) - r (x, yw))
+
+                                                                               term scales up our combined gradient when the
+
+                                                                               reward margin between yw and yl is smaller or neg-
+
+ExD[DTV(~, DPO)]    C                                                          ative. The main difference from DPO is that we
+                     2 (EDPO [|y|] + E~ [|y|]).                                weigh the gradient of each token at position t by at,
+
+                                                   (38)                        so that higher-weighted tokens get more gradient
+
+   Finally, by utilizing the triangle inequality prop-                         updates and the model learns more on these tokens.
+erty of Total Variation distances, we bound the
+direct distance between the empirical heuristic and                            D Token Matching
+the true functional optimum:
+                                                                               We note that certain attention scores may not be
+ DTV(opt, ~)  DTV(opt, DPO) + DTV(~, DPO).                                     matched to any tokens, and certain tokens may not
+                                                                     (39)      be assigned an attention weight. This is because
+                                                                               when we extract the attention weights in § 2.5,
+   Taking expectations over D and substituting                                 the response y is tokenized with the pairwise judge
+Equations 37 and 38 leads directly to our main                                 prompt as the surrounding context. During training,
+result.                                                                        y is tokenized with a different surrounding context,
+                                                                               and consequently, the first and last several tokens
+Theorem 1 (TwDPO Suboptimality Consistancy).                                   do not match the original tokens extracted from the
+Under Assumptions 1 and 2, the expected To-                                    pairwise judge prompt. In case no perfect match is
+tal Variation distance between the empirical au-                               found, we use the "edit_distance" Python library to
+toregressive heuristic policy ~ and the true, in-                              match the attention weight to the response tokens
+tractable token-weighted optimal policy opt is                                 during training. For tokens without a match, we
+strictly bounded by O( ):                                                      assign a weight of 0. We observe that in most
+                                                                               cases, more than 95% of the tokens are matched to
+ExD[DTV(opt(· | x), ~(· | x))]   C                                             attention weights.
+                                  2
+
+   EDPO [|y|] + Eopt [|y|] +  EDPO [|y|] + E~ [|y|] .
+                                                       (40)
+                                                                               E Hyperparameters
+
+   This theorem provides a rigorous theoretical                                Training. We tune our training  in the range
+safety net for TwDPO. It demonstrates that while                               {2e-2, 1e-2, 5e-3, 1e-3} and show the final training
+a clean closed-form sequence-level derivation is                               hyperparameters for AttentionPOfor both LLaMA-
+structurally impossible due to token-weight expec-                             3-8B-Base-SFT and LLaMA-3-8B-Instruct in Fig-
+tation coupling, the empirical objective remains                               ure 6. We train for around 2K steps and validate
+mathematically consistent. As long as the atten-                               every 500 steps to pick the best checkpoint for
+tion variance deviation from uniform is controlled                             evaluation. For the baselines except TDPO and
+
+                                                                           15
+Parameter              Value                             Parameter                       Value
+
+Max Context Length       2048                            Max New Tokens            1024
+Max Prompt Length        1800                            Temperature               varies
+Learning Rate            1e-6                            Judge Max New Tokens      2048
+                         5e-3                            Judge Temperature
+Batch Size                32                                                         0
+# Epochs
+# Train Examples           1                             Table 8: Hyperparameters for MT-Bench. We use the
+# Validation Examples   60K                              default temperature, which varies between different task
+Scheduler                2K                              subsets.
+Warmup Ratio           Cosine
+Optimizer                                                Parameter                       Value
+                          0.1
+                       AdamW                             Max New Tokens                2048
+                                                         Temperature                     0
+Table 6: Training Hyperparameters                        Judge Max New Tokens
+                                                         Judge Temperature            16000
+TI-DPO, we take the existing checkpoints from            Baseline Model                  0
+Meng et al. (2024) and use their hyperparameters.
+For TDPO and TI-DPO, since the original method                                     GPT-4-0314
+is applied on different task and training datasets,
+we retrain new checkpoints on our datasets. For          Table 9: Hyperparameters for ArenaHard
+TDPO, we use the TDPO2 variant due to its su-
+perior performance over TPO1, as reported in the         F Additional Results
+original paper. We tune  in the range {1e-2, 1e-1}
+and adopt the default for other hyperparameters.         F.1 Results on other models
+The final hyperparameters are  = 1e-2,  =
+0.5, Learning Rate = 5e-6. For TI-DPO, we tune           We additionally experiment with zephyr-7b-sft-full
+ in the range {1e-2, 1e-1} and Learning Rate in          (Tunstall et al., 2023), which is a model supervised-
+the range {5e-6, 1e-6, 1e-5}. We adopt the de-           finetuned from Mistral-7B-v0.1 (Jiang et al., 2023a)
+fault for the other hyperparameters. The final hy-       on UltraChat-200K (Ding et al., 2023). We denote
+perparameters are  = 1e-2,  = 0.5, triplet =             this model as Mistral-7B-Base-SFT. We use the
+1e-3,  = 0.1,  = 0.7, Learning Rate = 5e-6.              same UltraFeedback binarized dataset (Cui et al.,
+                                                         2024) (HuggingFaceH4/ultrafeedback_binarized)
+Parameter              Value                             and the same hyperparameters to train it. The re-
+                                                         sults are shown in Table 10.
+Max New Tokens                 4096
+Temperature                     0.7                         Compared with ref , AttentionPO significantly
+Top K                           50                       enhances performances across different bench-
+Top P                           0.9                      marks. We observe a 14% increase on AlpacaEval,
+Presence Penalty                0.1                      a 0.82 increase on MT-Bench, and a 12% increase
+Frequency Penalty               0.1                      on ArenaHard. In addition, AttentionPO outper-
+Judge Max New Tokens             1                       forms DPO in terms of AlpacaEval and ArenaHard,
+Judge Temperature               1.0                      but DPO has a higher MT-Bench score.
+Baseline Model        GPT4-1106-preview
+                                                         F.2 Using attentions from other models
+
+                                                         We investigate whether attention weights from one
+                                                         model can be used to train another model. In par-
+
+Table 7: Hyperparameters for AlpacaEval                                ref =Mistral-7B-Base-SFT
+
+                                                                       AlpacaEval  MT ArenaHard
+
+                                                                       LR  WR  Score  WR 
+
+Evaluation. The default hyperparameters are              Base          8.77 4.20 4.54           2.26
+used whenever they are available. See the details        +DPO          18.56 14.62 5.85         12.45
+in Figure 7, 8, and 9.                                   +AttentionPO  22.39 19.47 5.36         13.88
+
+                                                         Table 10: Results on Mistral-7B-Base-SFT.
+
+                                                     16
+                           ref =LLaMA-3-8B-Base-SFT              ref =LLaMA-3-8B-Instruct
+
+                     AlpacaEval  MT ArenaHard                 AlpacaEval       MT ArenaHard
+
+                     LR  WR  Score  WR                        LR  WR  Score  WR 
+
+Base                 9.20 4.63 5.47                    9.92   33.60 32.60 6.78    37.57
++DPO                                                   38.54                      53.98
++AttentionPO         22.88 17.70 6.54                  49.72  49.02 44.72 6.73    52.06
+w/ attn from sft                                                                  45.71
+w/ attn from inst    21.55 20.23 6.52                    -    60.77 58.29 7.19
+                                                       58.21                        -
+                     -      -    -                            48.54 44.67 6.99
+
+                     26.97 27.74 6.44                         -  -             -
+
+                     Table 11: Results of using attentions from other models.
+
+ticular, we use the attentions from LLaMA-3-8B-            mance boost does not come from verbosity.
+Base-SFT to train LLaMA-3-8B-Instruct (w/ attn
+from sft) and vice versa (w/ attn from inst).              G Examples
+The results are shown in Table 11.
+                                                           We show an example of attention weights for
+   Training the SFT model with attentions from             LLaMA-3-8B-Base-SFT in Figure 4 and LLaMA-
+the stronger Instruct model (w/ attn from inst)            3-8B-Instruct in Figure 5.
+leads to a further increase in performance on Al-
+pacaEval and ArenaHard on top of the original At-          H Compute
+tentionPO results. In contrast, training the instruc-
+tion model with attentions from the SFT model (w/          We run all experiments on a single node with 40
+attn from sft) gives worse performance than the            CPU cores, 256 GB of memory, and 2 Nvidia A100
+original AttentionPO, but the results are nonethe-         80 GB GPUs.
+less better than ref by a significant margin across
+benchmarks. This suggests that attentions from a           I Prompt
+stronger model gives stronger performance. At-
+tentionPO can still deliver performance gains even
+with attentions from a model weaker than ref , but
+to a lesser extent.
+
+F.3 Analysis of Response Length
+
+                  ref =SFT    ref =Instruct
+              WR  #Tokens
+                            WR  #Tokens
+Base          9.92   1254
++RRHF         26.00  1506   37.57 580
++SLiC-HF      13.08  556    41.91 506
++DPO          38.54  921    42.76 575
++TDPO         12.09  1233   53.98 533
++TI-DPO       10.14  1238   41.00 565
++IPO          34.56  675    38.73 585
++CPO          36.04  1588   50.50 546
++KTO          18.28  516    52.07 631
++ORPO         17.32  594    48.98 535
++R-DPO        28.72  731    44.64 540
++SimPO        47.01  796    54.98 524
++AttentionPO  49.72  1157   54.94 505
+                            52.06 553
+
+Table 12: ArenaHard Results. WR: Win Rate against
+GPT-4-0314. #Tokens: Number of response tokens.
+
+We report the length of generated responses on Are-
+naHard in Table 12. For both the SFT and Instruct
+model, responses produced by AttentionPO are not
+longer than those from either the base model or
+other baseline methods. This shows that the perfor-
+
+                                                       17
+     Prompt: Which activity belongs to ceremony? Self-introduction or group
+                discussion?
+
+Response yw: Self -int roduction is a form of ceremony . In contrast ,
+                   group discussion is a type of communication or social
+                     interaction that usually occurs after a group has been
+                   formed . So , self -int roduction is an example of a
+                   ceremony , while group discussion is
+
+Response yl:  C er emon ies can include various     activities , but
+
+              generally , self -int roduction is more likely to be a part
+
+              of a ceremony than a group discussion . Self -int rodu
+
+              ctions are often used in formal events and gatherings to
+
+              help        participants  become familiar with one another .
+
+              However , it 's important to remember that the specific
+
+              activities  included in a ceremony can vary depending on the
+
+              type and purpose of the
+
+              0.02 0.04 0.06 0.08 0.10 0.12 0.14 0.16
+                                      Attention Score
+
+              Figure 4: An example for LLaMA-3-8B-Base-SFT.
+
+Prompt:       Given the task definition and input, reply with output. Given a text,
+              write a compressed version of it in a single sentence. This little
+              museum celebrates the ingenuity and courage of those who sought to
+              escape to the West, and commemorates those who died trying to do so.
+              Exhibits include the shopping cart in which a mother smuggled her infant
+              son across the border.
+
+Response yw:  This museum honors the bravery and resilience of those who
+               attempted to flee to the West , showcasing a shopping cart
+
+              used to smugg le an infant across the border , among other
+
+Response yl:  This little museum honors  the ing enuity and courage of
+              escape es to the West ,
+              cart used to smugg le an   featuring  exhibits like a shopping
+
+                                         infant across the
+
+              0.02 0.04 0.06 0.08 0.10 0.12 0.14
+                                      Attention Score
+
+               Figure 5: An example for LLaMA-3-8B-Instruct.
+
+                                         18
+Pairwise Judge Prompt
+
+Please act as an impartial judge and evaluate the quality of the two responses to the user prompt displayed below. You will be given
+answer A and answer B. Your job is to evaluate which answer is better.
+Consider if the answers are helpful, relevant, and concise. Helpful means the answer correctly responds to the prompt or follows the
+instructions. Relevant means all parts of the response closely connect or are appropriate to what is being asked. Concise means the
+response is clear and not verbose or excessive.
+Then consider the creativity and novelty of the answers when needed. Finally, identify any missing important information in the
+answers that would be beneficial to include when responding to the user prompt.
+After providing your explanation, you must output exactly one of the following choices as your final verdict:
+1. Answer A is better: A
+2. Answer B is better: B
+<|The Start of User Prompt|>
+{question}
+<|The End of User Prompt|>
+<|The Start of Answer A|>
+{answer_a}
+<|The End of Answer A|>
+<|The Start of Answer B|>
+{answer_b}
+<|The End of Answer B|>
+Now, output one of the following identifiers and nothing else (no quotes, no spaces, no new lines, no thinking or reasoning, ...): A or
+B.
+Your choice:
+
+                                             Figure 6: Pairwise Judge Prompt
+
+Verbalized Self Judge System Prompt
+
+You are an expert in linguistics. Given a question and a response, split the response into parts and rate the importance of each part
+relative to the user's question on a scale of 1 (filler) to 5 (critical content).
+## Guidelines
+* Split the response into parts that are as fine-grained as possible. The split needs to be on phrase-level or word-level. Try not to
+simply split by sentences or paragraphs, as this is too coarse.
+* The parts need to be a disjoint partition of the original response. When concatenated, they should cover all the tokens in the
+original response. Each part needs to be non-empty. Different parts cannot overlap with each other.
+* Part M needs to contain text that immediately follow part M-1.
+* For example, given a response consisting of 5 tokens (i.e., resposne = "t1 t2 ... t5"), (part_1="t1 t2" part_2="t3 t4 t5") is a legal split,
+(part_1="t1 t2" part_2="t4 t5") is an illegal split.
+## Format
+* Output ONLY a JSON list of tuples in the format: [["part_1_text", score_1], ["part_2_text", score_2] ..., ["part_M_text", score_(M)]]
+* The accompanied score for each part needs to be an integer from 1 to 5.
+
+                                    Figure 7: Verbalized Self-judge System Prompt
+
+Verbalized Self Judge User Prompt
+
+Question: {prompt}
+Response: {tokens}
+
+                                      Figure 8: Verbalized Self-judge User Prompt
+
+                                                          19
+

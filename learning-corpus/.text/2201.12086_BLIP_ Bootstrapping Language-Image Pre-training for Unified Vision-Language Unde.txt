@@ -1,0 +1,775 @@
+                                         BLIP: Bootstrapping Language-Image Pre-training for
+                                        Unified Vision-Language Understanding and Generation
+
+                                        Junnan Li Dongxu Li Caiming Xiong Steven Hoi
+                                                            Salesforce Research
+
+                                          https://github.com/salesforce/BLIP
+
+arXiv:2201.12086v2 [cs.CV] 15 Feb 2022                          Abstract                                     "blue sky bakery in  Filt
+
+                                              Vision-Language Pre-training (VLP) has ad-                     sunset park "
+                                              vanced the performance for many vision-language
+                                              tasks. However, most existing pre-trained mod-                 "chocolate cake
+                                              els only excel in either understanding-based tasks
+                                              or generation-based tasks. Furthermore, perfor-                with cream frosting
+                                              mance improvement has been largely achieved
+                                              by scaling up the dataset with noisy image-text           Cap  and chocolate        Filt
+                                              pairs collected from the web, which is a subop-
+                                              timal source of supervision. In this paper, we                 sprinkles on top"
+                                              propose BLIP, a new VLP framework which trans-
+                                              fers flexibly to both vision-language understand-         Figure 1. We use a Captioner (Cap) to generate synthetic captions
+                                              ing and generation tasks. BLIP effectively uti-           for web images, and a Filter (Filt) to remove noisy captions.
+                                              lizes the noisy web data by bootstrapping the
+                                              captions, where a captioner generates synthetic           collected from the web. Despite the performance gain ob-
+                                              captions and a filter removes the noisy ones. We          tained by scaling up the dataset, our paper shows that the
+                                              achieve state-of-the-art results on a wide range of       noisy web text is suboptimal for vision-language learning.
+                                              vision-language tasks, such as image-text retrieval
+                                              (+2.7% in average recall@1), image captioning             To this end, we propose BLIP: Bootstrapping Language-
+                                              (+2.8% in CIDEr), and VQA (+1.6% in VQA                   Image Pre-training for unified vision-language understand-
+                                              score). BLIP also demonstrates strong general-            ing and generation. BLIP is a new VLP framework which
+                                              ization ability when directly transferred to video-       enables a wider range of downstream tasks than existing
+                                              language tasks in a zero-shot manner. Code, mod-          methods. It introduces two contributions from the model
+                                              els, and datasets are released.                           and data perspective, respectively:
+
+                                        1. Introduction                                                 (a) Multimodal mixture of Encoder-Decoder (MED): a new
+                                                                                                        model architecture for effective multi-task pre-training and
+                                        Vision-language pre-training has recently received tremen-      flexible transfer learning. An MED can operate either as
+                                        dous success on various multimodal downstream tasks.            a unimodal encoder, or an image-grounded text encoder,
+                                        However, existing methods have two major limitations:           or an image-grounded text decoder. The model is jointly
+                                                                                                        pre-trained with three vision-language objectives: image-
+                                        (1) Model perspective: most methods either adopt an             text contrastive learning, image-text matching, and image-
+                                        encoder-based model (Radford et al., 2021; Li et al., 2021a),   conditioned language modeling.
+                                        or an encoder-decoder (Cho et al., 2021; Wang et al., 2021)
+                                        model. However, encoder-based models are less straightfor-      (b) Captioning and Filtering (CapFilt): a new dataset boos-
+                                        ward to directly transfer to text generation tasks (e.g. image  trapping method for learning from noisy image-text pairs.
+                                        captioning), whereas encoder-decoder models have not been       We finetune a pre-trained MED into two modules: a cap-
+                                        successfully adopted for image-text retrieval tasks.            tioner to produce synthetic captions given web images, and
+                                                                                                        a filter to remove noisy captions from both the original web
+                                        (2) Data perspective: most state-of-the-art methods (e.g.,      texts and the synthetic texts.
+                                        CLIP (Radford et al., 2021), ALBEF (Li et al., 2021a),
+                                        SimVLM (Wang et al., 2021)) pre-train on image-text pairs       We perform extensive experiments and analysis, and make
+                                                                                                        the following key observations.
+
+                                                                                                        · We show that the captioner and the filter work together to
+                                                                                                          achieve substantial performance improvement on various
+                                                                                                          downstream tasks by bootstrapping the captions. We also
+                                                                                                          find that more diverse captions yield larger gains.
+
+                                                                                                        · BLIP achieves state-of-the-art performance on a wide
+                                                                                                          range of vision-language tasks, including image-text re-
+BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation
+
+                              ITC                                               ITM                              LM
+
+                                       Feed Forward                             Feed Forward                     Feed Forward
+
+         Feed Forward
+
+N×                                 N×  Cross Attention                          Cross Attention                  Cross Attention
+              Self Attention
+
+Image                                  Bi Self-Att                              Bi Self-Att                      Causal Self-Att
+Encoder
+
+                              Text                              Image-grounded                   Image-grounded
+
+                              Encoder "[CLS] +      "           Text encoder "[Encode] +      " Text decoder "[Decode] +          "
+
+                                                                                              "a little girl holding a kitten next to a blue fence"
+
+Figure 2. Pre-training model architecture and objectives of BLIP (same parameters have the same color). We propose multimodal mixture
+of encoder-decoder, a unified vision-language model which can operate in one of the three functionalities: (1) Unimodal encoder is
+trained with an image-text contrastive (ITC) loss to align the vision and language representations. (2) Image-grounded text encoder uses
+additional cross-attention layers to model vision-language interactions, and is trained with a image-text matching (ITM) loss to distinguish
+between positive and negative image-text pairs. (3) Image-grounded text decoder replaces the bi-directional self-attention layers with
+causal self-attention layers, and shares the same cross-attention layers and feed forward networks as the encoder. The decoder is trained
+with a language modeling (LM) loss to generate captions given images.
+
+  trieval, image captioning, visual question answering, vi-     encoder-based models (Li et al., 2021a;b; Radford et al.,
+  sual reasoning, and visual dialog. We also achieve state-of-  2021) nor encoder-decoder models (Cho et al., 2021; Wang
+  the-art zero-shot performance when directly transferring      et al., 2021) can excel at both types of tasks, whereas a single
+  our models to two video-language tasks: text-to-video         unified encoder-decoder (Zhou et al., 2020) also limits the
+  retrieval and videoQA.                                        model's capability. Our proposed multimodal mixture of
+                                                                encoder-decoder model offers more flexibility and better
+2. Related Work                                                 performance on a wide range of downstream tasks, in the
+                                                                meantime keeping the pre-training simple and efficient.
+2.1. Vision-language Pre-training
+                                                                2.2. Knowledge Distillation
+Vision-language pre-training (VLP) aims to improve per-
+formance of downstream vision and language tasks by pre-        Knowledge distillation (KD) (Hinton et al., 2015) aims to
+training the model on large-scale image-text pairs. Due to      improve the performance of a student model by distilling
+the prohibitive expense of acquiring human-annotated texts,     knowledge from a teacher model. Self-distillation is a spe-
+most methods (Chen et al., 2020; Li et al., 2020; 2021a;        cial case of KD where the teacher and student have equal
+Wang et al., 2021; Radford et al., 2021) use image and          sizes. It has been shown to be effective for image classi-
+alt-text pairs crawled from the web (Sharma et al., 2018;       fication (Xie et al., 2020), and recently for VLP (Li et al.,
+Changpinyo et al., 2021; Jia et al., 2021), Despite the use of  2021a). Different from mostly existing KD methods which
+simple rule-based filters, noise is still prevalent in the web  simply enforce the student to have the same class predic-
+texts. However, the negative impact of the noise has been       tions as the teacher, our proposed CapFilt can be interpreted
+largely overlooked, shadowed by the performance gain ob-        as a more effective way to perform KD in the context of
+tained from scaling up the dataset. Our paper shows that the    VLP, where the captioner distills its knowledge through
+noisy web texts are suboptimal for vision-language learning,    semantically-rich synthetic captions, and the filter distills
+and proposes CapFilt that utilizes web datasets in a more       its knowledge by removing noisy captions.
+effective way.
+                                                                2.3. Data Augmentation
+There have been many attempts to unify various vision
+and language tasks into a single framework (Zhou et al.,        While data augmentation (DA) has been widely adopted in
+2020; Cho et al., 2021; Wang et al., 2021). The biggest         computer vision (Shorten & Khoshgoftaar, 2019), DA for
+challenge is to design model architectures that can perform     language tasks is less straightforward. Recently, generative
+both understanding-based tasks (e.g. image-text retrieval)      language models have been used to synthesize examples
+and generation-based tasks (e.g. image captioning). Neither     for various NLP tasks (Kumar et al., 2020; Anaby-Tavor
+BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation
+
+et al., 2020; Puri et al., 2020; Yang et al., 2020). Differ-      former and the text transformer by encouraging positive
+ent from these methods which focus on the low-resource            image-text pairs to have similar representations in contrast
+language-only tasks, our method demonstrates the advan-           to the negative pairs. It has been shown to be an effective
+tage of synthetic captions in large-scale vision-language         objective for improving vision and language understand-
+pre-training.                                                     ing (Radford et al., 2021; Li et al., 2021a). We follow the
+                                                                  ITC loss by Li et al. (2021a), where a momentum encoder
+3. Method                                                         is introduced to produce features, and soft labels are created
+                                                                  from the momentum encoder as training targets to account
+We propose BLIP, a unified VLP framework to learn from            for the potential positives in the negative pairs.
+noisy image-text pairs. This section first introduces our new
+model architecture MED and its pre-training objectives, and       Image-Text Matching Loss (ITM) activates the image-
+then delineates CapFilt for dataset bootstrapping.                grounded text encoder. It aims to learn image-text mul-
+                                                                  timodal representation that captures the fine-grained align-
+3.1. Model Architecture                                           ment between vision and language. ITM is a binary clas-
+                                                                  sification task, where the model uses an ITM head (a lin-
+We employ a visual transformer (Dosovitskiy et al., 2021)         ear layer) to predict whether an image-text pair is positive
+as our image encoder, which divides an input image into           (matched) or negative (unmatched) given their multimodal
+patches and encodes them as a sequence of embeddings,             feature. In order to find more informative negatives, we
+with an additional [CLS] token to represent the global im-        adopt the hard negative mining strategy by Li et al. (2021a),
+age feature. Compared to using pre-trained object detectors       where negatives pairs with higher contrastive similarity in a
+for visual feature extraction (Chen et al., 2020), using a ViT    batch are more likely to be selected to compute the loss.
+is more computation-friendly and has been adopted by the
+more recent methods (Li et al., 2021a; Kim et al., 2021).         Language Modeling Loss (LM) activates the image-
+                                                                  grounded text decoder, which aims to generate textual de-
+In order to pre-train a unified model with both understanding     scriptions given an image. It optimizes a cross entropy loss
+and generation capabilities, we propose multimodal mixture        which trains the model to maximize the likelihood of the
+of encoder-decoder (MED), a multi-task model which can            text in an autoregressive manner. We apply a label smooth-
+operate in one of the three functionalities:                      ing of 0.1 when computing the loss. Compared to the MLM
+(1) Unimodal encoder, which separately encodes image              loss that has been widely-used for VLP, LM enables the
+and text. The text encoder is the same as BERT (Devlin et al.,    model with the generalization capability to convert visual
+2019), where a [CLS] token is appended to the beginning           information into coherent captions.
+of the text input to summarize the sentence.
+(2) Image-grounded text encoder, which injects visual             In order to perform efficient pre-training while leveraging
+information by inserting one additional cross-attention (CA)      multi-task learning, the text encoder and text decoder share
+layer between the self-attention (SA) layer and the feed          all parameters except for the SA layers. The reason is that
+forward network (FFN) for each transformer block of the           the differences between the encoding and decoding tasks are
+text encoder. A task-specific [Encode] token is appended          best captured by the SA layers. In particular, the encoder
+to the text, and the output embedding of [Encode] is used         employs bi-directional self-attention to build representations
+as the multimodal representation of the image-text pair.          for the current input tokens, while the decoder employs
+(3) Image-grounded text decoder, which replaces the bi-           causal self-attention to predict next tokens. On the other
+directional self-attention layers in the image-grounded text      hand, the embedding layers, CA layers and FFN function
+encoder with causal self-attention layers. A [Decode]             similarly between encoding and decoding tasks, therefore
+token is used to signal the beginning of a sequence, and an       sharing these layers can improve training efficiency while
+end-of-sequence token is used to signal its end.                  benefiting from multi-task learning,
+
+3.2. Pre-training Objectives                                      3.3. CapFilt
+
+We jointly optimize three objectives during pre-training,         Due to the prohibitive annotation cost, there exist a lim-
+with two understanding-based objectives and one generation-       ited number of high-quality human-annotated image-text
+based objective. Each image-text pair only requires one for-      pairs {(Ih, Th)} (e.g., COCO (Lin et al., 2014)). Recent
+ward pass through the computational-heavier visual trans-         work (Li et al., 2021a; Wang et al., 2021) utilizes a much
+former, and three forward passes through the text trans-          larger number of image and alt-text pairs {(Iw, Tw)} that
+former, where different functionalities are activated to com-     are automatically collected from the web. However, the
+pute the three losses as delineated below.                        alt-texts often do not accurately describe the visual content
+                                                                  of the images, making them a noisy signal that is suboptimal
+Image-Text Contrastive Loss (ITC) activates the unimodal          for learning vision-language alignment.
+encoder. It aims to align the feature space of the visual trans-
+BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation
+
+     Model Pretraining          Filter             Dataset Bootstrapping                          To model
+ = !, ! + ", "           (Image-grounded                  Filtering
+                                                                                                  To data
+   Pre-train               Text Encoder)                                    !, ! + !, #
+  Multimodal Mixture of                                                                      !: web images
+                         ITC&ITM finetune                       !, !                         ": human-annotated
+      Encoder-Decoder                        ", "
+                                                                             = !, ! + !, #       images
+     Downstream Tasks                                                                + ", "
+                                                                                             !: web texts
+                         LM finetune                            {! }                         !: filtered web texts
+                                                                                             #: synthetic texts
+                             Captioner                                !, #                   #: filtered synthetic
+                         (Image-grounded
+                                                   Captioning                                    texts
+                           Text Decoder)                                                     ": human-annotated
+
+                                                                                                 texts
+
+Figure 3. Learning framework of BLIP. We introduce a captioner to produce synthetic captions for web images, and a filter to remove
+noisy image-text pairs. The captioner and filter are initialized from the same pre-trained model and finetuned individually on a small-scale
+human-annotated dataset. The bootstrapped dataset is used to pre-train a new model.
+
+We propose Captioning and Filtering (CapFilt), a new            2400 (ViT-L). We use AdamW (Loshchilov & Hutter, 2017)
+method to improve the quality of the text corpus. Figure 3      optimizer with a weight decay of 0.05. The learning rate
+gives an illustration of CapFilt. It introduces two modules:    is warmed-up to 3e-4 (ViT-B) / 2e-4 (ViT-L) and decayed
+a captioner to generate captions given web images, and a        linearly with a rate of 0.85. We take random image crops of
+filter to remove noisy image-text pairs. Both the captioner     resolution 224 × 224 during pre-training, and increase the
+and the filter are initialized from the same pre-trained MED    image resolution to 384 × 384 during finetuning. We use
+model, and finetuned individually on the COCO dataset.          the same pre-training dataset as Li et al. (2021a) with 14M
+The finetuning is a lightweight procedure.                      images in total, including two human-annotated datasets
+                                                                (COCO and Visual Genome (Krishna et al., 2017)), and
+Specifically, the captioner is an image-grounded text de-       three web datasets (Conceptual Captions (Changpinyo et al.,
+coder. It is finetuned with the LM objective to decode texts    2021), Conceptual 12M (Changpinyo et al., 2021), SBU cap-
+given images. Given the web images Iw, the captioner gen-       tions (Ordonez et al., 2011)). We also experimented with an
+erates synthetic captions Ts with one caption per image.        additional web dataset, LAION (Schuhmann et al., 2021),
+The filter is an image-grounded text encoder. It is finetuned   which contains 115M images with more noisy texts1. More
+with the ITC and ITM objectives to learn whether a text         details about the datasets can be found in the appendix.
+matches an image. The filter removes noisy texts in both
+the original web texts Tw and the synthetic texts Ts, where     4.2. Effect of CapFilt
+a text is considered to be noisy if the ITM head predicts it
+as unmatched to the image. Finally, we combine the filtered     In Table 1, we compare models pre-trained on different
+image-text pairs with the human-annotated pairs to form a       datasets to demonstrate the efficacy of CapFilt on down-
+new dataset, which we use to pre-train a new model.             stream tasks, including image-text retrieval and image cap-
+                                                                tioning with finetuned and zero-shot settings.
+4. Experiments and Discussions
+                                                                When only the captioner or the filter is applied to the dataset
+In this section, we first introduce pre-training details. Then  with 14M images, performance improvement can be ob-
+we provide a detailed experimental analysis on our method.      served. When applied together, their effects compliment
+                                                                each other, leading to substantial improvements compared
+4.1. Pre-training Details                                       to using the original noisy web texts.
+
+Our models are implemented in PyTorch (Paszke et al.,           CapFilt can further boost performance with a larger dataset
+2019) and pre-trained on two 16-GPU nodes. The im-              and a larger vision backbone, which verifies its scalability
+age transformer is initialized from ViT pre-trained on Ima-     in both the data size and the model size. Furthermore, by
+geNet (Touvron et al., 2020; Dosovitskiy et al., 2021), and     using a large captioner and filter with ViT-L, performance
+the text transformer is initialized from BERTbase (Devlin       of the base model can also be improved.
+et al., 2019). We explore two variants of ViTs: ViT-B/16
+and ViT-L/16. Unless otherwise specified, all results re-           1We only download images whose shorter edge is larger than
+ported in this paper as "BLIP" uses ViT-B. We pre-train the     256 pixels from the original LAION400M. Due to the large size of
+model for 20 epochs using a batch size of 2880 (ViT-B) /        LAION, we only use 1/5 of it each epoch during pre-training.
+BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation
+
+Pre-train   Bootstrap Vision Retrieval-FT (COCO) Retrieval-ZS (Flickr) Caption-FT (COCO) Caption-ZS (NoCaps)
+dataset     C F backbone TR@1 IR@1 TR@1 IR@1 B@4 CIDEr CIDEr SPICE
+
+COCO+VG                                 78.4               60.7        93.9        82.1            38.0   127.8 102.2        13.9
++CC+SBU                                 79.1               61.5
+(14M imgs)           B     ViT-B/16     79.7               62.0        94.1        82.8            38.1   128.2 102.7        14.0
+            B                           80.6               63.1
+                                                                       94.4        83.6            38.4   128.9 103.4        14.2
+
+            B B                                                        94.8        84.9            38.6   129.7 105.1        14.4
+
+COCO+VG                                 79.6               62.0        94.3        83.6            38.8   130.1 105.4        14.2
++CC+SBU     B B ViT-B/16                81.9               64.3
++LAION      L L                         81.2               64.1        96.0        85.0            39.4   131.4 106.3        14.3
+
+                                                                       96.0        85.5            39.7   133.3 109.6        14.7
+
+(129M imgs)                ViT-L/16     80.6               64.1        95.1        85.5            40.3   135.5 112.5        14.7
+                  L  L                  82.4               65.1
+                                                                       96.7        86.7            40.4   136.7 113.2        14.8
+
+Table 1. Evaluation of the effect of the captioner (C) and filter (F) for dataset bootstrapping. Downstream tasks include image-text retrieval
+and image captioning with finetuning (FT) and zero-shot (ZS) settings. TR / IR@1: recall@1 for text retrieval / image retrieval. B/L:
+captioner or filter uses ViT-B / ViT-L as vision backbone.
+
+                        !: "from bridge                          !: "in front of a house                        !: "the current castle was
+                        near my house"                           door in Reichenfels,                           built in 1180, replacing a 9th
+                                                                 Austria"                                       century wooden castle"
+                        ": "a flock of birds
+                        flying over a lake at                    ": "a potted plant sitting                     ": "a large building with a lot
+                        sunset"                                  on top of a pile of rocks"                     of windows on it"
+
+Figure 4. Examples of the web text Tw and the synthetic text Ts. Green texts are accepted by the filter, whereas red texts are rejected.
+
+Generation     Noise       Retrieval-FT (COCO)             Retrieval-ZS (Flickr)   Caption-FT (COCO)            Caption-ZS (NoCaps)
+method         ratio       TR@1 IR@1                       TR@1 IR@1                B@4 CIDEr                   CIDEr SPICE
+
+None           N.A.        78.4                60.7        93.9        82.1             38.0       127.8        102.2  13.9
+Beam           19%
+Nucleus        25%         79.6                61.9        94.1        83.1             38.4       128.9        103.5  14.2
+
+                           80.6                63.1        94.8        84.9             38.6       129.7        105.1  14.4
+
+Table 2. Comparison between beam search and nucleus sampling for synthetic caption generation. Models are pre-trained on 14M images.
+
+Layers shared        #parameters  Retrieval-FT (COCO)            Retrieval-ZS (Flickr)       Caption-FT (COCO)  Caption-ZS (NoCaps)
+                                  TR@1 IR@1                      TR@1 IR@1                    B@4 CIDEr         CIDEr SPICE
+
+All                  224M         77.3               59.5        93.1        81.0            37.2        125.9 100.9   13.1
+All except CA        252M
+All except SA        252M         77.5               59.9        93.1        81.3            37.4        126.1 101.2   13.1
+None                 361M
+                                  78.4               60.7        93.9        82.1            38.0        127.8 102.2   13.9
+
+                                  78.3               60.5        93.6        81.9            37.8        127.4 101.8   13.9
+
+Table 3. Comparison between different parameter sharing strategies for the text encoder and decoder during pre-training.
+
+In Figure 4, we show some example captions and their                   highest probability. Nucleus sampling leads to evidently
+corresponding images, which qualitatively demonstrate the              better performance, despite being more noisy as suggested
+effect of the captioner to generate new textual descriptions,          by a higher noise ratio from the filter. We hypothesis that the
+and the filter to remove noisy captions from both the original         reason is that nucleus sampling generates more diverse and
+web texts and the synthetic texts. More examples can be                surprising captions, which contain more new information
+found in the appendix.                                                 that the model could benefit from. On the other hand, beam
+                                                                       search tends to generate safe captions that are common in
+4.3. Diversity is Key for Synthetic Captions                           the dataset, hence offering less extra knowledge.
+
+In CapFilt, we employ nucleus sampling (Holtzman et al.,               4.4. Parameter Sharing and Decoupling
+2020) to generate synthetic captions. Nucleus sampling is a
+stochastic decoding method, where each token is sampled                During pre-training, the text encoder and decoder share all
+from a set of tokens whose cumulative probability mass                 parameters except for the self-attention layers. In Table 3,
+exceeds a threshold p (p = 0.9 in our experiments). In                 we evaluate models pre-trained with different parameter
+Table 2, we compare it with beam search, a deterministic               sharing strategies, where pre-training is performed on the
+decoding method which aims to generate captions with the               14M images with web texts. As the result shows, sharing all
+      BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation
+
+Captioner &               Noise Retrieval-FT (COCO) Retrieval-ZS (Flickr) Caption-FT (COCO) Caption-ZS (NoCaps)
+Filter                    ratio TR@1 IR@1 TR@1 IR@1 B@4 CIDEr CIDEr SPICE
+
+Share parameters 8% 79.8               62.2          94.3                 83.7  38.4         129.0 103.5        14.2
+
+Decoupled                 25% 80.6     63.1          94.8                 84.9  38.6         129.7 105.1        14.4
+
+           Table 4. Effect of sharing parameters between the captioner and filter. Models are pre-trained on 14M images.
+
+Method                      Pre-train                COCO (5K test set)                      Flickr30K (1K test set)
+                            # Images
+                                             TR                           IR                 TR                 IR
+
+UNITER (Chen et al., 2020)  4M         R@1   R@5     R@10           R@1   R@5   R@10   R@1   R@5   R@10   R@1   R@5       R@10
+VILLA (Gan et al., 2020)    4M         65.7  88.6     93.8          52.9  79.9   88.0  87.3  98.0   99.2  75.6  94.1       96.8
+OSCAR (Li et al., 2020)     4M                                                         87.9  97.5   98.8  76.3  94.2       96.8
+UNIMO (Li et al., 2021b)    5.7M         -     -        -             -     -      -
+ALIGN (Jia et al., 2021)    1.8B       70.0  91.1     95.5          54.0  80.8   88.5    -     -      -     -     -          -
+ALBEF (Li et al., 2021a)    14M                                                        89.4  98.9   99.8  78.0  94.2       97.1
+                                         -     -        -             -     -      -   95.3  99.8  100.0  84.9  97.4       98.6
+                                       77.0  93.5     96.9          59.9  83.3   89.8  95.9  99.8  100.0  85.6  97.5       98.9
+                                       77.6  94.3     97.2          60.7  84.3   90.5
+
+BLIP                        14M        80.6 95.2 97.6 63.1 85.3 91.1 96.6 99.8 100.0 87.2 97.5 98.8
+BLIP                        129M       81.9 95.4 97.8 64.3 85.7 91.5 97.3 99.9 100.0 87.3 97.6 98.9
+BLIPCapFilt-L               129M       81.2 95.7 97.9 64.1 85.8 91.6 97.2 99.9 100.0 87.5 97.7 98.9
+
+BLIPViT-L                   129M 82.4 95.4 97.9 65.1 86.3 91.8 97.4 99.8 99.9 87.6 97.7 99.0
+
+Table 5. Comparison with state-of-the-art image-text retrieval methods, finetuned on COCO and Flickr30K datasets. BLIPCapFilt-L pre-trains
+a model with ViT-B backbone using a dataset bootstrapped by captioner and filter with ViT-L.
+
+Method         Pre-train    Flickr30K (1K test set)                 we briefly introduce each task and finetuning strategy. More
+               # Images                                             details can be found in the appendix.
+                            TR               IR
+                                                                    5.1. Image-Text Retrieval
+CLIP           400M       R@1 R@5 R@10 R@1 R@5 R@10
+ALIGN          1.8B       88.0 98.7 99.4 68.7 90.6 95.2             We evaluate BLIP for both image-to-text retrieval (TR) and
+ALBEF          14M        88.6 98.7 99.7 75.7 93.8 96.8             text-to-image retrieval (IR) on COCO and Flickr30K (Plum-
+                          94.1 99.5 99.7 82.8 96.3 98.1             mer et al., 2015) datasets. We finetune the pre-trained model
+                                                                    using ITC and ITM losses. To enable faster inference speed,
+BLIP           14M        94.8 99.7 100.0 84.9 96.7 98.3            we follow Li et al. (2021a) and first select k candidates
+                          96.0 99.9 100.0 85.0 96.8 98.6            based on the image-text feature similarity, and then rerank
+BLIP           129M       96.0 99.9 100.0 85.5 96.8 98.7            the selected candidates based on their pairwise ITM scores.
+                                                                    We set k = 256 for COCO and k = 128 for Flickr30K.
+BLIPCapFilt-L 129M
+                                                                    As shown in Table 5, BLIP achieves substantial performance
+BLIPViT-L 129M 96.7 100.0 100.0 86.7 97.3 98.7                      improvement compared with existing methods. Using the
+                                                                    same 14M pre-training images, BLIP outperforms the pre-
+Table 6. Zero-shot image-text retrieval results on Flickr30K.       vious best model ALBEF by +2.7% in average recall@1
+                                                                    on COCO. We also perform zero-shot retrieval by directly
+layers except for SA leads to better performance compared           transferring the model finetuned on COCO to Flickr30K.
+to not sharing, while also reducing the model size thus             The result is shown in Table 6, where BLIP also outperforms
+improveing training efficiency. If the SA layers are shared,        existing methods by a large margin.
+the model's performance would degrade due to the conflict
+between the encoding task and the decoding task.                    5.2. Image Captioning
+
+During CapFilt, the captioner and the filter are end-to-end         We consider two datasets for image captioning: No-
+finetuned individually on COCO. In Table 4, we study the            Caps (Agrawal et al., 2019) and COCO, both evaluated
+effect if the captioner and filter share parameters in the same     using the model finetuned on COCO with the LM loss. Sim-
+way as pre-training. The performance on the downstream              ilar as Wang et al. (2021), we add a prompt "a picture of"
+tasks decreases, which we mainly attribute to confirmation          at the beginning of each caption, which leads to slightly
+bias. Due to parameter sharing, noisy captions produced by          better results. As shown in Table 7, BLIP with 14M pre-
+the captioner are less likely to be filtered out by the filter, as  training images substantially outperforms methods using
+indicated by the lower noise ratio (8% compared to 25%).            a similar amount of pre-training data. BLIP with 129M
+                                                                    images achieves competitive performance as LEMON with
+5. Comparison with State-of-the-arts
+
+In this section, we compare BLIP to existing VLP methods
+on a wide range of vision-language downstream tasks2. Next
+
+    2we omit SNLI-VE from the benchmark because its test data
+has been reported to be noisy (Do et al., 2020)
+BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation
+
+Method                                       Pre-train       in-domain       NoCaps validation     overall      COCO Caption
+                                             #Images          CS        near-domain out-domain    CS             Karpathy test
+                                                                                                                B@4 C
+                                                                          CSCS
+
+Enc-Dec (Changpinyo et al., 2021)            15M        92.6 12.5 88.3 12.1 94.5 11.9 90.2 12.1 -                      110.9
+VinVL (Zhang et al., 2021)                   5.7M       103.1 14.2 96.1 13.8 88.3 12.1 95.5 13.5 38.2                  129.3
+LEMONbase (Hu et al., 2021)                  12M        104.5 14.6 100.7 14.0 96.7 12.4 100.4 13.8 -
+LEMONbase (Hu et al., 2021)                  200M       107.7 14.7 106.2 14.3 107.9 13.1 106.8 14.1 40.3                 -
+                                                                                                                       133.3
+BLIP                                         14M        111.3 15.1 104.5 14.4 102.4 13.7 105.1 14.4 38.6
+BLIP                                         129M       109.1 14.8 105.8 14.4 105.7 13.7 106.3 14.3 39.4               129.7
+BLIPCapFilt-L                                129M       111.8 14.9 108.6 14.8 111.5 14.2 109.6 14.7 39.7               131.4
+                                                                                                                       133.3
+
+LEMONlarge (Hu et al., 2021)                 200M       116.9 15.8 113.3 15.1 111.3 14.0 113.4 15.0 40.6               135.7
+SimVLMhuge (Wang et al., 2021)               1.8B       113.7 - 110.9 - 115.2 - 112.2 - 40.6                           143.3
+BLIPViT-L                                    129M       114.9 15.2 112.1 14.9 115.3 14.4 113.2 14.8 40.4               136.7
+
+Table 7. Comparison with state-of-the-art image captioning methods on NoCaps and COCO Caption. All methods optimize the cross-
+entropy loss during finetuning. C: CIDEr, S: SPICE, B@4: BLEU@4. BLIPCapFilt-L is pre-trained on a dataset bootstrapped by captioner
+and filter with ViT-L. VinVL and LEMON require an object detector pre-trained on 2.5M images with human-annotated bounding
+boxes and high resolution (800×1333) input images. SimVLMhuge uses 13× more training data and a larger vision backbone than ViT-L.
+
+(a) VQA                                               answer            Method         Pre-train  VQA           NLVR2
+
+                 Image                                Answer                           #Images test-dev test-std dev test-P
+                Encoder                              Decoder
+                 Image       Question                                   LXMERT         180K       72.42  72.54  74.90  74.50
+(b) NLVR!                     Encoder               "[Decode]"          UNITER         4M         72.70  72.91  77.18  77.85
+                                                                        VL-T5/BART     180K              71.3          73.6
+                  N×     "[Encode] + Q "                                OSCAR          4M           -    73.44    -    78.36
+                            true/false                                  SOHO           219K       73.16  73.47  78.07  77.32
+                                ...                                     VILLA          4M         73.25  73.67  76.37  79.30
+                                                                        UNIMO          5.6M       73.59  75.27  78.39
+                          Merge Layer                                   ALBEF          14M        75.06  76.04           -
+                                                                        SimVLMbase     1.8B       75.84  78.14    -    83.14
+                                                                                                  77.87         82.55  81.77
+                                                                        BLIP           14M               77.62  81.72
+                                                                        BLIP           129M       77.54  78.17
+          Image            Cross           Cross     Image              BLIPCapFilt-L  129M       78.24  78.32  82.67 82.30
+         Encoder         Attention       Attention  Encoder                                       78.25         82.48 83.08
+        Image #1                                                                                                82.15 82.24
+                                    ...             Image #2
+(c) VisDial
+                         "[Encode] + Text "                             Table 8. Comparison with state-of-the-art methods on VQA and
+                                                                        NLVR2. ALBEF performs an extra pre-training step for NLVR2.
+                                                    true/false          SimVLM uses 13× more training data and a larger vision back-
+                                                                        bone (ResNet+ViT) than BLIP.
+ Image                   Caption                     Dialog
+Encoder                  Encoder                    Encoder             Li et al., 2020), we follow Li et al. (2021a) and consider it as
+                                                                        an answer generation task, which enables open-ended VQA.
+             Image "[Encode] + C " "[Encode] + QA + Dialog History"     As shown in Figure 5(a), during finetuning, we rearrange the
+                                                                        pre-trained model, where an image-question is first encoded
+Figure 5. Model architecture for the downstream tasks. Q: ques-         into multimodal embeddings and then given to an answer
+tion; C: caption; QA: question-answer pair.                             decoder. The VQA model is finetuned with the LM loss
+                                                                        using ground-truth answers as targets.
+200M images. Note that LEMON requires a computational-
+heavy pre-trained object detector and higher resolution                 The results are shown in Table 8. Using 14M images,
+(800×1333) input images, leading to substantially slower                BLIP outperforms ALBEF by +1.64% on the test set. Us-
+inference time than the detector-free BLIP which uses lower             ing 129M images, BLIP achieves better performance than
+resolution (384×384) input images.                                      SimVLM which uses 13× more pre-training data and a
+                                                                        larger vision backbone with an additional convolution stage.
+5.3. Visual Question Answering (VQA)
+                                                                        5.4. Natural Language Visual Reasoning (NLVR2)
+VQA (Antol et al., 2015) requires the model to predict an an-
+swer given an image and a question. Instead of formulating              NLVR2 (Suhr et al., 2019) asks the model to predict whether
+VQA as a multi-answer classification task (Chen et al., 2020;           a sentence describes a pair of images. In order to enable rea-
+BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation
+
+Method      MRR    R@1    R@5    R@10    MR                        Method                       R1 R5 R10 MdR
+
+VD-BERT     67.44  54.02  83.96   92.33  3.53                      zero-shot
+VD-ViLBERT  69.10  55.88  85.50   93.29  3.25
+BLIP        69.41  56.44  85.90   93.30  3.20                      ActBERT (Zhu & Yang, 2020) 8.6 23.4 33.1 36
+
+                                                                   SupportSet (Patrick et al., 2021) 8.7 23.0 31.1 31
+
+Table 9. Comparison with state-of-the-art methods on VisDial v1.0  MIL-NCE (Miech et al., 2020) 9.9 24.0 32.4 29.5
+validation set. VD-ViLBERT (Murahari et al., 2020) pre-trains
+ViLBERT (Lu et al., 2019) with additional VQA data.                VideoCLIP (Xu et al., 2021) 10.4 22.2 30.0 -
+
+                                                                   FiT (Bain et al., 2021)      18.7 39.5 51.6 10
+
+                                                                   BLIP                         43.3 65.6 74.7 2
+
+                                                                   finetuning
+
+soning over two images, we make a simple modification to           ClipBERT (Lei et al., 2021)  22.0 46.8 59.9 6
+our pre-trained model which leads to a more computational-         VideoCLIP (Xu et al., 2021)  30.9 55.4 66.8 -
+efficient architecture than previous approaches (Li et al.,
+2021a; Wang et al., 2021). As shown in Figure 5(b), for            Table 10. Comparisons with state-of-the-art methods for text-to-
+each transformer block in the image-grounded text encoder,         video retrieval on the 1k test split of the MSRVTT dataset.
+there exist two cross-attention layers to process the two in-
+put images, and their outputs are merged and fed to the FFN.       Method                       MSRVTT-QA MSVD-QA
+The two CA layers are intialized from the same pre-trained
+weights. The merge layer performs simple average pooling           zero-shot
+in the first 6 layers of the encoder, and performs concate-
+nation followed by a linear projection in layer 6-12. An           VQA-T (Yang et al., 2021)    2.9   7.5
+MLP classifier is applied on the output embedding of the
+[Encode] token. As shown in Table 8, BLIP outperforms              BLIP                         19.2  35.2
+all existing methods except for ALBEF which performs an
+extra step of customized pre-training. Interestingly, perfor-      finetuning
+mance on NLVR2 does not benefit much from additional
+web images, possibly due to the domain gap between web             HME (Fan et al., 2019)       33.0  33.7
+data and downstream data.
+                                                                   HCRN (Le et al., 2020)       35.6  36.1
+5.5. Visual Dialog (VisDial)
+                                                                   VQA-T (Yang et al., 2021)    41.5  46.3
+VisDial (Das et al., 2017) extends VQA in a natural con-
+versational setting, where the model needs to predict an           Table 11. Comparisons with state-of-the-art methods for video
+answer not only based on the image-question pair, but also         question answering. We report top-1 test accuracy on two datasets.
+considering the dialog history and the image's caption. We
+follow the discriminative setting where the model ranks a          Despite the domain difference and lack of temporal mod-
+pool of answer candidates (Gan et al., 2019; Wang et al.,          eling, our models achieve state-of-the-art performance on
+2020; Murahari et al., 2020). As shown in Figure 5(c), we          both video-language tasks. For text-to-video retrieval, zero-
+concatenate image and caption embeddings, and pass them            shot BLIP even outperforms models finetuned on the target
+to the dialog encoder through cross-attention. The dialog          video dataset by +12.4% in recall@1. Further performance
+encoder is trained with the ITM loss to discriminate whether       improvement can be achieved if the BLIP model is used to
+the answer is true or false for a question, given the entire dia-  initialize a video-language model with temporal modeling
+log history and the image-caption embeddings. As shown in          (e.g. replace our ViT with a TimeSformer (Bertasius et al.,
+Table 9, our method achieves state-of-the-art performance          2021)) and finetuned on video data.
+on VisDial v1.0 validation set.
+                                                                   6. Additional Ablation Study
+5.6. Zero-shot Transfer to Video-Language Tasks
+                                                                   In this section, we provide additional ablation experiments
+Our image-language model has strong generalization ability         on CapFilt.
+to video-language tasks. In Table 10 and Table 11, we per-
+form zero-shot transfer to text-to-video retrieval and video       Improvement with CapFilt is not due to longer training.
+question answering, where we directly evaluate the models          Since the bootstrapped dataset contains more texts than the
+trained on COCO-retrieval and VQA, respectively. To pro-           original dataset, training for the same number of epochs
+cess video input, we uniformly sample n frames per video           takes longer with the bootstrapped dataset. To verify that
+(n = 8 for retrieval and n = 16 for QA), and concatenate           the effectiveness of CapFilt is not due to longer training,
+the frame features into a single sequence. Note that this          we replicate the web text in the original dataset so that it
+simple approach ignores all temporal information.                  has the same number of training samples per epoch as the
+                                                                   bootstrapped dataset. As shown in Table 12, longer training
+                                                                   using the noisy web texts does not improve performance.
+
+                                                                   A new model should be trained on the bootstrapped
+                                                                   dataset. The bootstrapped dataset is used to pre-train a
+                                                                   new model. We investigate the effect of continue training
+BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation
+
+CapFilt  #Texts  Retrieval-FT (COCO)  Retrieval-ZS (Flickr)           Caption-FT (COCO)  Caption-ZS (NoCaps)
+                 TR@1 IR@1            TR@1 IR@1                        B@4 CIDEr         CIDEr SPICE
+No       15.3M
+No       24.7M   78.4  60.7           93.9                      82.1  38.0  127.8        102.2  13.9
+Yes      24.7M
+                 78.3  60.5           93.7                      82.2  37.9  127.7        102.1  14.0
+
+                 80.6  63.1           94.8                      84.9  38.6  129.7        105.1  14.4
+
+Table 12. The original web texts are replicated to have the same number of samples per epoch as the bootstrapped dataset. Results verify
+that the improvement from CapFilt is not due to longer training time.
+
+Continue  Retrieval-FT (COCO)  Retrieval-ZS (Flickr)                  Caption-FT (COCO)  Caption-ZS (NoCaps)
+          TR@1 IR@1            TR@1 IR@1                               B@4 CIDEr         CIDEr SPICE
+Yes
+No               80.6  63.0           94.5  84.6                      38.5  129.9        104.5  14.2
+
+                 80.6  63.1           94.8  84.9                      38.6  129.7        105.1  14.4
+
+Table 13. Continue training the pre-trained model offers less gain compared to training a new model with the bootstrapped dataset.
+
+from the previous pre-trained model, using the bootstrapped        Zitnick, C. L., and Parikh, D. VQA: visual question
+dataset. Table 13 hows that continue training does not help.       answering. In ICCV, pp. 2425­2433, 2015.
+This observation agrees with the common practice in knowl-
+edge distillation, where the student model cannot be initial-   Bain, M., Nagrani, A., Varol, G., and Zisserman, A. Frozen
+ized from the teacher.                                             in time: A joint video and image encoder for end-to-end
+                                                                   retrieval. In ICCV, 2021.
+7. Conclusion
+                                                                Bertasius, G., Wang, H., and Torresani, L. Is space-time
+We propose BLIP, a new VLP framework with state-                   attention all you need for video understanding? In ICML,
+of-the-art performance on a wide range of downstream               2021.
+vision-language tasks, including understanding-based and
+generation-based tasks. BLIP pre-trains a multimodal mix-       Changpinyo, S., Sharma, P., Ding, N., and Soricut, R. Con-
+ture of encoder-decoder model using a dataset bootstrapped         ceptual 12M: Pushing web-scale image-text pre-training
+from large-scale noisy image-text pairs by injecting di-           to recognize long-tail visual concepts. In CVPR, 2021.
+verse synthetic captions and removing noisy captions. Our
+bootstrapped dataset are released to facilitate future vision-  Chen, Y., Li, L., Yu, L., Kholy, A. E., Ahmed, F., Gan, Z.,
+language research.                                                 Cheng, Y., and Liu, J. UNITER: universal image-text
+                                                                   representation learning. In ECCV, volume 12375, pp.
+There are a few potential directions that can further enhance     104­120, 2020.
+the performance of BLIP: (1) Multiple rounds of dataset
+bootstrapping; (2) Generate multiple synthetic captions per     Cho, J., Lei, J., Tan, H., and Bansal, M. Unifying vision-
+image to further enlarge the pre-training corpus; (3) Model        and-language tasks via text generation. arXiv preprint
+ensemble by training multiple different captioners and filters     arXiv:2102.02779, 2021.
+and combining their forces in CapFilt. We hope that our pa-
+per motivates future work to focus on making improvements       Das, A., Kottur, S., Gupta, K., Singh, A., Yadav, D., Moura,
+in both the model aspect and the data aspect, the bread and       J. M. F., Parikh, D., and Batra, D. Visual dialog. In CVPR,
+butter of vision-language research.                                pp. 1080­1089, 2017.
+
+References                                                      Devlin, J., Chang, M., Lee, K., and Toutanova, K. BERT:
+                                                                   pre-training of deep bidirectional transformers for lan-
+Agrawal, H., Anderson, P., Desai, K., Wang, Y., Chen, X.,          guage understanding. In Burstein, J., Doran, C., and
+   Jain, R., Johnson, M., Batra, D., Parikh, D., and Lee, S.       Solorio, T. (eds.), NAACL, pp. 4171­4186, 2019.
+   nocaps: novel object captioning at scale. In ICCV, pp.
+   8947­8956, 2019.                                             Do, V., Camburu, O.-M., Akata, Z., and Lukasiewicz, T. e-
+                                                                   snli-ve: Corrected visual-textual entailment with natural
+Anaby-Tavor, A., Carmeli, B., Goldbraich, E., Kantor, A.,          language explanations. arXiv preprint arXiv:2004.03744,
+   Kour, G., Shlomov, S., Tepper, N., and Zwerdling, N. Do         2020.
+   not have enough data? deep learning to the rescue! In
+  AAAI, pp. 7383­7390, 2020.                                    Dosovitskiy, A., Beyer, L., Kolesnikov, A., Weissenborn,
+                                                                   D., Zhai, X., Unterthiner, T., Dehghani, M., Minderer,
+Antol, S., Agrawal, A., Lu, J., Mitchell, M., Batra, D.,           M., Heigold, G., Gelly, S., Uszkoreit, J., and Houlsby, N.
+                                                                  An image is worth 16x16 words: Transformers for image
+                                                                   recognition at scale. In ICLR, 2021.
+BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation
+
+Fan, C., Zhang, X., Zhang, S., Wang, W., Zhang, C., and         Kumar, V., Choudhary, A., and Cho, E. Data augmentation
+   Huang, H. Heterogeneous memory enhanced multimodal              using pre-trained transformer models. arXiv preprint
+   attention model for video question answering. In CVPR,          arXiv:2003.02245, 2020.
+   pp. 1999­2007, 2019.
+                                                                Le, T. M., Le, V., Venkatesh, S., and Tran, T. Hierarchical
+Gan, Z., Cheng, Y., Kholy, A. E., Li, L., Liu, J., and Gao, J.     conditional relation networks for video question answer-
+   Multi-step reasoning via recurrent dual attention for vi-       ing. In CVPR, pp. 9972­9981, 2020.
+   sual dialog. In Korhonen, A., Traum, D. R., and Ma`rquez,
+   L. (eds.), ACL, pp. 6463­6474, 2019.                         Lei, J., Li, L., Zhou, L., Gan, Z., Berg, T. L., Bansal, M.,
+                                                                   and Liu, J. Less is more: Clipbert for video-and-language
+Gan, Z., Chen, Y., Li, L., Zhu, C., Cheng, Y., and Liu, J.         learning via sparse sampling. In CVPR, pp. 7331­7341,
+   Large-scale adversarial training for vision-and-language        2021.
+   representation learning. In Larochelle, H., Ranzato, M.,
+   Hadsell, R., Balcan, M., and Lin, H. (eds.), NeurIPS,        Li, J., Selvaraju, R. R., Gotmare, A. D., Joty, S., Xiong,
+   2020.                                                           C., and Hoi, S. Align before fuse: Vision and language
+                                                                   representation learning with momentum distillation. In
+Goyal, Y., Khot, T., Summers-Stay, D., Batra, D., and             NeurIPS, 2021a.
+   Parikh, D. Making the V in VQA matter: Elevating the
+   role of image understanding in visual question answering.    Li, W., Gao, C., Niu, G., Xiao, X., Liu, H., Liu, J., Wu,
+   In CVPR, pp. 6325­6334, 2017.                                   H., and Wang, H. UNIMO: towards unified-modal un-
+                                                                   derstanding and generation via cross-modal contrastive
+Hinton, G., Vinyals, O., and Dean, J. Distilling                   learning. In Zong, C., Xia, F., Li, W., and Navigli, R.
+   the knowledge in a neural network. arXiv preprint              (eds.), ACL, pp. 2592­2607, 2021b.
+   arXiv:1503.02531, 2015.
+                                                                Li, X., Yin, X., Li, C., Zhang, P., Hu, X., Zhang, L., Wang,
+Holtzman, A., Buys, J., Du, L., Forbes, M., and Choi, Y.           L., Hu, H., Dong, L., Wei, F., Choi, Y., and Gao, J. Oscar:
+  The curious case of neural text degeneration. In ICLR,           Object-semantics aligned pre-training for vision-language
+   2020.                                                           tasks. In ECCV, pp. 121­137, 2020.
+
+Hu, X., Gan, Z., Wang, J., Yang, Z., Liu, Z., Lu, Y., and       Lin, T., Maire, M., Belongie, S. J., Hays, J., Perona, P.,
+  Wang, L. Scaling up vision-language pre-training for             Ramanan, D., Dolla´r, P., and Zitnick, C. L. Microsoft
+   image captioning, 2021.                                         COCO: common objects in context. In Fleet, D. J., Pajdla,
+                                                                  T., Schiele, B., and Tuytelaars, T. (eds.), ECCV, volume
+Jia, C., Yang, Y., Xia, Y., Chen, Y.-T., Parekh, Z., Pham,         8693, pp. 740­755, 2014.
+   H., Le, Q. V., Sung, Y., Li, Z., and Duerig, T. Scaling up
+  visual and vision-language representation learning with       Loshchilov, I. and Hutter, F. Decoupled weight decay regu-
+   noisy text supervision. arXiv preprint arXiv:2102.05918,        larization. arXiv preprint arXiv:1711.05101, 2017.
+   2021.
+                                                                Lu, J., Batra, D., Parikh, D., and Lee, S. Vilbert: Pretraining
+Karpathy, A. and Li, F. Deep visual-semantic alignments for        task-agnostic visiolinguistic representations for vision-
+   generating image descriptions. In CVPR, pp. 3128­3137,          and-language tasks. In Wallach, H. M., Larochelle, H.,
+   2015.                                                           Beygelzimer, A., d'Alche´-Buc, F., Fox, E. B., and Garnett,
+                                                                   R. (eds.), NeurIPS, pp. 13­23, 2019.
+Kim, J., Jun, J., and Zhang, B. Bilinear attention networks.
+   In Bengio, S., Wallach, H. M., Larochelle, H., Grauman,      Miech, A., Alayrac, J.-B., Smaira, L., Laptev, I., Sivic, J.,
+   K., Cesa-Bianchi, N., and Garnett, R. (eds.), NIPS, pp.         and Zisserman, A. End-to-end learning of visual repre-
+  1571­1581, 2018.                                                 sentations from uncurated instructional videos. In CVPR,
+                                                                   pp. 9879­9889, 2020.
+Kim, W., Son, B., and Kim, I. Vilt: Vision-and-language
+   transformer without convolution or region supervision.       Murahari, V., Batra, D., Parikh, D., and Das, A. Large-scale
+   arXiv preprint arXiv:2102.03334, 2021.                          pretraining for visual dialog: A simple state-of-the-art
+                                                                   baseline. In Vedaldi, A., Bischof, H., Brox, T., and Frahm,
+Krishna, R., Zhu, Y., Groth, O., Johnson, J., Hata, K.,           J. (eds.), ECCV, pp. 336­352, 2020.
+   Kravitz, J., Chen, S., Kalantidis, Y., Li, L., Shamma,
+   D. A., Bernstein, M. S., and Fei-Fei, L. Visual genome:      Ordonez, V., Kulkarni, G., and Berg, T. L. Im2text: Describ-
+   Connecting language and vision using crowdsourced               ing images using 1 million captioned photographs. In
+   dense image annotations. IJCV, 123(1):32­73, 2017.              Shawe-Taylor, J., Zemel, R. S., Bartlett, P. L., Pereira, F.
+                                                                   C. N., and Weinberger, K. Q. (eds.), NIPS, pp. 1143­1151,
+                                                                   2011.
+BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation
+
+Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J.,      Wang, Z., Yu, J., Yu, A. W., Dai, Z., Tsvetkov, Y., and Cao,
+   Chanan, G., Killeen, T., Lin, Z., Gimelshein, N., Antiga,      Y. Simvlm: Simple visual language model pretraining
+   L., et al. Pytorch: An imperative style, high-performance      with weak supervision. arXiv preprint arXiv:2108.10904,
+   deep learning library. NeurIPS, 32:8026­8037, 2019.             2021.
+
+Patrick, M., Huang, P.-Y., Asano, Y., Metze, F., Hauptmann,     Xie, Q., Luong, M., Hovy, E. H., and Le, Q. V. Self-training
+  A. G., Henriques, J. F., and Vedaldi, A. Support-set            with noisy student improves imagenet classification. In
+   bottlenecks for video-text representation learning. In         CVPR, pp. 10684­10695, 2020.
+  ICLR, 2021.
+                                                                Xu, H., Ghosh, G., Huang, P.-Y., Okhonko, D., Aghajanyan,
+Plummer, B. A., Wang, L., Cervantes, C. M., Caicedo, J. C.,       A., Metze, F., Zettlemoyer, L., and Feichtenhofer, C.
+   Hockenmaier, J., and Lazebnik, S. Flickr30k entities:          Videoclip: Contrastive pre-training for zero-shot video-
+   Collecting region-to-phrase correspondences for richer          text understanding. In EMNLP, pp. 6787­6800, 2021.
+   image-to-sentence models. In ICCV, pp. 2641­2649,
+   2015.                                                        Yang, A., Miech, A., Sivic, J., Laptev, I., and Schmid, C.
+                                                                  Just ask: Learning to answer questions from millions of
+Puri, R., Spring, R., Shoeybi, M., Patwary, M., and Catan-         narrated videos. In ICCV, pp. 1686­1697, 2021.
+   zaro, B. Training question answering models from syn-
+   thetic data. In Webber, B., Cohn, T., He, Y., and Liu, Y.    Yang, Y., Malaviya, C., Fernandez, J., Swayamdipta, S.,
+  (eds.), EMNLP, pp. 5811­5826, 2020.                              Bras, R. L., Wang, J., Bhagavatula, C., Choi, Y., and
+                                                                   Downey, D. G-daug: Generative data augmentation for
+Radford, A., Kim, J. W., Hallacy, C., Ramesh, A., Goh, G.,         commonsense reasoning. In Cohn, T., He, Y., and Liu, Y.
+  Agarwal, S., Sastry, G., Askell, A., Mishkin, P., Clark, J.,    (eds.), EMNLP Findings, pp. 1008­1025, 2020.
+   et al. Learning transferable visual models from natural
+   language supervision. arXiv preprint arXiv:2103.00020,       Zhang, P., Li, X., Hu, X., Yang, J., Zhang, L., Wang, L.,
+   2021.                                                           Choi, Y., and Gao, J. Vinvl: Making visual representa-
+                                                                   tions matter in vision-language models. arXiv preprint
+Schuhmann, C., Vencu, R., Beaumont, R., Kaczmarczyk,               arXiv:2101.00529, 2021.
+   R., Mullis, C., Katta, A., Coombes, T., Jitsev, J., and
+   Komatsuzaki, A. Laion-400m: Open dataset of clip-            Zhou, L., Palangi, H., Zhang, L., Hu, H., Corso, J. J., and
+   filtered 400 million image-text pairs. arXiv preprint           Gao, J. Unified vision-language pre-training for image
+   arXiv:2111.02114, 2021.                                         captioning and VQA. In AAAI, pp. 13041­13049, 2020.
+
+Sharma, P., Ding, N., Goodman, S., and Soricut, R. Con-         Zhu, L. and Yang, Y. Actbert: Learning global-local video-
+   ceptual captions: A cleaned, hypernymed, image alt-text         text representations. In CVPR, pp. 8746­8755, 2020.
+   dataset for automatic image captioning. In Gurevych, I.
+   and Miyao, Y. (eds.), ACL, pp. 2556­2565, 2018.
+
+Shorten, C. and Khoshgoftaar, T. M. A survey on image
+   data augmentation for deep learning. J. Big Data, 6:60,
+   2019.
+
+Suhr, A., Zhou, S., Zhang, A., Zhang, I., Bai, H., and
+  Artzi, Y. A corpus for reasoning about natural language
+   grounded in photographs. In Korhonen, A., Traum, D. R.,
+   and Ma`rquez, L. (eds.), ACL, pp. 6418­6428, 2019.
+
+Touvron, H., Cord, M., Douze, M., Massa, F., Sablayrolles,
+  A., and Je´gou, H. Training data-efficient image trans-
+   formers & distillation through attention. arXiv preprint
+   arXiv:2012.12877, 2020.
+
+Wang, Y., Joty, S. R., Lyu, M. R., King, I., Xiong, C., and
+   Hoi, S. C. H. VD-BERT: A unified vision and dialog
+   transformer with BERT. In Webber, B., Cohn, T., He, Y.,
+   and Liu, Y. (eds.), EMNLP, pp. 3325­3338, 2020.
+BLIP: Bootstrapping Language-Image Pre-training for Unified Vision-Language Understanding and Generation
+
+A. Downstream Task Details                                     Task                 init LR (ViT-L)  batch size  #epoch
+
+Table 14 shows the hyperparameters that we use for fine-       Retrieval             1e-5 (5e-6)        256         6
+tuning on the downstream vision-language tasks. All tasks      Captioning            1e-5 (2e-6)        256         5
+uses AdamW optimizer with a weight decay of 0.05 and a         VQA                                      256        10
+cosine learning rate schedule. We use an image resolution      NLVR2                      2e-5          256        15
+of 384 × 384, except for VQA where we follow Wang et al.       VisDial                    3e-5          240        20
+(2021) and use 480 × 480 images. Next we delineate the                                    2e-5
+dataset details.
+                                                               Table 14. Finetuning hyperparameters for downstream tasks.
+Image-Text Retrieval. We use the Karpathy split (Karpa-
+thy & Li, 2015) for both COCO and Flickr30K. COCO              B. Additional Examples of Synthetic Captions
+contains 113/5k/5k images for train/validation/test,
+and Flickr30K contains 29k/1k/1k images for                    In Figure 6, we show additional examples of images and
+train/validation/test.                                         texts where the web captions are filtered out, and the syn-
+                                                               thetic captions are kept as clean training samples.
+Image Captioning. We finetune on COCO's Karpathy train
+split, and evaluate on COCO's Karpathy test split and No-      C. Pre-training Dataset Details
+Caps validation split. During inference, we use beam search
+with a beam size of 3, and set the maximum generation          Table 15 shows the statistics of the pre-training datasets.
+length as 20.
+                                                               COCO VG SBU CC3M CC12M LAION
+VQA. We experiment with the VQA2.0 dataset (Goyal
+et al., 2017), which contains 83k/41k/81k images for train-    # image 113K 100K 860K 3M             10M 115M
+ing/validation/test. Following Li et al. (2021a), we use       # text 567K 769K 860K 3M              10M 115M
+both training and validation splits for training, and include
+additional training samples from Visual Genome. During         Table 15. Statistics of the pre-training datasets.
+inference on VQA, we use the decoder to rank the 3,128
+candidate answers (Li et al., 2021a; Kim et al., 2018).
+
+NLVR2. We conduct experiment on the official split (Suhr
+et al., 2019).
+
+VisDial. We finetune on the training split of VisDial v1.0
+and evaluate on its validation set.
+
+!: "a week spent at our                                        !: "that's what a sign                !: "hand held through the
+rented beach house in                                          says over the door"                   glass in my front bedroom
+Sandbridge"                                                                                          window"
+                                                               ": "the car is driving
+": "an outdoor walkway                                         past a small old                      ": "a moon against the night
+on a grass covered hill"                                       building"                             sky with a black background"
+
+!: "stunning sky over                                          !: "living in my                      !: "the pink rock
+walney island, lake                                            little white house"                   from below"
+district, july 2009"
+                                                               ": "a tiny white                      ": "some colorful
+": "an outdoor walkway                                         flower with a bee                     trees that are on a hill
+on a grass covered hill"                                       in it"                                in the mountains"
+
+Figure 6. Examples of the web text Tw and the synthetic text Ts. Green texts are accepted by the filter, whereas red texts are rejected.
+

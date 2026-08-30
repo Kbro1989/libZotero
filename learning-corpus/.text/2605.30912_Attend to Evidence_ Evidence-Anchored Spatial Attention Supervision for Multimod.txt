@@ -1,0 +1,1110 @@
+                                        Attend to Evidence: Evidence-Anchored Spatial Attention Supervision for
+                                                                           Multimodal RLVR
+
+                                                       Ruina Hu1,2, Chen Wang2,4, Lai Wei2,5, Jionghao Bai2,6, Bin Yu1,2,
+                                                                     Weiran Huang5, Kai Wang1,*, Yue Wang2,3,*
+
+                                                             1Harbin Institute of Technology 2Zhongguancun Academy
+                                                                   3Zhongguancun Institute of Artificial Intelligence
+
+                                                     4Nankai University 5Shanghai Jiaotong University 6Zhejiang University
+
+                                                              Abstract                        Q: Which animal appears three times? A: giraffes
+
+arXiv:2605.30912v1 [cs.CV] 29 May 2026       Reinforcement learning with verifiable re-       Standard RLVR            EASE
+                                             wards (RLVR) improves vision-language mod-
+                                             els (VLMs) by optimizing outcome rewards                     giraffes                giraffes
+                                             derived from final answers. However, such        Weak Evidence Grounding
+                                             outcome-only rewards do not tell the model                                Guide Attention on High-
+                                             which image regions justify an answer. For                                 Reward Trajectories
+                                             questions that require visual grounding, these
+                                             rewards cannot distinguish responses supported   EASE teaches VLM where to look, not just what to answer.
+                                             by relevant visual evidence from those pro-
+                                             duced by language-prior shortcuts or lucky       Figure 1: From outcome rewards to evidence acqui-
+                                             guesses. We introduce EASE (Evidence-            sition. Standard RLVR may answer correctly while
+                                             Anchored Spatial Attention), which augments      attending weakly to the key evidence region. EASE
+                                             multimodal RLVR with visual-evidence pro-        encourages stronger attention to the supporting region.
+                                             cess supervision. EASE converts annotated
+                                             evidence regions into a smoothed visual-token    Liu et al., 2025a; Wang et al., 2025e; Huang et al.,
+                                             target and uses it to guide response-to-image    2025; Wang et al., 2026; Cao et al., 2025; Ni et al.,
+                                             attention during RL training, but only on high-  2026). However, outcome-only reward does not
+                                             reward trajectories. The annotations are used    tell the model where the answer should come from
+                                             solely as privileged training labels, while in-  in the image. A VLM may need to find a small ob-
+                                             ference requires only the original image and     ject, compare two regions, or combine clues across
+                                             question. Across Qwen2.5-VL-7B, Qwen3-VL-        separated regions before it can answer reliably. If
+                                             4B, and Qwen3-VL-8B, EASE raises average         this evidence-acquisition step is left unsupervised,
+                                             scores over DAPO by 2.5 to 3.1 points on per-    RL can reward a correct answer without knowing
+                                             ception, hallucination, visual math, and multi-  whether the model actually used the relevant visual
+                                             modal reasoning benchmarks. Diagnostics and      evidence rather than a shortcut.
+                                             ablations show that EASE better aligns visual
+                                             attention with annotated evidence regions.          This limitation creates a perception credit assign-
+                                                                                              ment problem. An outcome reward tells the policy
+                                        1 Introduction                                        whether the response is correct, but not which im-
+                                                                                              age regions supported that response. A correct
+                                        Reinforcement learning with verifiable rewards        answer may reflect relevant visual evidence, but
+                                        (RLVR) has become a common way to im-                 it may also come from language priors, dataset
+                                        prove language-model reasoning and is increas-        bias, a label-correlated shortcut, or guessing. An
+                                        ingly used in vision-language model (VLM) post-       incorrect answer is also ambiguous because the
+                                        training (Shao et al., 2024; Yu et al., 2026; Yang    model may have looked at the wrong region, or it
+                                        et al., 2025a; Liu et al., 2025b; Tan et al., 2026).  may have found the right evidence and then rea-
+                                        Outcome rewards are attractive in multimodal tasks    soned incorrectly. This ambiguity matters most
+                                        because many answers can be checked automati-         for fine-grained and multi-evidence questions that
+                                        cally. Recent VLM systems show that these ver-        require object comparison, counting, localized at-
+                                        ifiable outcome signals can improve multimodal        tributes, spatial relations, or clues from separated
+                                        reasoning (Wang et al., 2025d,a; Meng et al., 2025;
+
+                                            *Equal corresponding authors.
+regions. Without acquiring these regions, a model      outcome-only RL baselines across Qwen2.5-VL-
+can produce plausible text while remaining weakly      7B, Qwen3-VL-4B, and Qwen3-VL-8B. When
+grounded and vulnerable to hallucination (Li et al.,   trained and evaluated under the same protocol as
+2023a; Guan et al., 2023; Asadi et al., 2026; Shi      DAPO, EASE improves the average score by 2.9,
+et al., 2026; Xu et al., 2026; Fu et al., 2025).       3.1, and 2.5 points on these backbones, respec-
+                                                       tively, with gains on perception-heavy reasoning,
+   Process supervision can reduce this ambiguity       hallucination robustness, visual math, and logic
+by making visual evidence acquisition part of the      benchmarks. EASE is also competitive with re-
+training signal. Evidence boxes and human atten-       cent 7B-scale multimodal RL methods on shared
+tion annotations in visual question answering data     benchmarks. Diagnostics and ablations link these
+indicate which image regions support an answer         gains to stronger evidence-aligned visual atten-
+and can serve as training-only labels for where the    tion, reward-aware gating, the smoothed target, and
+model should look (Hudson and Manning, 2019;           mixed single-/multi-evidence training setup.
+Das et al., 2017). Such supervision has been used
+to improve grounding in VLMs (Selvaraju et al.,           Our contributions are summarized as follows.
+2019). In RL, the same idea can be used to check        · We identify visual evidence acquisition as a
+more than the outcome. A high-reward response
+should also be supported by the visual evidence            missing process signal in multimodal RLVR
+that justifies it. Recent multimodal RL and visual-        and introduce EASE, which adds visual
+thinking methods use stronger rollouts, perturba-          evidence-anchored process supervision without
+tion objectives, visual-dependency signals, or tex-        requiring evidence metadata at inference.
+tual traces augmented with grounding tags and spa-      · We map annotated evidence regions to a
+tial coordinates (Liu et al., 2025a; Huang et al.,         smoothed target distribution over visual tokens
+2025; Yuan et al., 2025; Yang et al., 2025b; Zhu           and apply this guidance only to high-reward
+et al., 2026). EASE instead uses evidence boxes            trajectories.
+only to supervise internal attention during training,   · We validate EASE across multiple VLM back-
+leaving the VLM's inference format unchanged.              bones and benchmarks for perception-heavy
+                                                           reasoning, hallucination robustness, visual
+   We propose EASE (Evidence-Anchored Spatial              math, and multimodal reasoning, with diagnos-
+AttEntion), a framework that adds visual evidence-         tics showing better alignment between visual
+anchored process supervision to multimodal RLVR.           attention and annotated evidence regions.
+Figure 1 shows the intended contrast. Outcome-
+only RL may answer correctly while attending           2 Related Work
+weakly to the image region that justifies the an-
+swer, whereas EASE encourages the model to keep        RLVR for multimodal reasoning. RLVR has be-
+the answer correct and place more attention on the     come a common VLM post-training paradigm, im-
+supporting visual evidence.                            proving multimodal reasoning through task veri-
+                                                       fiers, rollout refinement, reflection training, chart-
+   EASE maps annotated evidence regions to a           specific verifiable rewards, and policy optimiza-
+smoothed target distribution over visual tokens.       tion (Yang et al., 2025a; Wang et al., 2025d,a;
+During RL training, this target guides where gen-      Meng et al., 2025; Sinha et al., 2025; Zhang et al.,
+erated response tokens attend within the image.        2026; Liu et al., 2025b; Tan et al., 2026). However,
+The guidance is applied only to trajectories that      the main training signal remains answer-level. It
+receive high verifier rewards, since low-reward re-    does not specify how the response should acquire
+sponses can have unreliable attention patterns. The    supporting image regions.
+evidence annotations are used only as privileged
+training labels, and inference uses the same image-       Visual perception signals in multimodal
+question pathway as the underlying VLM without         RL. Several multimodal RL methods introduce
+evidence metadata. The training data includes both     perception-oriented signals, such as clean and noisy
+examples with one supporting region and exam-          image rollouts (Liu et al., 2025a), perception-aware
+ples with multiple supporting regions, so the model    objectives (Wang et al., 2025e), visual dependency
+learns to focus on a local cue when one region is      or focus measures (Huang et al., 2025; Wang et al.,
+sufficient and to cover several regions when the       2026), perceptual evidence checklists (Zhang et al.,
+answer depends on multiple clues.                      2025), and grounded traces or pointing supervi-
+                                                       sion (Cao et al., 2025; Ni et al., 2026). These
+   Empirically, EASE consistently improves
+                                                     Training Stage              Inference Stage
+
+                        Q: How many cups are                     Answer y        Q: Which animal appears  A: giraffes
+                        there in the picture?                                            three times?
+
+                                               VLM   Reward r(y)  
+
+                                                                                 Faithful attention, test BBoxes free
+
+Figure 2: Overview of EASE. During RL training, EASE maps dataset evidence boxes to a smoothed spatial target
+over visual tokens. The auxiliary objective guides response-to-vision attention on high-reward trajectories toward
+this target, and inference uses the standard image and question inputs.
+
+Hallucination rate (%)  60  = 0.34                   Non-hall.                   3 Method: EASE
+                              p < 0.001
+                                                                                 Figure 2 gives an overview of EASE, which aug-
+                        40                                                       ments outcome-based multimodal RL with training-
+                                                                                 time evidence supervision. EASE converts evi-
+                        20                           Hall.                       dence boxes into a soft visual-token target, regular-
+                                                                                 izes response-to-vision attention toward this target
+                         0                             0.0 0.5 1.0 1.5           for high-reward trajectories during actor updates.
+                           Low Q2 Q3 Q4 High                Attention-target KL
+                                    KL quantile                                  3.1 Motivating Observation
+                                                     (b) KL by response outcome
+                        (a) KL-binned hallucination                              We first examine whether RL with only outcome
+                                                                                 rewards still leaves failures in visual evidence ac-
+Figure 3: Motivating diagnostic for outcome-only                                 quisition. We analyze evidence-localizable exam-
+RL. Higher attention-target mismatch corresponds to                              ples from HallusionBench-Image with a Qwen3-
+increased hallucination risk in (a) and a right-shifted KL                       VL-4B policy trained by GRPO using final-answer
+distribution for hallucinated responses in (b). Details                          rewards. For each response, we compute the KL
+are in Appendix A.                                                               divergence between response-to-vision attention
+                                                                                 normalized over visual tokens and an evidence tar-
+signals encourage visual reliance through pertur-                                get constructed from annotated supporting regions.
+bations, reward-derived proxies, checklist verifi-                               This score measures attention-target mismatch. Ev-
+cation, textual traces, or point-level targets, but                              idence boxes are used only to construct the diag-
+they do not directly match response-to-vision atten-                             nostic target, not fed as input to the policy.
+tion to localized answer evidence. EASE instead
+supervises this spatial attention distribution with                                 Figure 3 shows that this mismatch is statistically
+localized evidence regions.                                                      associated with hallucination. Figure 3(a) shows
+                                                                                 that hallucination risk increases as KL divergence
+   Evidence grounding and hallucination.                                         grows, and Figure 3(b) shows that hallucinated re-
+Grounded VLMs connect language generation                                        sponses have higher KL overall than responses that
+with localized visual evidence through boxes,                                    do not hallucinate. Together, these trends show that
+coordinates, or grounded rationales (Peng et al.,                                outcome rewards can improve final accuracy while
+2024; Chen et al., 2023; You et al., 2024; Xia                                   leaving a measurable mismatch between response-
+et al., 2025). Hallucination studies show that                                   to-vision attention and answer-relevant evidence.
+strong VLMs can produce plausible answers                                        EASE therefore uses evidence-attention alignment
+or reasoning traces without reliably using the                                   as an operational process signal for visual evidence
+image (Asadi et al., 2026; Shi et al., 2026; Wu                                  acquisition during RL.
+et al., 2025; Xu et al., 2026; Fu et al., 2025).
+Attention and representation analyses further show                               3.2 Evidence Annotation
+that visual information can be concentrated in
+middle layers, steered to reduce hallucination, or                               EASE uses evidence annotations that identify the
+misallocated during generation (Jiang et al., 2025;                              image regions supporting an answer. Each training
+Yin et al., 2025; Huang et al., 2024; Leng et al.,                               example is represented as (I, q, a, B), where I is
+2024; Bu et al., 2025; Xi et al., 2026). EASE                                    the original image, q is the question, a is the refer-
+brings this grounding perspective into RL by using                               ence answer, and B = {Bk}kK=1 is the bbox field
+answer-relevant regions as training supervision for
+spatial attention.
+source datasets       step 1                                      step 2              step 3    target dataset
+                     Evidence                                      BBox              Quality
+Super-Clevr         Extraction                  QA Pair Annotation                  Validation                 QA Pair,
+   ZwZ 74k CLEVR                                                                                                BBoxes
+                                obj 1 obj 2 obj ... Grounding
+ ViRL 39k SpaCE-10                                                   DINO
+
+Figure 4: Evidence annotation pipeline. Given an image-question-answer triple, Step 1 extracts answer-relevant
+evidence phrases, Step 2 localizes each phrase with grounding models, and Step 3 validates the proposed boxes with
+semantic and geometric checks. The annotated pool contains single-evidence examples for local grounding and
+multi-evidence examples for cross-region reasoning. Appendix B gives implementation details and dataset statistics.
+
+for answer-relevant regions. These boxes are stored       concentrates most probability mass inside the anno-
+as training metadata and used only to construct           tated region while retaining tolerance to boundary
+the auxiliary attention target, leaving the image         noise and coarse boxes.
+and prompt unchanged. Only training examples
+are annotated, and evaluation benchmarks are used            Rather than treating a box as a hard binary mask,
+without evidence metadata.                                we evaluate each Gaussian on the visual-token grid
+                                                          and normalize it into a distribution Gk(v):
+   Figure 4 summarizes the annotation pipeline.
+Step 1 extracts minimal answer-relevant evidence                           Gk(v) =   N (cv; µk, k) .   (3)
+phrases from each image-question-answer triple.                                     vV N (cv ; µk, k)
+Step 2 localizes each phrase with grounding models
+and stores the resulting coordinates as box meta-         Multi-evidence examples are represented by an
+data. Step 3 validates the proposed boxes with            equal-weight mixture:
+semantic and geometric checks. Existing evidence
+boxes are normalized and passed through the same                                    1K
+validation stage. Appendix B gives implementation                          Pevid(v) = K Gk(v).         (4)
+details and source-level statistics.
+                                                                                    k=1
+   The resulting annotated pool is split into single-
+evidence and multi-evidence examples for local-           Equal weighting assigns the same total supervision
+ized grounding and cross-region evidence acquisi-         mass to each supporting region, encouraging cover-
+tion. The default training distribution samples a         age across all evidence boxes rather than allowing
+balanced mixture from the two pools.                      large boxes to dominate the target.
+
+3.3 Evidence-Anchored Attention Target                       We smooth the target with a uniform distribu-
+                                                          tion to avoid assigning zero probability to all back-
+Let V denote the set of visual tokens and let cv          ground tokens:
+be the image-plane center of visual token v, ex-
+pressed in the same coordinate system as the evi-                          Ptarget(v) = (1 - )Pevid(v) + U (v), (5)
+dence boxes. EASE converts the evidence boxes
+into a soft target distribution over V. A box             where U (v) = 1/|V| and  controls background
+Bk = (xk, yk, wk, hk) defines a Gaussian com-             smoothing.
+ponent centered at
+                                                          3.4 Response-to-Vision Attention
+µk =                xk  +  wk  , yk  +  hk     ,     (1)
+                            2           2                 To connect evidence supervision with generation,
+                                                          EASE measures how response tokens attend to vi-
+with diagonal covariance                                  sual tokens during the actor update. We normalize
+                                                          attention logits only over the visual-token set, yield-
+                           wk   2    hk     2             ing a conditional spatial distribution over image
+                                                          regions. This captures where the response looks
+k = diag                   4     ,      4         .  (2)  within the image without constraining its total at-
+                                                          tention mass to vision versus text. Let L denote
+This parameterization makes two standard devia-           the number of transformer layers in the language
+tions match half the box width and height, which          model. We extract response-to-vision attention
+                                                          from a semantic middle layer, setting  = 2L/3.
+                                                          This targets a stage where visual information has
+been semantically refined but is not yet dominated           where S(g) is the sampled response-token set for
+                                                             trajectory g, attn is the attention-loss weight, and
+by output-adjacent lexical prediction (Jiang et al.,          prevents division by zero when no trajectory in
+                                                             the group passes the gate. The gate uses raw verifier
+2025). For response token t, attention head h, and           rewards rather than group-normalized advantages
+head dimension d at layer ,                                  because it selects trajectories that can serve as reli-
+                                                             able process demonstrations.
+pth(v) =  vexVpe(x(qp(h(,tq)h,kt)h,vk/h,vd/)d) .        (6)
+                                                             3.6 Training and Inference
+Here, pth is the head-wise visual-token-normalized
+response-to-vision distribution. Averaging over              Evidence annotations are privileged training labels.
+the H heads gives the model's conditional spatial            They are used to construct Ptarget and the auxiliary
+attention for token t:                                       actor loss during training. After training, EASE
+                                                             uses the same image-question pathway and decod-
+                     1        H                              ing procedure as the underlying VLM.
+                     H
+Pmt odel(v)    =                 pht (v).               (7)  4 Experiments
+
+                         h=1                                 4.1 Experimental Setup
+
+When the token belongs to trajectory g, we write             Models and training data. We evaluate Qwen2.5-
+the same distribution as Pmg,otdel.                          VL-7B (Bai et al., 2025b), Qwen3-VL-4B, and
+                                                             Qwen3-VL-8B (Bai et al., 2025a). All controlled
+   To reduce memory overhead, we compute the                 variants use the VQA corpus annotated in Sec-
+                                                             tion 3.2, with additional statistics in Appendix B.
+attention loss on at most 64 sampled valid response          EASE trains on a balanced mixture of examples
+                                                             grounded in one evidence region and examples re-
+tokens per sequence by default, rather than on the           quiring multiple evidence regions.
+
+full generation.                                                Baselines. For controlled comparisons, we
+                                                             compare EASE with the supervised base model,
+3.5 Reward-Aware RL Objective                                GRPO, and DAPO under the same training data,
+                                                             backbone, and evaluation protocol. Table 2 fur-
+Let  denote the VLM policy. For each prompt                  ther places EASE in context with public 7B-
+x = (I, q), outcome-only multimodal RL samples               scale multimodal reasoning methods, including
+a group of responses {y(g)}Gg=1 and obtains raw              ThinkLite-VL-7B (Wang et al., 2025d), VL-
+verifier rewards r(g) = R(y(g), a). The underly-             Rethinker-7B (Wang et al., 2025a), MM-Eureka-
+ing GRPO or DAPO actor loss computes group-                  7B (Meng et al., 2025), NoisyRollout-7B (Liu et al.,
+normalized advantages from these per-response re-            2025a), PAPOD-7B (Wang et al., 2025e), VPPO-
+wards. We denote this base actor objective by LRL            RL-7B (Huang et al., 2025), and VGPO-7B (Wang
+and add EASE as an auxiliary process-supervision             et al., 2026). These public rows use reported results
+term. In the main experiments, we instantiate                and are intended for contextual comparison rather
+LRL with DAPO because it provides the strongest              than strict protocol-controlled evaluation.
+outcome-only baseline.
+                                                                Benchmarks. We evaluate perception with
+   For a response token t from trajectory g, the             HR-Bench (Wang et al., 2025c), V* (Wu and
+default attention loss uses model-to-target KL.              Xie, 2024), and CV-Bench (Tong et al., 2024),
+                                                             hallucination with POPE (Li et al., 2023a) and
+Lgat,ttn = DKL Pmg,otdel  Ptarget .                     (8)  HallusionBench-Image (Guan et al., 2023), vi-
+                                                             sual math and geometry with MathVerseV (Zhang
+This direction penalizes the visual-token-                   et al., 2024), MathVista (Lu et al., 2024), We-
+                                                             Math (Qiao et al., 2024), and MMK12 (Meng et al.,
+normalized attention probability assigned outside            2025), and broader multimodal reasoning with Log-
+                                                             icVista (Xiao et al., 2024). MathVerseV denotes
+the evidence-anchored target. We also evaluate               the vision-centric subset of MathVerse.
+the reverse direction, DKL(PtargetPmg,otdel), as a
+coverage-oriented ablation.                                     Implementation details. Unless otherwise
+
+   EASE applies attention supervision only to tra-
+
+jectories whose raw verifier reward meets a thresh-
+old  . Let m(g) = [r(g)   ] denote this reward
+
+gate. The total objective is
+
+Ltotal = LRL + attnLEASE,
+
+          G    m(g)  |S  1    |  tS (g)    Lgat,ttn     (9)
+          g=1
+LEASE =                  (g)     +                   .
+
+               G         m(g)
+               g=1
+Table 1: Generalization across backbones. Controlled comparison of Base, GRPO, DAPO, and EASE across
+three VLM backbones under the same training and evaluation protocol. Hall. denotes HallusionBench-Image. Bold
+and underlined scores mark the best and second-best results in each column.
+
+Method           Perception  Hallucination                  Math/Geometry        Logic Avg.
+
+        HR4K HR8K V* CV-B. POPE Hall. MathVerseV MathVista WeMath MMK12 LogicVista
+
+                                         Qwen3-VL-4B
+
+Base    78.3 72.9 80.1 85.0 88.5 68.2                 28.0  73.7  70.7 58.9      45.3 68.1
+
+GRPO    79.1 76.3 86.4 85.5 89.3 71.0                 60.7  75.7  77.8 78.9      50.4 75.6
+
+DAPO    79.9 74.1 87.4 85.1 89.5 71.3                 62.2  74.3  77.2 80.2      51.8 75.7
+
+EASE (ours) 81.3 79.5 90.1 87.3 90.8 74.1             65.1  77.8  82.9 81.3      56.9 78.8
+
+                             Qwen2.5-VL-7B
+
+Base    71.6 67.9 78.5 75.3 85.9 52.9                 36.6  68.5  47.8 49.4      45.1 61.8
+
+GRPO    74.3 70.3 83.2 76.9 87.6 55.6                 62.6  70.1  68.4 72.9      46.9 69.9
+
+DAPO    74.8 70.4 84.3 77.0 87.3 56.0                 64.5  68.7  68.0 77.0      47.3 70.5
+
+EASE (ours) 75.3 73.0 88.5 78.3 87.9 57.2             67.8  75.2  72.9 81.6      49.6 73.4
+
+                                         Qwen3-VL-8B
+
+Base    78.9 74.6 86.4 85.4 87.0 71.6                 54.6  77.2  71.7 67.0      53.0 73.4
+
+GRPO    80.5 80.6 89.0 86.3 88.7 71.9                 65.4  75.9  79.7 79.7      58.5 77.8
+
+DAPO    81.1 79.8 88.0 85.5 89.1 73.6                 65.7  76.0  82.9 80.9      60.0 78.4
+
+EASE (ours) 83.8 81.6 91.6 87.1 89.6 77.8             69.7  78.1  86.4 82.2      62.3 80.9
+
+Table 2: Contextual comparison with prior 7B-scale multimodal reasoning methods. Prior scores are taken
+from the VGPO report, where available. "" indicates that NoisyRollout is trained on Geo3K. Bold and underlined
+
+scores indicate the best and second-best results in each column.
+
+Method           MathVista   MathVerseV     WeMath MMK12 Geo3K LogicVista Avg.
+
+ThinkLite-VL-7B      73.6         30.9                43.7  50.5  45.3     44.3  48.1
+VL-Rethinker-7B      65.2         64.8
+MM-Eureka-7B         66.3         63.6                67.5  66.0  44.4     47.0  59.2
+NoisyRollout-7B      72.9         51.7
+PAPOD -7B            72.3         66.6                66.6  61.7  41.1     47.9  57.9
+VPPO-RL-7B           70.5         67.6
+VGPO-7B              74.1         67.6                64.4  51.2  55.2     47.0  57.1
+                     75.2         67.8
+EASE-7B (ours)                                        69.4  80.8  48.8     45.9  64.0
+
+                                                      70.6  81.8  46.9     48.8  64.4
+
+                                                      72.5  81.5  45.8     49.4  65.2
+
+                                                      72.9  81.6  48.9     49.6  66.0
+
+noted, models are trained for 2 epochs with learn-    (+4.9), MMK12 (+4.6), and V* (+4.2). This pat-
+ing rate 1 × 10-6. EASE uses the smoothed             tern aligns with the purpose of EASE, where the
+Gaussian-mixture target with  = 0.1, model-to-        auxiliary loss serves as a process signal that en-
+target KL, attn = 0.001, reward-1 gating under        courages the policy's response-to-vision attention
+the 0/1 verifier, and at most 64 valid response to-   to concentrate on answer-relevant visual evidence
+kens for the attention loss. Additional implementa-   before generating the response.
+tion details are provided in Appendix C.4.
+                                                         Scalability across Model Scales and Families.
+4.2 Main Results                                      The same trend is visible across Qwen3-VL back-
+                                                      bones. For Qwen3-VL-4B, EASE improves the
+Consistent Gains under Controlled Training.           DAPO average from 75.7 to 78.8 and gives gains
+The controlled comparison in Table 1 more directly    across the full benchmark suite, including fine-
+isolates the effect of the proposed training signal,  grained perception, hallucination, math/geometry,
+since Base, GRPO, DAPO, and EASE are evaluated        and LogicVista. For Qwen3-VL-8B, EASE reaches
+under the same protocol within each backbone. On      the best average score among the compared vari-
+Qwen2.5-VL-7B, EASE improves DAPO on every            ants, improving DAPO from 78.4 to 80.9 and again
+reported benchmark and raises the average from        improving every reported benchmark. These re-
+70.5 to 73.4. The largest gains appear on vision-     sults suggest that evidence-focused attention regu-
+centric mathematical reasoning and fine-grained       larization transfers across model generations and
+perception, including MathVista (+6.5), WeMath        scales when applied under the same training and
+Table 3: Core ablations on Qwen3-VL-4B. We ablate                                43.0                51.0                     44.0
+reward gating, evidence-target construction, evidence
+composition, and the attention extraction layer. L de-  Score (%)  40 32.0 34.0        50 40.0 42.0             40 30.0 32.0
+notes the number of language-model blocks, and the
+default EASE layer is  = 2L/3.                                     20                  25                       20
+
+                                                                   0                   0                        0
+                                                                    Base GRPO EASE      Base GRPO EASE           Base GRPO EASE
+
+Variant             V* Hall. MMK12 Avg.                                (a) Attn. Mass  (b) Pointing Acc.  (c) Coverage 
+
+EASE (ours)         90.1 74.1 81.3 81.8                 Figure 5: Evidence-acquisition diagnostics. On
+                                                        Qwen3-VL-4B, EASE increases response-to-vision at-
+                 Reward-aware supervision               tention on annotated evidence regions compared with
+                                                        Base and GRPO, as measured by attention mass, point-
+w/o reward gating   86.4 71.0 77.9 78.4                 ing accuracy, and multi-evidence coverage on a held-out
+                                                        validation set. Error bars denote 95% CIs.
+             Evidence target construction
+
+hard box target     87.8 71.6 78.5 79.3
+
+target-to-model KL  89.5 72.8 80.6 81.0
+
+w/o smoothing       88.2 72.0 79.3 79.8
+
+                 Evidence composition                                     0 5×10-4 10-3 2×10-3  0 0.05 0.1 0.2       16 32 64 128
+
+                                                                   91                           V* POPE             V* POPE
+
+                                                                   89                              (b)              (c) Tokens
+
+                                                                   87
+                                                                           V* POPE
+
+                                                                             (a) attn
+single-only         89.5 72.7 78.9 80.4                 Accuracy
+
+multi-only          88.0 73.2 80.7 80.6                                87.4
+                                                                          89.3
+                                                                              90.1
+                                                                                 89.2
+                                                                                         89.5
+                                                                                            90.4
+                                                                                                90.8
+                                                                                                   90.1
+
+                                                                                                                88.2
+                                                                                                                    89.3
+                                                                                                                       90.1
+                                                                                                                          89.2
+                                                                                                                                  89.7
+                                                                                                                                     90.3
+                                                                                                                                         90.8
+                                                                                                                                            90.2
+
+                                                                                                                                                         88.7
+                                                                                                                                                             89.5
+                                                                                                                                                                90.1
+                                                                                                                                                                    90.3
+                                                                                                                                                                           89.9
+                                                                                                                                                                               90.4
+                                                                                                                                                                                  90.8
+                                                                                                                                                                                     90.9
+
+             Attention extraction granularity
+
+early layer (L/4)   86.8 71.3 77.8 78.6
+
+central middle layer (L/2) 88.7 72.8 79.6 80.4
+
+final layer (L)     86.2 70.8 77.2 78.1                 Figure 6: Hyperparameter sensitivity. On the Qwen3-
+                                                        VL-4B backbone, we vary the attention-loss weight,
+evaluation protocol.                                    background smoothing, and sampled response-token
+                                                        budget around the default EASE configuration. Marked
+   Contextual Comparison with Public RL                 bars indicate default settings.
+Methods. Table 2 situates EASE among re-
+cent 7B-scale multimodal reasoning methods on              Ablation study on evidence target construc-
+shared benchmarks from prior work. EASE-7B              tion. We ablate three components of the evidence
+achieves the best average score in this compari-        target, including Gaussian smoothing, background
+son and obtains the strongest results on MathVista,     smoothing, and the KL direction. Replacing the
+MathVerseV , WeMath, and LogicVista. It also            Gaussian target with a hard box mask causes the
+ranks second on MMK12, showing that evidence-           largest drop, suggesting that binary supervision is
+anchored attention supervision remains effective        brittle when evidence spans object parts, coarse
+across several forms of vision-centric reasoning.       boxes, or multiple visual tokens. Removing back-
+These results indicate that EASE is competitive         ground smoothing also hurts performance, indicat-
+with leading 7B-scale multimodal RL methods.            ing that a small amount of background mass helps
+                                                        avoid over-constraining contextual visual tokens.
+4.3 Ablation Studies                                    Reversing the KL direction performs closer to the
+                                                        default but remains weaker. These results support
+Ablation study on reward-aware supervision.             the smoothed Gaussian target with KL from model
+We ablate the reward gate that restricts attention      attention to the evidence target, which guides at-
+supervision to trajectories with positive outcome       tention toward evidence regions while preserving
+rewards. Removing this gate applies the attention       tolerance to annotation noise and useful context.
+loss to all sampled responses and causes consistent
+drops across the representative benchmarks in Ta-          Ablation study on evidence composition. We
+ble 3. This suggests that evidence boxes alone are      compare training on one-region examples, multi-
+insufficient when the generated response is wrong,      region examples, and their balanced mixture. The
+since low-reward rollouts can provide misleading        one-region setting performs well on V*, which em-
+response-to-evidence alignments. Reward-aware           phasizes fine-grained localization, but drops more
+gating therefore helps EASE treat only successful       on MMK12, where many examples require multi-
+trajectories as reliable process demonstrations.        ple visual cues. Conversely, the multi-region set-
+                                                        ting better preserves MMK12 but loses more on V*.
+                                                        The balanced mixture gives the best overall result
+Q: What object is mounted on the wall below the               Q: According to the positive sequence of the
+second-floor windows of the brown house on the                    images, does the temperature decrease?
+left? A. air conditioner B. sign C. window D. lamp                                         A: 0
+
+                               A: D                           <think>1. First thermometer: The liquid column
+                                                            stops at 5°C. 2. Second thermometer: The liquid
+<think>first identify the target building ... focus
+on the wall area below its second-floor windows...            column stops at 22°C. 3. Third thermometer:
+ we see a wall-mounted object with a lantern-                 The liquid column stops at 40°C. From left to
+
+  like appearance, characteristic of an outdoor                   right, the temperature is increasing, not
+                       lamp ... <\think>                                         decreasing. <\think>
+
+                 Final Answer: \boxed{D}                                      Final Answer: \boxed{0}
+
+  (a) Single Evidence                                   (b) Multi Evidences
+
+Figure 7: Qualitative evidence analysis. Representative examples with EASE reasoning traces, final answers, and
+response-to-vision attention maps. Attention maps are used only for analysis.
+
+by combining local grounding with cross-region          ting attn = 0 recovers outcome-only DAPO,
+evidence acquisition.                                   while moderate attention supervision improves
+                                                        both V* and POPE. Very large weights reduce accu-
+   Ablation study on attention extraction granu-        racy, indicating that the auxiliary loss should guide
+larity. We ablate the layer used to extract response-   rather than dominate policy optimization. A small
+to-vision attention. Early-layer supervision per-       amount of background smoothing is also beneficial,
+forms poorly, suggesting that shallow visual rep-       with  = 0.1 giving the best or near-best scores.
+resentations are not yet sufficiently aligned with      Finally, sampling 64 response tokens matches or
+answer-level evidence. The central middle layer         nearly matches the 128-token setting, supporting
+improves over the early layer but remains below         the memory-efficient default.
+the default setting. The final layer also degrades
+performance, likely because late attention is more         Qualitative evidence analysis. Figure 7 pro-
+affected by lexical prediction and response format-     vides qualitative examples of how EASE changes
+ting than by evidence acquisition. These results        response-to-vision attention during generation. In
+support extracting attention from  = 2L/3,              these cases, the model produces correct reasoning
+where visual tokens have been semantically refined      traces and final answers while its attention concen-
+while still retaining useful spatial evidence signals.  trates on regions that visually support the answer.
+                                                        These examples illustrate the intended effect of the
+4.4 Further Analysis                                    auxiliary objective, which encourages high-reward
+                                                        trajectories to align response tokens with answer-
+Evidence acquisition analysis. Final-answer accu-       relevant evidence regions. Appendix F further an-
+racy alone does not show whether EASE improves          alyzes representative failure cases to clarify the
+the model's measured acquisition of visual evi-         boundary of this effect.
+dence. We therefore evaluate response-to-vision at-
+tention on a held-out evidence-annotated validation     5 Conclusion
+set, using evidence boxes only for offline analysis.
+Figure 5 reports three complementary diagnostics,       We presented EASE, a framework that adds
+measuring how much attention falls inside evidence      evidence-anchored process supervision to multi-
+regions, whether the strongest attention peak lands     modal RLVR. EASE converts annotated evidence
+on evidence, and whether multiple supporting re-        regions into soft spatial targets and regularizes
+gions are covered. EASE improves all three metrics      response-to-vision attention for high-reward trajec-
+over both the base model and outcome-only GRPO,         tories, encouraging successful responses to align
+suggesting that the auxiliary objective improves        with visually grounded evidence. Across three
+attention-based evidence-acquisition diagnostics        VLM backbones and diverse reasoning and halluci-
+rather than only final-answer accuracy. Detailed        nation benchmarks, EASE improves outcome-only
+metric definitions are provided in Appendix D.          RL baselines and strengthens measured evidence
+                                                        acquisition. These results suggest that supervising
+   Hyperparameter sensitivity. We further test          visual evidence acquisition is a practical comple-
+whether EASE relies on narrow hyperparameter            ment to final-answer rewards for more grounded
+choices. Figure 6 varies the attention-loss weight      multimodal reasoning.
+attn, background smoothing , and the sampled
+token budget around the default configuration. Set-
+Limitations                                              Keqin Chen, Zhao Zhang, Weili Zeng, Richong Zhang,
+                                                            Feng Zhu, and Rui Zhao. 2023. Shikra: Unleashing
+EASE relies on evidence annotations during train-           multimodal llm's referential dialogue magic. arXiv
+ing. Although these annotations are used only for           preprint arXiv:2306.15195.
+the auxiliary loss and are not provided at inference,
+obtaining reliable boxes introduces additional data      Gheorghe Comanici, Eric Bieber, Mike Schaekermann,
+construction cost. The method is also most suitable         Ice Pasupat, Noveen Sachdeva, Inderjit Dhillon, Mar-
+for tasks whose supporting evidence can be local-           cel Blistein, Ori Ram, Dan Zhang, Evan Rosen, and
+ized to one or more image regions, and box-based            1 others. 2025. Gemini 2.5: Pushing the frontier with
+supervision may be less suitable for holistic, stylis-      advanced reasoning, multimodality, long context, and
+tic, affective, or globally distributed cues. Finally,      next generation agentic capabilities. arXiv preprint
+EASE mainly supervises where response-to-vision             arXiv:2507.06261.
+attention is allocated within the image, rather than
+directly optimizing how much the generation de-          Abhishek Das, Harsh Agrawal, Larry Zitnick, Devi
+pends on visual input. We therefore interpret the           Parikh, and Dhruv Batra. 2017. Human attention
+attention diagnostics as evidence of improved spa-          in visual question answering: Do humans and deep
+tial grounding, not as a complete causal measure            networks look at the same regions? Computer Vision
+of visual reliance.                                         and Image Understanding, 163:90­100.
+
+Ethical Considerations                                   Stephanie Fu, Tyler Bonnen, Devin Guillory, and Trevor
+                                                            Darrell. 2025. Hidden in plain sight: Vlms over-
+This work is intended for research on multimodal            look their visual representations. arXiv preprint
+RLVR and grounded reasoning, not for direct de-             arXiv:2506.08008.
+ployment in safety-critical settings. Additional de-
+tails on artifact use, data characteristics, model-      Ziyang Gong, Wenhao Li, Oliver Ma, Songyuan Li,
+assisted annotation, computation, and AI-assistant          Zhaokai Wang, Songyuan Li, Jiayi Ji, Xue Yang,
+use are provided in Appendix E.                             Gen Luo, Junchi Yan, and Rongrong Ji. 2025. Space-
+                                                            10: A comprehensive benchmark for multimodal
+References                                                  large language models in compositional spatial in-
+                                                            telligence. Preprint, arXiv:2506.07966.
+Mohammad Asadi, Jack W O'Sullivan, Fang Cao,
+   Tahoura Nedaee, Kamyar Rajabalifardi, Fei-Fei Li,     Tianrui Guan, Fuxiao Liu, Xiyang Wu, Ruiqi Xian,
+   Ehsan Adeli, and Euan Ashley. 2026. Mirage: The          Zongxia Li, Xiaoyu Liu, Xijun Wang, Lichang Chen,
+   illusion of visual understanding. arXiv preprint         Furong Huang, Yaser Yacoob, Dinesh Manocha, and
+   arXiv:2603.21687.                                        Tianyi Zhou. 2023. Hallusionbench: An advanced
+                                                            diagnostic suite for entangled language hallucination
+Shuai Bai, Yuxuan Cai, Ruizhe Chen, Keqin Chen,             & visual illusion in large vision-language models.
+   Xionghui Chen, Zesen Cheng, Lianghao Deng, Wei           Preprint, arXiv:2310.14566.
+   Ding, Chang Gao, Chunjiang Ge, and 1 others.
+   2025a. Qwen3-vl technical report. arXiv preprint      Qidong Huang, Xiaoyi Dong, Pan Zhang, Bin Wang,
+   arXiv:2511.21631.                                        Conghui He, Jiaqi Wang, Dahua Lin, Weiming
+                                                            Zhang, and Nenghai Yu. 2024. Opera: Alleviating
+Shuai Bai, Keqin Chen, Xuejing Liu, Jialin Wang, Wen-       hallucination in multi-modal large language models
+   bin Ge, Sibo Song, Kai Dang, Peng Wang, Shi-             via over-trust penalty and retrospection-allocation. In
+   jie Wang, Jun Tang, Humen Zhong, Yuanzhi Zhu,            Proceedings of the IEEE/CVF Conference on Com-
+   Mingkun Yang, Zhaohai Li, Jianqiang Wan, Pengfei         puter Vision and Pattern Recognition, pages 13418­
+   Wang, Wei Ding, Zheren Fu, Yiheng Xu, and 8 oth-         13427.
+   ers. 2025b. Qwen2.5-vl technical report. Preprint,
+   arXiv:2502.13923.                                     Siyuan Huang, Xiaoye Qu, Yafu Li, Yun Luo, Zefeng
+                                                            He, Daizong Liu, and Yu Cheng. 2025. Spotlight
+Weijue Bu, Guan Yuan, and Guixian Zhang. 2025.              on token perception for multimodal reinforcement
+   Conscious gaze: Adaptive attention mechanisms for        learning. arXiv preprint arXiv:2510.09285.
+   hallucination mitigation in vision-language models.
+   arXiv preprint arXiv:2512.05546.                      Drew A Hudson and Christopher D Manning. 2019.
+                                                            Gqa: A new dataset for real-world visual reasoning
+Meng Cao, Haoze Zhao, Can Zhang, Xiaojun Chang,             and compositional question answering. In Proceed-
+   Ian Reid, and Xiaodan Liang. 2025. Ground-r1: In-        ings of the IEEE/CVF conference on computer vision
+   centivizing grounded visual reasoning via reinforce-     and pattern recognition, pages 6700­6709.
+   ment learning. arXiv preprint arXiv:2505.20272.
+                                                         Zhangqi Jiang, Junkai Chen, Beier Zhu, Tingjin Luo,
+                                                            Yankun Shen, and Xu Yang. 2025. Devils in middle
+                                                            layers of large vision-language models: Interpreting,
+                                                            detecting and mitigating object hallucinations via
+                                                            attention lens. In Proceedings of the IEEE/CVF Con-
+                                                            ference on Computer Vision and Pattern Recognition,
+                                                            pages 25004­25014.
+Justin Johnson, Bharath Hariharan, Laurens Van                 with visually grounded reinforcement finetuning. Ad-
+   Der Maaten, Li Fei-Fei, C Lawrence Zitnick, and             vances in Neural Information Processing Systems,
+   Ross Girshick. 2017. Clevr: A diagnostic dataset            38:20538­20559.
+   for compositional language and elementary visual
+   reasoning. In Proceedings of the IEEE conference         Zhiliang Peng, Wenhui Wang, Li Dong, Yaru Hao, Shao-
+   on computer vision and pattern recognition, pages           han Huang, Shuming Ma, Qixiang Ye, and Furu
+   2901­2910.                                                  Wei. 2024. Grounding multimodal large language
+                                                               models to the world. In International Conference
+Sicong Leng, Hang Zhang, Guanzheng Chen, Xin                   on Learning Representations, volume 2024, pages
+   Li, Shijian Lu, Chunyan Miao, and Lidong Bing.              51575­51598.
+   2024. Mitigating object hallucinations in large vision-
+   language models through visual contrastive decod-        Runqi Qiao, Qiuna Tan, Guanting Dong, Minhui Wu,
+   ing. In Proceedings of the IEEE/CVF Conference              Chong Sun, Xiaoshuai Song, Zhuoma GongQue,
+   on Computer Vision and Pattern Recognition, pages           Shanglin Lei, Zhe Wei, Miaoxuan Zhang, and 1 oth-
+   13872­13882.                                                ers. 2024. We-math: Does your large multimodal
+                                                               model achieve human-like mathematical reasoning?
+Yifan Li, Yifan Du, Kun Zhou, Jinpeng Wang,                    arXiv preprint arXiv:2407.01284.
+   Wayne Xin Zhao, and Ji-Rong Wen. 2023a. Eval-
+   uating object hallucination in large vision-language     Qwen Team. 2026. Qwen3.5: Towards native multi-
+   models. arXiv preprint arXiv:2305.10355.                    modal agents.
+
+Zhuowan Li, Xingrui Wang, Elias Stengel-Eskin, Adam         Ramprasaath R Selvaraju, Stefan Lee, Yilin Shen,
+   Kortylewski, Wufei Ma, Benjamin Van Durme, and              Hongxia Jin, Shalini Ghosh, Larry Heck, Dhruv Ba-
+   Alan L Yuille. 2023b. Super-clevr: A virtual bench-         tra, and Devi Parikh. 2019. Taking a hint: Leverag-
+   mark to diagnose domain robustness in visual rea-           ing explanations to make vision and language models
+   soning. In Proceedings of the IEEE/CVF conference           more grounded. In Proceedings of the IEEE/CVF
+   on computer vision and pattern recognition, pages           international conference on computer vision, pages
+   14963­14973.                                                2591­2600.
+
+Shilong Liu, Zhaoyang Zeng, Tianhe Ren, Feng Li, Hao        Zhihong Shao, Peiyi Wang, Qihao Zhu, Runxin Xu,
+   Zhang, Jie Yang, Qing Jiang, Chunyuan Li, Jian-             Junxiao Song, Xiao Bi, Haowei Zhang, Mingchuan
+   wei Yang, Hang Su, and 1 others. 2024. Grounding            Zhang, YK Li, Yang Wu, and 1 others. 2024.
+   dino: Marrying dino with grounded pre-training for          Deepseekmath: Pushing the limits of mathematical
+   open-set object detection. In European conference           reasoning in open language models. arXiv preprint
+   on computer vision, pages 38­55. Springer.                  arXiv:2402.03300.
+
+Xiangyan Liu, Jinjie Ni, Zijian Wu, Chao Du, Longxu         Chufan Shi, Cheng Yang, Yaokang Wu, Linhao Jin,
+   Dou, Haonan Wang, Tianyu Pang, and Michael Qizhe            Bo Shui, Taylor Berg-Kirkpatrick, and Xuezhe Ma.
+   Shieh. 2025a. Noisyrollout: Reinforcing visual              2026. Are vlms seeing or just saying? uncover-
+   reasoning with data augmentation. arXiv preprint            ing the illusion of visual re-examination. Preprint,
+   arXiv:2504.13055.                                           arXiv:2605.15864.
+
+Ziyu Liu, Zeyi Sun, Yuhang Zang, Xiaoyi Dong, Yuhang        Sanchit Sinha, Oana Frunza, Kashif Rasul, Yuriy
+   Cao, Haodong Duan, Dahua Lin, and Jiaqi Wang.               Nevmyvaka, and Aidong Zhang. 2025. Chart-
+   2025b. Visual-rft: Visual reinforcement fine-tuning.        rvr: Reinforcement learning with verifiable rewards
+   In Proceedings of the IEEE/CVF International Con-           for explainable chart reasoning. arXiv preprint
+   ference on Computer Vision, pages 2034­2044.                arXiv:2510.10973.
+
+Pan Lu, Hritik Bansal, Tony Xia, Jiacheng Liu, Chun-        Huajie Tan, Yuheng Ji, Xiaoshuai Hao, Xiansheng Chen,
+   yuan Li, Hannaneh Hajishirzi, Hao Cheng, Kai-               Pengwei Wang, Zhongyuan Wang, and Shanghang
+   Wei Chang, Michel Galley, and Jianfeng Gao. 2024.           Zhang. 2026. Reason-rft: Reinforcement fine-tuning
+   Mathvista: Evaluating mathematical reasoning of             for visual reasoning of vision language models. Ad-
+   foundation models in visual contexts. In Inter-             vances in neural information processing systems,
+   national Conference on Learning Representations             38:5772­5822.
+   (ICLR).
+                                                            Shengbang Tong, Ellis Brown, Penghao Wu, Sanghyun
+Fanqing Meng, Lingxiao Du, Zongkai Liu, Zhixiang               Woo, Manoj Middepogu, Sai Charitha Akula, Jihan
+   Zhou, Quanfeng Lu, Daocheng Fu, Tiancheng Han,              Yang, Shusheng Yang, Adithya Iyer, Xichen Pan,
+   Botian Shi, Wenhai Wang, Junjun He, and 1 oth-              Austin Wang, Rob Fergus, Yann LeCun, and Saining
+   ers. 2025. Mm-eureka: Exploring the frontiers of            Xie. 2024. Cambrian-1: A fully open, vision-centric
+   multimodal reasoning with rule-based reinforcement          exploration of multimodal llms.
+   learning. arXiv preprint arXiv:2503.07365.
+                                                            Haozhe Wang, Chao Qu, Zuming Huang, Wei Chu,
+Minheng Ni, Zhengyuan Yang, Linjie Li, Chung-Ching             Fangzhen Lin, and Wenhu Chen. 2025a. Vl-
+   Lin, Kevin Lin, Wangmeng Zuo, and Lijuan Wang.              rethinker: Incentivizing self-reflection of vision-
+   2026. Point-rft: Improving multimodal reasoning             language models with reinforcement learning. arXiv
+                                                               preprint arXiv:2504.08837.
+Haozhe Wang, Chao Qu, Zuming Huang, Wei Chu,               Yijia Xiao, Edward Sun, Tianyu Liu, and Wei Wang.
+   Fangzhen Lin, and Wenhu Chen. 2025b. Vl-                   2024. Logicvista: Multimodal llm logical rea-
+   rethinker: Incentivizing self-reflection of vision-        soning benchmark in visual contexts. Preprint,
+   language models with reinforcement learning. arXiv         arXiv:2407.04973.
+   preprint arXiv:2504.08837.
+                                                           Zhongxing Xu, Chengzhi Liu, Qingyue Wei, Juncheng
+Wenbin Wang, Liang Ding, Minyan Zeng, Xiabin Zhou,            Wu, James Zou, Xin Wang, Yuyin Zhou, and Sheng
+   Li Shen, Yong Luo, Wei Yu, and Dacheng Tao. 2025c.         Liu. 2026. More thinking, less seeing? assessing am-
+   Divide, conquer and combine: A training-free frame-        plified hallucination in multimodal reasoning models.
+   work for high-resolution image perception in mul-          Advances in Neural Information Processing Systems,
+   timodal large language models. In Proceedings of           38:82878­82905.
+   the AAAI Conference on Artificial Intelligence, vol-
+   ume 39, pages 7907­7915.                                Yi Yang, Xiaoxuan He, Hongkun Pan, Xiyan Jiang,
+                                                              Yan Deng, Xingtao Yang, Haoyu Lu, Dacheng Yin,
+Xiyao Wang, Zhengyuan Yang, Chao Feng, Hongjin                Fengyun Rao, Minfeng Zhu, and 1 others. 2025a.
+   Lu, Linjie Li, Chung-Ching Lin, Kevin Lin, Furong          R1-onevision: Advancing generalized multimodal
+   Huang, and Lijuan Wang. 2025d. Sota with less:             reasoning through cross-modal formalization. In Pro-
+   Mcts-guided sample selection for data-efficient vi-        ceedings of the IEEE/CVF International Conference
+   sual reasoning self-improvement. arXiv preprint            on Computer Vision, pages 2376­2385.
+   arXiv:2504.07934.
+                                                           Zeyuan Yang, Xueyang Yu, Delin Chen, Maohao Shen,
+Zengbin Wang, Feng Xiong, Liang Lin, Xuecai Hu,               and Chuang Gan. 2025b. Machine mental imagery:
+   Yong Wang, Yanlin Wang, Man Zhang, and Xi-                 Empower multimodal reasoning with latent visual
+   angxiang Chu. 2026. Visually-guided policy opti-           tokens. arXiv preprint arXiv:2506.17218.
+   mization for multimodal reasoning. arXiv preprint
+   arXiv:2604.09349.                                       Hao Yin, Guangzong Si, and Zilei Wang. 2025. Clear-
+                                                              sight: Visual signal enhancement for object hallucina-
+Zhenhailong Wang, Xuehang Guo, Sofia Stoica,                  tion mitigation in multimodal large language models.
+   Haiyang Xu, Hongru Wang, Hyeonjeong Ha, Xiusi              In Proceedings of the Computer Vision and Pattern
+   Chen, Yangyi Chen, Ming Yan, Fei Huang, and                Recognition Conference, pages 14625­14634.
+   1 others. 2025e. Perception-aware policy opti-
+   mization for multimodal reasoning. arXiv preprint       Haoxuan You, Haotian Zhang, Zhe Gan, Xianzhi Du,
+   arXiv:2507.06448.                                          Bowen Zhang, Zirui Wang, Liangliang Cao, Shih-Fu
+                                                              Chang, and Yinfei Yang. 2024. Ferret: Refer and
+Lai Wei, Liangbo He, Jun Lan, Lingzhong Dong, Yu-             ground anything anywhere at any granularity. In In-
+   tong Cai, Siyuan Li, Huijia Zhu, Weiqiang Wang,            ternational Conference on Learning Representations,
+   Linghe Kong, Yue Wang, and 1 others. 2026. Zoom-           volume 2024, pages 57153­57180.
+   ing without zooming: Region-to-image distilla-
+   tion for fine-grained multimodal perception. arXiv      Qiying Yu, Zheng Zhang, Ruofei Zhu, Yufeng Yuan,
+   preprint arXiv:2602.11858.                                 Xiaochen Zuo, Yu Yue, Weinan Dai, Tiantian Fan,
+                                                              Gaohong Liu, Lingjun Liu, and 1 others. 2026. Dapo:
+Penghao Wu and Saining Xie. 2024. V*: Guided visual           An open-source llm reinforcement learning system
+   search as a core mechanism in multimodal llms. In          at scale. Advances in Neural Information Processing
+   Proceedings of the IEEE/CVF Conference on Com-             Systems, 38:113222­113244.
+   puter Vision and Pattern Recognition, pages 13084­
+   13094.                                                  Haobo Yuan, Yueyi Sun, Yanwei Li, Tao Zhang, Xue-
+                                                              qing Deng, Henghui Ding, Lu Qi, Anran Wang,
+Qiong Wu, Xiangcong Yang, Yiyi Zhou, Chenxin                  Xiangtai Li, and Ming-Hsuan Yang. 2025. Visual
+   Fang, Baiyang Song, Xiaoshuai Sun, and Ron-                reasoning tracer: Object-level grounded reasoning
+   grong Ji. 2025. Grounded chain-of-thought for              benchmark. arXiv preprint arXiv:2512.05091.
+   multimodal large language models. arXiv preprint
+   arXiv:2503.12799.                                       Chi Zhang, Haibo Qiu, Qiming Zhang, Yufei Xu, Zhix-
+                                                              iong Zeng, Siqi Yang, Peng Shi, Lin Ma, and Jing
+Gongli Xi, Ye Tian, Mengyu Yang, Huahui Yi, Liang             Zhang. 2025. Perceptual-evidence anchored rein-
+   Lin, Xiaoshuai Hao, Kun Wang, and Wendong Wang.            forced learning for multimodal reasoning. arXiv
+   2026. Large vision-language models get lost in atten-      preprint arXiv:2511.18437.
+   tion. arXiv preprint arXiv:2605.05668.
+                                                           Renrui Zhang, Dongzhi Jiang, Yichi Zhang, Haokun
+Jiaer Xia, Bingkui Tong, Yuhang Zang, Rui Shao,               Lin, Ziyu Guo, Pengshuo Qiu, Aojun Zhou, Pan Lu,
+   and Kaiyang Zhou. 2025. Bootstrapping grounded             Kai-Wei Chang, Peng Gao, and 1 others. 2024. Math-
+   chain-of-thought in multimodal llms for data-efficient     verse: Does your multi-modal llm truly see the di-
+   model adaptation. In Proceedings of the IEEE/CVF           agrams in visual math problems? arXiv preprint
+   International Conference on Computer Vision, pages         arXiv:2403.14624.
+   208­217.
+                                                           Xin Zhang, Xingyu Li, Rongguang Wang, Ruizhong
+                                                              Miao, Zheng Wang, Dan Roth, and Chenyang Li.
+   2026. Chart-rl: Generalized chart comprehension       B.1 Step 1. Evidence Phrase Extraction
+   via reinforcement learning with verifiable rewards.
+   arXiv preprint arXiv:2603.06958.                      For each source example (I, q, a), GPT-4.1-mini is
+                                                         prompted to enumerate the minimal set of visible
+Zhihao Zhu, Jiafeng Liang, Shixin Jiang, Jinlan Fu,      entities that must be inspected to verify the answer.
+   Ming Liu, Guanglu Sun, See-Kiong Ng, and Bing         The output provides temporary text queries for lo-
+   Qin. 2026. Analyzing reasoning consistency in         calization rather than final supervision labels.
+   large multimodal models under cross-modal conflicts.
+   arXiv preprint arXiv:2601.04073.                        Evidence phrase extraction prompt
+
+A Motivating Diagnostic Details                            Given the question q and reference answer a,
+                                                           identify the smallest set of visible and local-
+The diagnostic in Figure 3 tests whether hallucina-        izable objects or regions that a human would
+tions after RL with only outcome rewards are asso-         inspect to verify the answer. Include only ev-
+ciated with evidence attention mismatch. We use a          idence that directly supports the answer. Re-
+Qwen3-VL-4B policy trained with GRPO and final-            turn a JSON list of concise noun phrases. Do
+answer rewards on 903 HallusionBench-Image ex-             not include explanations, full sentences, the
+amples that remain after applying the evidence an-         whole image, generic background, scene-level
+notation and filtering pipeline in Appendix B. For         descriptions, or non-localizable concepts. Re-
+each generated response, we compute the KL di-             turn [] if no localizable visual evidence is
+vergence between the response-to-vision attention          required.
+distribution normalized over visual tokens and the
+Gaussian mixture evidence target defined in Sec-            The extractor returns a structured list of con-
+tion 3.3. Responses judged incorrect by the official     cise noun phrases. It is asked for the smallest
+HallusionBench protocol are treated as hallucinated      set of objects needed to verify the answer, rather
+for this analysis. Figure 3(a) groups examples into      than all objects mentioned in the question. We
+equal-sized KL quantile bins and reports the hal-        remove phrases referring to the whole scene, the
+lucination rate in each bin, showing whether risk        background, the image itself, or non-localizable
+increases as mismatch grows. Spearman correla-           abstractions, and merge near duplicates by string
+tion is computed over individual examples. Fig-          overlap and head-noun matching.
+ure 3(b) compares the KL distributions of halluci-
+nated responses and responses that do not halluci-       B.2 Step 2. Box Localization
+nate, showing whether hallucinated samples have
+higher mismatch overall. Evidence boxes are used         Each intermediate evidence phrase is localized
+only for this offline diagnostic and are not provided    independently, and the resulting coordinates are
+to the model input.                                      kept as supervision metadata. We use Grounding
+                                                         DINO (Liu et al., 2024) as the primary phrase-
+B Data Construction Details and                          grounding model and keep its top prediction when
+     Statistics                                          the confidence exceeds det = 0.35. Candidates
+                                                         below this confidence threshold are discarded.
+This appendix documents the evidence extraction
+prompts, box-metadata construction procedure, fil-          As a complementary localization signal, we also
+tering rules, and dataset-specific preprocessing.        query a locally deployed Qwen3.5-27B (Qwen
+Figure 4 shows the high-level pipeline, and Table 4      Team, 2026) with the original image and the same
+reports the source-level statistics of the annotated     intermediate phrase to obtain normalized box coor-
+pools before final training sampling. The impor-         dinates. The two localization outputs are merged
+tant implementation convention is that evidence          query by query. If their IoU is at least 0.7, their
+boxes are never rendered into the image. Each            union is used as a conservative evidence box Bk.
+annotated example stores the original image, ques-       If they disagree, the Grounding DINO box is used
+tion, answer, box coordinates, and a single-/multi-      as the primary localization, and the Qwen box is
+evidence tag. EASE consumes the boxes only when          retained only if it passes Step 3 validation for the
+constructing the target attention distribution.          same evidence entity. Queries for which neither
+                                                         model returns a valid box are dropped.
+B.3 Step 3. Quality Validation                        2025), and ViRL39K (Wang et al., 2025b). It also
+                                                      includes 107,714 single-evidence examples from
+The annotation pipeline validates each proposed       ZwZ74K (Wei et al., 2026) and the same source
+box independently. Gemini 2.5 Flash-Lite (Co-         corpora. The full annotated pool contains 127,971
+manici et al., 2025) receives the original image,     examples before final training sampling.
+question, reference answer, intermediate evidence
+phrase, and proposed box coordinates, and judges      C Experimental Settings
+whether the boxed region contains answer-relevant
+visual content. We remove boxes rejected by the       C.1 Training Datasets
+verifier. Using a verifier from a different model
+family reduces the chance that a single model's       All controlled runs draw training data from the
+extraction bias determines both the intermediate      evidence-annotated VQA pools described in Ap-
+phrase queries and the final boxes.                   pendix B. The pools are built from ZwZ74K,
+                                                      CLEVR, SuperCLEVR, SpaCE10, and ViRL39K.
+  Quality validation prompt                           Each training record keeps the original image, ques-
+                                                      tion, reference answer, validated box coordinates,
+  Given the original image, question q, reference     and a tag indicating whether one or multiple evi-
+  answer a, evidence query e, and proposed            dence boxes are available. The intermediate evi-
+  box coordinates b = [x1, y1, x2, y2], decide        dence phrases used for localization are not stored
+  whether the region specified by b contains vis-     as training fields. Unless otherwise noted, training
+  ible evidence matching e and directly helps         uses a balanced mixture with equal numbers sam-
+  verify a. Use the full image for spatial con-       pled from the single-evidence and multi-evidence
+  text, but base the final decision on the content    pools. All controlled RL variants use the same sam-
+  inside the proposed box. Return VALID if the        pled image-question-answer data and final-answer
+  box encloses answer-relevant visual evidence.       verifier. EASE additionally uses the stored box
+  Return INVALID if the box is empty, localizes       metadata during actor updates to construct its aux-
+  the wrong object or region, is too vague, or        iliary attention target.
+  does not help verify the answer. Return only
+  VALID or INVALID.
+
+   Boxes are clipped to image boundaries, con-        C.2 Baselines
+verted to the coordinate convention used by the
+visual-token grid, and stored as B. The final output   · ThinkLite-VL improves data-efficient visual
+is a metadata-augmented training tuple (I, q, a, B)       reasoning through MCTS-guided sample selec-
+in which I remains the original unmarked image.           tion (Wang et al., 2025d).
+During RL rollouts, the policy sees only (I, q), and
+during the actor update, EASE uses B to construct      · VL-Rethinker trains VLMs to recon-
+the Gaussian-mixture attention target.                    sider their answers through RL-driven
+                                                          self-reflection (Wang et al., 2025a).
+B.4 Training Pool Construction
+                                                       · MM-Eureka studies rule-based RL for multi-
+After validation, examples with one validated evi-        modal reasoning and releases strong 7B-scale
+dence box enter the single-evidence pool, and ex-         models (Meng et al., 2025).
+amples with at least two validated evidence boxes
+enter the multi-evidence pool. The single-evidence     · NoisyRollout reinforces visual reasoning with
+pool provides local grounding supervision, while          augmented rollouts that perturb the visual in-
+the multi-evidence pool provides cross-region su-         put (Liu et al., 2025a).
+pervision. Table 4 summarizes the available an-
+notated examples in each pool. The main EASE           · PAPOD introduces perception-aware policy op-
+training distribution is then sampled from these          timization to improve reasoning under visual
+pools in a balanced 1:1 ratio.                            uncertainty (Wang et al., 2025e).
+
+   Table 4 reports 20,257 multi-evidence exam-         · VPPO-RL estimates token-level visual depen-
+ples from CLEVR (Johnson et al., 2017), Super-            dence from perturbed images and uses it to mod-
+CLEVR (Li et al., 2023b), SpaCE10 (Gong et al.,           ulate policy optimization (Huang et al., 2025).
+
+                                                       · VGPO measures visual focus from internal
+                                                          model states and uses visually guided advan-
+                                                          tages (Wang et al., 2026).
+Table 4: Evidence-annotated data pools. The table reports source-level annotated examples available after filtering.
+Counts are measured before final training sampling.
+
+Source corpus   Multi-    Single-    Total            Primary supervision role
+               evidence  evidence  available
+                                                      Fine-grained local region grounding
+ZwZ74K              0    74,000    74,000             Controlled compositional reasoning
+CLEVR          4,528      1,531     6,059             Harder synthetic multi-object reasoning
+SuperCLEVR     3,992        926     4,918             Spatial relations and cross-region evidence
+SpaCE10        1,759      2,371     4,130             General visual reasoning with localized evidence
+ViRL39K        9,978               38,864
+                         28,886                       Evidence-annotated pool
+
+Total          20,257 107,714 127,971
+
+C.3 Evaluation Benchmarks                             Algorithm 1: EASE training procedure.
+
+ · HR-Bench evaluates high-resolution image             Input: Evidence data D, policy , verifier R, layer
+    perception and fine-grained visual recogni-                   , reward threshold  , attention weight attn
+    tion (Wang et al., 2025c).
+                                                        Output: Fine-tuned policy 
+ · V* focuses on guided visual search and local-      1 for each training step do
+    ized object understanding (Wu and Xie, 2024).
+                                                      2 Sample evidence tuples (I, q, a, B) from D;
+ · CV-Bench evaluates vision-centric percep-
+    tion skills in two-dimensional and three-         3       Roll out grouped responses y(g)  (· | I, q)
+    dimensional visual contexts (Tong et al., 2024).
+                                                              and compute rewards r(g) = R(y(g), a);
+ · POPE probes object hallucination through bi-
+    nary visual questions with controlled object      4 Map B to the visual-token grid and build the
+    presence (Li et al., 2023a).
+                                                              smoothed Gaussian-mixture target Ptarget by
+ · HallusionBench-Image diagnoses hallucina-                  Eq. 5;
+    tion and visual illusion in image-grounded ques-
+    tion answering (Guan et al., 2023).               5 Compute the base RL actor loss from the
+
+ · MathVista evaluates mathematical reasoning                 grouped rewards;
+    in visual contexts across diverse problem
+    types (Lu et al., 2024).                          6       foreach trajectory with r(g)   do
+
+ · MathVerseV denotes the vision-centric subset       7            Sample valid response tokens S(g) and
+    of MathVerse, where solving the problem re-
+    quires information from the image (Zhang et al.,               extract layer- response-to-vision
+    2024).
+                                                                   attention;
+ · WeMath provides a diagnostic evaluation
+    of multimodal mathematical reasoning (Qiao        8            Average attention heads to obtain Pmg,otdel
+    et al., 2024).
+                                                                   and compute the KL loss in Eq. 8;
+ · MMK12 covers K­12 multimodal reasoning
+    problems and is used to assess general visual     9       end
+    problem solving (Meng et al., 2025).
+                                                      10 Add the reward-gated attention loss in Eq. 9 to
+ · LogicVista evaluates logical reasoning in
+    visual contexts, complementing the percep-                the actor loss;
+    tion and mathematical reasoning suites with
+    diagram-grounded reasoning tasks (Xiao et al.,    11      Update ;
+    2024).
+                                                      12 end
+C.4 Implementation Details
+                                                      maximum response length 1,024. Evaluation uses
+Training and evaluation setup. Unless other-          greedy decoding with temperature 0.0 for all exper-
+wise noted, models are trained for 2 epochs with      iments.
+learning rate 1 × 10-6, rollout batch size 512, and
+                                                         EASE configuration. Unless otherwise noted,
+                                                      EASE uses the middle-layer attention index  =
+                                                      2L/3, samples at most 64 valid response tokens
+                                                      for the auxiliary loss, and applies model-to-target
+                                                      KL only to reward-positive trajectories. We set
+                                                      attn = 0.001 and background smoothing  =
+                                                      0.1.
+
+                                                         Algorithm 1 summarizes the training procedure
+                                                      used by EASE.
+
+                                                      D Evidence-Attention Alignment Metrics
+
+                                                      This appendix defines the diagnostics reported in
+                                                      Figure 5. They measure whether response-to-vision
+                                                      attention is spatially aligned with answer-relevant
+evidence regions. Evidence boxes are used only          Pointing Accuracy. Pointing Accuracy measures
+for offline analysis and are never provided to the      whether the strongest attention peak falls inside
+model input.                                            an evidence region. We first identify the most-
+                                                        attended visual token:
+Response-to-vision attention. For each gener-
+
+ated response, we extract response-to-vision atten-     v = arg max Pmodel(v).                            (16)
+tion from the same layer used by EASE,  =                                       vV
+
+2L/3, where L denotes the number of trans-              A sample is counted as correct for pointing if
+                                                        Mevid(v) = 1. The reported score is the aver-
+former layers in the language model. For a re-
+                                                        age over evaluation examples:
+sponse token t, attention head h, and visual token
+
+v  V, we compute                                                             1  N
+                                                        PointingAcc =
+          vexVpe(x(qph(,(tq)h,kt)h,vk/h,vd/)d) .                                     [Me(vi)id(vi) = 1].  (17)
+                                                                            N
+pth(v) =                                                                        i=1
+                                                  (10)
+
+We average over heads and valid response tokens         Multi-evidence Coverage. Multi-evidence Cov-
+to obtain a single visual-token distribution:           erage is computed only on examples with K > 1
+                                                        evidence boxes. For each box Bk, we compute its
+                                                        attention mass
+
+                 1  1       H                           mk = Pmodel(v)Mk(v).                              (18)
+Pmodel(v) = |S|     H
+                               pth(v),            (11)  vV
+
+                    tS h=1
+
+where S is the set of valid response tokens used for    Because larger boxes naturally cover more visual
+evaluation. Pmodel is normalized over the visual-       tokens, we compare mk with a size-normalized
+token set V.                                            uniform-attention baseline
+
+Mapping evidence boxes to visual tokens. Let            uk =                    vV Mk(v) .                (19)
+the input image have width Wimg and height Himg,                                   |V |
+and let the visual-token grid have width Wv and
+height Hv. Each visual token vi,j is assigned an        A box is counted as covered if
+image-plane center
+                                                        mk > uk,                                          (20)
+
+ci,j =    j + 0.5   i + 0.5                             where we use  = 2 by default. The coverage
+          Wv Wimg, Hv Himg . (12)                       score for one multi-evidence example is
+
+                                                        1K                           [mk > uk].
+                                                        Coverage =                                        (21)
+For an evidence box Bk = (x1,k, y1,k, x2,k, y2,k),                      K
+we define a binary token mask                                                   k=1
+
+Mk(vi,j ) = [x1,k  cxi,j  x2,k                    (13)  The reported Multi-evidence Coverage is the aver-
+                  y1,k  ciy,j  y2,k].                   age of this quantity over all multi-evidence exam-
+                                                        ples.
+
+The union evidence mask is                              Interpretation. These metrics operationalize
+                                                        attention-based diagnostics of the evidence-
+          Mevid(v) = mKax Mk(v).                  (14)  acquisition process targeted by EASE. Evidence
+                    k=1                                 Attention Mass measures total evidence align-
+                                                        ment, Pointing Accuracy measures whether the
+Evidence Attention Mass. Evidence Attention             strongest attention peak lands on evidence, and
+Mass measures the total response-to-vision atten-       Multi-evidence Coverage measures whether atten-
+tion assigned to any annotated evidence region:         tion is distributed across multiple supporting re-
+                                                        gions rather than concentrated on a single salient
+          EAM = Pmodel(v)Mevid(v). (15)                 region. These diagnostics do not establish causal
+                                                        necessity of the attended regions. Instead, they
+                             vV                         provide quantitative evidence that EASE increases
+                                                        the spatial alignment between response-to-vision
+Higher values indicate that a larger fraction of vi-    attention and annotated visual evidence.
+sual attention falls inside answer-relevant evidence
+boxes.
+E Responsible Research Details                         tention to align with annotated supporting regions,
+                                                       but correct attention to visual evidence does not
+Artifact use, licenses, and intended use. This         guarantee correct recognition or reasoning. We
+work uses existing research artifacts, including       therefore focus on cases where the model attends
+VLM checkpoints, VQA training corpora, evalu-          to the relevant evidence yet still produces an incor-
+ation benchmarks, grounding models, LLM back-          rect answer.
+ends, PyTorch, CUDA, and multimodal RL training
+code, for research evaluation of evidence-anchored     Failure Case 1. Visual perception error. The
+supervision in multimodal RLVR. We cite the            first example is a contextual size-illusion case from
+original creators of the models, datasets, bench-      HallusionBench-Image. The question asks whether
+marks, and baseline systems in the main paper          the right grey box is smaller than the left grey box,
+and appendix. We use these artifacts according         while the correct answer is no. The model attends
+to the licenses, access conditions, and intended-      to the relevant grey boxes but is misled by the sur-
+use requirements specified by their providers. The     rounding blue squares. It treats the smaller con-
+artifacts produced by our work, including code,        textual squares around the right box as evidence
+prompts, configurations, box metadata, and evalua-     that the right grey box is also smaller, rather than
+tion scripts, are intended for research on grounded    directly comparing the two grey boxes. This fail-
+multimodal reasoning, RLVR, and reproducibility        ure suggests that EASE improves where the model
+analysis, rather than direct safety-critical deploy-   looks, but it cannot fully correct a visual represen-
+ment.                                                  tation that is distorted by misleading context.
+
+Model-assisted annotation and validation.              Failure Case 2. Reasoning after evidence ac-
+LLMs and VLMs are used as research tools in            quisition. The second example is a geometry
+the evidence annotation pipeline. As described in      problem from MathVerse-V. The model correctly
+Appendix B, GPT-4.1-mini extracts intermediate         identifies the tangent-radius relation and derives
+evidence phrases, a locally deployed Qwen3.5-27B       AOB = 54. However, it then misapplies a
+provides complementary box localization, and           circle-angle relation by setting C = AOB,
+Gemini 2.5 Flash-Lite validates proposed box           which leads to the incorrect choice. The relevant di-
+coordinates against the original image, question,      agram elements are identified, but the final answer
+answer, and phrase. These model outputs are used       is wrong because the generated solution applies
+only to construct and filter training metadata.        an invalid geometric inference. This failure shows
+                                                       that evidence acquisition is a necessary component
+Result reporting. We report benchmark accu-            of grounded multimodal reasoning, but it is not
+racy or score, average score across benchmark          sufficient when the downstream reasoning policy
+groups, ablation results, and attention-alignment      remains flawed.
+diagnostics. For controlled comparisons, Base,
+GRPO, DAPO, and EASE use the same training                Together, these cases complement the positive
+data, backbone family, verifier, decoding protocol,    examples in Figure 7. They indicate that EASE pri-
+and evaluation suite within each backbone.             marily addresses spatial evidence alignment within
+                                                       response-to-vision attention during standard RL,
+Use of AI assistants. The authors used AI as-          while residual errors can still arise from contextual
+sistants for language polishing and submission-        perception failures or from reasoning mistakes after
+compliance drafting support. All method design,        the relevant evidence has been attended.
+code implementation, experimental design, experi-
+mental execution, result analysis, scientific claims,
+and final writing decisions were conducted, veri-
+fied, and approved by the authors.
+
+F Failure Case Analysis
+
+To provide deeper insights into the boundaries of
+our proposed EASE, we present two representative
+failure cases in Figure 8. EASE improves evidence
+acquisition by encouraging response-to-vision at-
+Failure Case 1: Visual Perception Error          Failure Case 2: Reasoning Error
+  (HallusionBench-Image, filename:                     (MathVerse-V, id: 20)
+          ./VD/illusion/1_0.png)
+
+ Question <image>. Is the right grey box          Question <image>. As shown in the
+
+smaller than the left grey box?                  figure, AB is tangent to circle O at point B,
+Ground Truth: 0                                  then angle C is equal to ()
+Model Prediction: It seems that yes, the         Choices:\nA:36°\nB:54°\nC:60°\nD:27°
+grey box on the right is smaller than the one    Ground Truth: D
+on the left, as it is shorter in both width and  Model Prediction: Since AB is tangent to
+height.
+Additionally, the area of the grey box on the      circle O at B, the radius is perpendicular to
+right is also noticeably smaller than that of
+the left grey box. This is further confirmed     the tangent. So OB AB, which means OBA
+by the fact that the small blue squares
+surrounding the right grey box are also much      = 90°.
+smaller than the large blue squares around
+the left grey box.                               In right triangle ABO, A = 36°. I can find
+Thus, the answer is: \boxed{1}.                  the third angle:
+Failure Analysis: The model looks at the
+relevant grey boxes but is misled by the                AOB = 90° - 36° = 54°
+surrounding blue squares. It infers that the      Now, I need to find C. Cause angles related
+right grey box is smaller from the contextual     to the same arc are equal. Since both AOB
+pattern instead of directly comparing the         and C are "associated with" arc OB, so
+two grey boxes, showing a visual perception
+error under size illusion.                                 C = AOB = 54°.
+
+                                                 Thus, the correct answer is: \boxed{A}.
+                                                 Failure Analysis: The model correctly uses
+                                                 the tangent-radius relation to
+
+                                                  obtain AOB=54°, but then misapplies the
+                                                   circle-angle relation by setting C= AOB.
+
+                                                 The relevant diagram elements are
+                                                 identified, yet the final answer is wrong
+                                                 because of an incorrect geometric inference.
+
+Figure 8: Representative failure cases. The left case shows a contextual size illusion from HallusionBench-Image,
+where the model is misled by surrounding blue squares when comparing the two grey boxes. The right case shows
+a MathVerse-V geometry example, where the model identifies relevant diagram relations but applies an incorrect
+circle-angle inference.
+

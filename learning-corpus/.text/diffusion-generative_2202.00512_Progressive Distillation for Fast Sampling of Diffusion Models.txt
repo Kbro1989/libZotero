@@ -1,0 +1,69 @@
+arXiv:2202.00512v2 [cs.LG] 7 Jun 2022
+
+Published as a conference paper at ICLR 2022
+PROGRESSIVE DISTILLATION FOR FAST SAMPLING OF DIFFUSION MODELS
+Tim Salimans & Jonathan Ho Google Research, Brain team {salimans,jonathanho}@google.com
+ABSTRACT
+Diffusion models have recently shown great promise for generative modeling, outperforming GANs on perceptual quality and autoregressive models at density estimation. A remaining downside is their slow sampling time: generating high quality samples takes many hundreds or thousands of model evaluations. Here we make two contributions to help eliminate this downside: First, we present new parameterizations of diffusion models that provide increased stability when using few sampling steps. Second, we present a method to distill a trained deterministic diffusion sampler, using many steps, into a new diffusion model that takes half as many sampling steps. We then keep progressively applying this distillation procedure to our model, halving the number of required sampling steps each time. On standard image generation benchmarks like CIFAR-10, ImageNet, and LSUN, we start out with state-of-the-art samplers taking as many as 8192 steps, and are able to distill down to models taking as few as 4 steps without losing much perceptual quality; achieving, for example, a FID of 3.0 on CIFAR-10 in 4 steps. Finally, we show that the full progressive distillation procedure does not take more time than it takes to train the original model, thus representing an efficient solution for generative modeling using diffusion at both train and test time.
+1 INTRODUCTION
+Diffusion models (Sohl-Dickstein et al., 2015; Song & Ermon, 2019; Ho et al., 2020) are an emerging class of generative models that has recently delivered impressive results on many standard generative modeling benchmarks. These models have achieved ImageNet generation results outperforming BigGAN-deep and VQ-VAE-2 in terms of FID score and classification accuracy score (Ho et al., 2021; Dhariwal & Nichol, 2021), and they have achieved likelihoods outperforming autoregressive image models (Kingma et al., 2021; Song et al., 2021b). They have also succeeded in image super-resolution (Saharia et al., 2021; Li et al., 2021) and image inpainting (Song et al., 2021c), and there have been promising results in shape generation (Cai et al., 2020), graph generation (Niu et al., 2020), and text generation (Hoogeboom et al., 2021; Austin et al., 2021).
+A major barrier remains to practical adoption of diffusion models: sampling speed. While sampling can be accomplished in relatively few steps in strongly conditioned settings, such as text-tospeech (Chen et al., 2021) and image super-resolution (Saharia et al., 2021), or when guiding the sampler using an auxiliary classifier (Dhariwal & Nichol, 2021), the situation is substantially different in settings in which there is less conditioning information available. Examples of such settings are unconditional and standard class-conditional image generation, which currently require hundreds or thousands of steps using network evaluations that are not amenable to the caching optimizations of other types of generative models (Ramachandran et al., 2017).
+In this paper, we reduce the sampling time of diffusion models by orders of magnitude in unconditional and class-conditional image generation, which represent the setting in which diffusion models have been slowest in previous work. We present a procedure to distill the behavior of a N -step DDIM sampler (Song et al., 2021a) for a pretrained diffusion model into a new model with N/2 steps, with little degradation in sample quality. In what we call progressive distillation, we repeat this distillation procedure to produce models that generate in as few as 4 steps, still maintaining sample quality competitive with state-of-the-art models using thousands of steps.
+1
+
+Published as a conference paper at ICLR 2022
+
+Distillation Distillation
+
+Distillation
+
+Figure 1: A visualization of two iterations of our proposed progressive distillation algorithm. A sampler f (z; ), mapping random noise to samples x in 4 deterministic steps, is distilled into a new sampler f (z; ) taking only a single step. The original sampler is derived by approximately integrating the probability flow ODE for a learned diffusion model, and distillation can thus be understood as learning to integrate in fewer steps, or amortizing this integration into the new sampler.
+
+2 BACKGROUND ON DIFFUSION MODELS
+
+We consider diffusion models (Sohl-Dickstein et al., 2015; Song & Ermon, 2019; Ho et al., 2020) specified in continuous time (Tzen & Raginsky, 2019a; Song et al., 2021c; Chen et al., 2021; Kingma et al., 2021). We use x  p(x) to denote training data. A diffusion model has latent variables z = {zt | t  [0, 1]} and is specified by a noise schedule comprising differentiable functions t, t such that t = log[t2/t2], the log signal-to-noise-ratio, decreases monotonically with t.
+
+These ingredients define the forward process q(z|x), a Gaussian process satisfying the following Markovian structure:
+
+q(zt|x) = N (zt; tx, t2I), q(zt|zs) = N (zt; (t/s)zs, t2|sI)
+
+(1)
+
+where 0  s < t  1 and t2|s = (1 - et-s )t2.
+
+The role of function approximation in the diffusion model is to denoise zt  q(zt|x) into an estimate x^(zt)  x (the function approximator also receives t as an input, but we omit this to keep our notation clean). We train this denoising model x^ using a weighted mean squared error loss
+
+E
+
+,t
+
+w(t)
+
+x^(zt) - x
+
+2 2
+
+(2)
+
+over uniformly sampled times t  [0, 1]. This loss can be justified as a weighted variational lower bound on the data log likelihood under the diffusion model (Kingma et al., 2021) or as a form of denoising score matching (Vincent, 2011; Song & Ermon, 2019). We will discuss particular choices of weighting function w(t) later on.
+
+Sampling from a trained model can be performed in several ways. The most straightforward way is
+discrete time ancestral sampling (Ho et al., 2020). To define this sampler, first note that the forward process can be described in reverse as q(zs|zt, x) = N (zs; µ~s|t(zt, x), ~s2|tI) (noting s < t), where
+
+µ~s|t(zt, x) = et-s (s/t)zt + (1 - et-s )sx, ~s2|t = (1 - et-s )s2
+
+(3)
+
+We use this reversed description of the forward process to define the ancestral sampler. Starting at z1  N (0, I), the ancestral sampler follows the rule
+
+zs = µ~s|t(zt, x^(zt)) + (~s2|t)1- (t2|s) )
+
+(4)
+
+= et-s (s/t)zt + (1 - et-s )sx^(zt) + (~s2|t)1- (t2|s) ) ,
+
+(5)
+
+2
+
+

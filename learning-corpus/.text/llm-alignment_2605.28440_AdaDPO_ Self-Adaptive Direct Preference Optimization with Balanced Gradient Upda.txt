@@ -1,0 +1,62 @@
+AdaDPO: Self-Adaptive Direct Preference Optimization with Balanced Gradient Updates
+
+arXiv:2605.28440v1 [cs.CL] 27 May 2026
+
+Shaolong Chen Incept Labs Houston, TX
+Qingqing Mao Incept Labs, Houston, TX Titan Holdings, San Francisco, CA qmao@inceptlabs.ai
+
+Madalina Ciobanu Incept Labs Houston, TX
+Ritankar Das Incept Labs, Houston, TX Titan Holdings, San Francisco, CA
+
+Abstract
+Direct Preference Optimization (DPO) has become a widely adopted alternative to reinforcement learning from human feedback (RLHF) for aligning large language models with human preferences, eliminating the need for a separate reward model or reinforcement learning loop. However, recent theoretical analysis uncovers an asymmetric gradient behavior in DPO: the loss suppresses dispreferred responses substantially faster than it promotes preferred counterparts, causing the model to predominantly learn to avoid bad answers rather than to generate good ones. We propose AdaDPO, a Self-Adaptive variant of the Direct Preference Optimization algorithm that introduces per-preference-pair, stop-gradient-based coefficients derived directly from the policy model's generation probabilities, with the reference model's probabilities as an optional component. AdaDPO is constructed to enforce equality of gradient magnitudes between preferred and dispreferred probabilities; the practical implementation balances per-token gradients and applies a numerical clipping bound for stability, while retaining DPO's original hyperparameter structure. On Llama-3-8B-Instruct trained on UltraFeedback under a setup nearly identical to that of SimPO, AdaDPO consistently outperforms DPO on AlpacaEval 2: it achieves higher length-controlled win rates (LC) in 81% of hyperparameter combinations, attains the global best LC (48.3%) and raw win rate (46.1%), and enlarges the LC-over-WR margin in 88% of combinations, indicating effective mitigation of length bias. Additional analyses on KL divergence, reward margin, and reward accuracy confirm that AdaDPO rectifies the gradient imbalance and yields more efficient optimization. Because it operates purely at the loss level, AdaDPO can be dropped into existing preference-based alignment pipelines without changing data collection or model architectures. The method requires only a few lines of code, and the same self-adaptive principle generalizes to a broad family of pairwise contrastive preference losses including SimPO, R-DPO, IPO, CPO, and ORPO.
+1 Introduction
+Aligning large language models (LLMs) with human preferences has become essential for deploying capable, controllable systems. Reinforcement Learning from Human Feedback [Christiano et al., 2017, Ziegler et al., 2019], typically implemented with Proximal Policy Optimization [Schulman et al., 2017], established the dominant paradigm but introduces substantial complexity through its reliance on a separately trained reward model and an online RL loop. Direct Preference Optimization
+Preprint.
+
+(DPO) [Rafailov et al., 2023] simplified this pipeline dramatically by reparameterizing the reward function and learning the policy directly from a fixed preference dataset via a binary cross-entropy loss, achieving strong empirical performance without reinforcement learning.
+Despite DPO's success, recent theoretical analysis [Feng et al., 2024] has revealed an asymmetric gradient pathology in its loss function. Using a field-theoretic analysis of DPO's gradient vector field, Feng et al. [2024] show that the loss applies a substantially larger gradient to dispreferred responses than to preferred ones, with the asymmetry growing as the policy becomes more confident. As a consequence, DPO-trained models predominantly learn to suppress bad answers rather than to promote good ones--an effect that becomes especially pronounced when preferred and dispreferred responses are semantically close. This is not an artifact of hyperparameter choice but a structural property of the loss: the same coefficient  multiplies both log-ratios, leaving no mechanism to balance the per-pair gradient magnitudes. Several DPO variants address related concerns: SimPO [Meng et al., 2024], R-DPO [Park et al., 2024], IPO [Azar et al., 2023], CPO [Xu et al., 2024], and ORPO [Hong et al., 2024]. However, none directly addresses the per-preference-pair gradient imbalance: the asymmetry persists in any pairwise contrastive loss with a shared coefficient on both terms.
+We propose AdaDPO, a self-adaptive variant of DPO that resolves this imbalance by replacing the fixed  in DPO's implicit reward margin with per-preference-pair coefficients w and l. Setting l =  (preserving DPO's hyperparameter) and computing w via a stop-gradient-based ratio of generation probabilities, AdaDPO is constructed to enforce equality of gradient magnitudes on preferred and dispreferred probabilities at every optimization step (the length-normalized variant used in our experiments balances gradients per-token within a numerical clipping bound). The construction is theoretically principled, requires only a few lines of code to implement, and introduces no sensitive hyperparameters beyond those already in DPO. The same self-adaptive principle extends as a drop-in modification to any pairwise contrastive preference loss (SimPO, R-DPO, IPO, CPO, ORPO).
+Contributions. (i) We rigorously derive the condition under which a DPO-style loss produces equal gradient magnitudes on preferred and dispreferred probabilities, and prove that AdaDPO satisfies it exactly through stop-gradient operators, providing a principled correction of the gradient imbalance (Section 3). (ii) On Llama-3-8B-Instruct trained on UltraFeedback under a setup nearly identical to SimPO [Meng et al., 2024], AdaDPO consistently outperforms DPO on AlpacaEval 2: higher length-controlled win rates in 81% of hyperparameter combinations, the global best LC (48.3%) and raw WR (46.1%), and an enlarged LC-over-WR margin in 88% of combinations, indicating effective mitigation of length bias (Section 5). (iii) The same self-adaptive principle applies as a drop-in modification to any pairwise contrastive preference loss; we provide explicit constructions for SimPO, R-DPO, IPO, CPO, and ORPO that preserve each method's existing hyperparameters (Section 6), highlighting a general recipe for balancing gradients in preference optimization.
+
+2 Background
+
+Direct Preference Optimization. We are given a preference dataset D = {(x, yw, yl)} of triples consisting of a prompt x, a preferred response yw, and a dispreferred response yl, together with a reference policy ref . DPO [Rafailov et al., 2023] optimizes the policy  by minimizing
+
+LDPO(; ref ) = -E(x,yw,yl)D
+
+log 
+
+ log (yw | x) -  log (yl | x)
+
+ref (yw | x)
+
+ref (yl | x)
+
+,
+
+(1)
+
+where  is the sigmoid function and  > 0 controls the deviation from ref . The same coefficient  multiplies both log-ratios--a structural choice with consequences we examine next.
+
+The gradient imbalance pathology. Feng et al. [2024] analyze the gradient vector field of LDPO and identify a structural asymmetry. Let Pw = (yw | x), Pl = (yl | x), Rw = ref (yw | x), Rl = ref (yl | x), and let xw = Pw/Rw, xl = Pl/Rl. The partial derivatives yield the gradientmagnitude ratios
+
+Ratiox =
+
+LDPO/xw LDPO/xl
+
+= xl , xw
+
+RatioP =
+
+LDPO/Pw LDPO/Pl
+
+= Pl . Pw
+
+(2)
+
+As training progresses and the policy learns to prefer yw, both ratios fall below 1, meaning DPO suppresses yl more aggressively than it promotes yw [Feng et al., 2024]. We note that DPO's gradients
+
+2
+
+

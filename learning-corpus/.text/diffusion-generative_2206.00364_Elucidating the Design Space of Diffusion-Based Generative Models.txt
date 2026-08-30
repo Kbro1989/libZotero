@@ -1,0 +1,52 @@
+Elucidating the Design Space of Diffusion-Based Generative Models
+
+arXiv:2206.00364v2 [cs.CV] 11 Oct 2022
+
+Tero Karras NVIDIA
+
+Miika Aittala NVIDIA
+
+Timo Aila NVIDIA
+
+Samuli Laine NVIDIA
+
+Abstract
+We argue that the theory and practice of diffusion-based generative models are currently unnecessarily convoluted and seek to remedy the situation by presenting a design space that clearly separates the concrete design choices. This lets us identify several changes to both the sampling and training processes, as well as preconditioning of the score networks. Together, our improvements yield new state-of-the-art FID of 1.79 for CIFAR-10 in a class-conditional setting and 1.97 in an unconditional setting, with much faster sampling (35 network evaluations per image) than prior designs. To further demonstrate their modular nature, we show that our design changes dramatically improve both the efficiency and quality obtainable with pre-trained score networks from previous work, including improving the FID of a previously trained ImageNet-64 model from 2.07 to near-SOTA 1.55, and after re-training with our proposed improvements to a new SOTA of 1.36.
+1 Introduction
+Diffusion-based generative models [46] have emerged as a powerful new framework for neural image synthesis, in both unconditional [16, 37, 49] and conditional [17, 36, 37, 39, 40, 42, 43, 49] settings, even surpassing the quality of GANs [13] in certain situations [9]. They are also rapidly finding use in other domains such as audio [28, 38] and video [19] generation, image segmentation [4, 57] and language translation [35]. As such, there is great interest in applying these models and improving them further in terms of image/distribution quality, training cost, and generation speed.
+The literature on these models is dense on theory, and derivations of sampling schedule, training dynamics, noise level parameterization, etc., tend to be based as directly as possible on theoretical frameworks, which ensures that the models are on a solid theoretical footing. However, this approach has a danger of obscuring the available design space -- a proposed model may appear as a tightly coupled package where no individual component can be modified without breaking the entire system.
+As our first contribution, we take a look at the theory behind these models from a practical standpoint, focusing more on the "tangible" objects and algorithms that appear in the training and sampling phases, and less on the statistical processes from which they might be derived. The goal is to obtain better insights into how these components are linked together and what degrees of freedom are available in the design of the overall system. We focus on the broad class of models where a neural network is used to model the score [22] of a noise level dependent marginal distribution of the training data corrupted by Gaussian noise. Thus, our work is in the context of denoising score matching [54].
+Our second set of contributions concerns the sampling processes used to synthesize images using diffusion models. We identify the best-performing time discretization for sampling, apply a higherorder Runge­Kutta method for the sampling process, evaluate different sampler schedules, and analyze the usefulness of stochasticity in the sampling process. The result of these improvements is a significant drop in the number of sampling steps required during synthesis, and the improved sampler can be used as a drop-in replacement with several widely used diffusions models [37, 49].
+36th Conference on Neural Information Processing Systems (NeurIPS 2022).
+
+=0 0.2 0.5 1 2 3 5 7 10 20 50 =0 0.2 0.5 1 2 3 5 7 10 20 50
+
+(a) Noisy images drawn from p(x; )
+
+(b) Ideal denoiser outputs D(x; )
+
+Figure 1: Denoising score matching on CIFAR-10. (a) Images from the training set corrupted with varying levels of additive Gaussian noise. High levels of noise lead to oversaturated colors; we normalize the images for cleaner visualization. (b) Optimal denoising result from minimizing Eq. 2 analytically (see Appendix B.3). With increasing noise level, the result approaches dataset mean.
+
+The third set of contributions focuses on the training of the score-modeling neural network. While we continue to rely on the commonly used network architectures (DDPM [16], NCSN [48]), we provide the first principled analysis of the preconditioning of the networks' inputs, outputs, and loss functions in a diffusion model setting and derive best practices for improving the training dynamics. We also suggest an improved distribution of noise levels during training, and note that non-leaking augmentation [25] -- typically used with GANs -- is beneficial for diffusion models as well.
+Taken together, our contributions enable significant improvements in result quality, e.g., leading to record FIDs of 1.79 for CIFAR-10 [29] and 1.36 for ImageNet [8] in 64×64 resolution. With all key ingredients of the design space explicitly tabulated, we believe that our approach will allow easier innovation on the individual components, and thus enable more extensive and targeted exploration of the design space of diffusion models. Our implementation and pre-trained models are available at https://github.com/NVlabs/edm
+
+2 Expressing diffusion models in a common framework
+
+Let us denote the data distribution by pdata(x), with standard deviation data, and consider the family of mollified distributions p(x; ) obtained by adding i.i.d. Gaussian noise of standard deviation  to the data. For max data, p(x; max) is practically indistinguishable from pure Gaussian noise. The idea of diffusion models is to randomly sample a noise image x0  N (0, m2 axI), and sequentially denoise it into images xi with noise levels 0 = max > 1 > · · · > N = 0 so that at each noise level xi  p(xi; i). The endpoint xN of this process is thus distributed according to the data.
+Song et al. [49] present a stochastic differential equation (SDE) that maintains the desired distribution p as sample x evolves over time. This allows the above process to be implemented using a stochastic solver that both removes and adds noise at each iteration. They also give a corresponding "probability flow" ordinary differential equation (ODE) where the only source of randomness is the initial noise image x0. Contrary to the usual order of treatment, we begin by examining the ODE, as it offers a fruitful setting for analyzing sampling trajectories and their discretizations. The insights carry over to stochastic sampling, which we reintroduce as a generalization in Section 4.
+
+ODE formulation. A probability flow ODE [49] continuously increases or reduces noise level of the image when moving forward or backward in time, respectively. To specify the ODE, we must first choose a schedule (t) that defines the desired noise level at time t. For example, setting (t)  t is mathematically natural, as it corresponds to constant-speed heat diffusion [12]. However, we will show in Section 3 that the choice of schedule has major practical implications and should not be made on the basis of theoretical convenience.
+
+The defining characteristic of the probability flow ODE is that evolving a sample xa  p xa; (ta) from time ta to tb (either forward or backward in time) yields a sample xb  p xb; (tb) . Following previous work [49], this requirement is satisfied (see Appendix B.1 and B.2) by
+
+dx = - (t) (t) x log p x; (t) dt,
+
+(1)
+
+where the dot denotes a time derivative. x log p(x; ) is the score function [22], a vector field that points towards higher density of data at a given noise level. Intuitively, an infinitesimal forward step of this ODE nudges the sample away from the data, at a rate that depends on the change in noise level. Equivalently, a backward step nudges the sample towards the data distribution.
+
+Denoising score matching. The score function has the remarkable property that it does not depend on the generally intractable normalization constant of the underlying density function p(x; ) [22],
+
+2
+
+

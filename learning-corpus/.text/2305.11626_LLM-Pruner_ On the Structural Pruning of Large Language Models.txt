@@ -1,0 +1,722 @@
+                                        CCT-Code: Cross-Consistency Training for Multilingual Clone Detection
+                                                                            and Code Search
+
+                                                            Anton Tikhonov1, Nikita Sorokin1, Dmitry Abulkhanov1,
+                                                         Irina Piontkovskaya2, Sergey Nikolenko3, Valentin Malykh1,
+
+                                                                          1MTS AI, 2Huawei Noah's Ark Lab,
+                                                        3St. Petersburg Department of the Steklov Institute of Mathematics
+
+                                                                                    Correspondence: valentin.malykh@phystech.edu
+
+arXiv:2305.11626v2 [cs.CL] 13 Dec 2024                        Abstract                                late the multilingual clone detection task, collect a
+                                                                                                      dataset, and establish reasonable baselines.
+                                             We consider the well-known and important
+                                             tasks of clone detection and information re-                Various approaches for the clone detection task
+                                             trieval for source code. The most standard               have been developed, starting from algorithmic
+                                             setup is to search clones inside the same lan-           methods (Baker, 1993; Krinke, 2001) and continu-
+                                             guage code snippets. But it is also useful to            ing with machine learning models (Li et al., 2017;
+                                             find code snippets with identical behaviour in           Thaller et al., 2020; Gotmare et al., 2021). Most
+                                             different programming languages. Neverthe-               machine learning approaches are based on learn-
+                                             less multi- and cross-lingual clone detection            ing the representations (embeddings) of code snip-
+                                             has been little studied in literature. We present        pets; this approach allows to find duplicate code
+                                             a novel training procedure, cross-consistency            snippets by similarity between their embeddings
+                                             training (CCT) leveraging cross-lingual sim-             in the latent space. The performance of such sys-
+                                             ilarity, that we apply to train language mod-            tems critically depends on the quality of embed-
+                                             els on source code in various programming                dings. In this work, we present a novel training
+                                             languages. We show that this training is ef-             technique and pipeline called CCT for language
+                                             fective both for encoder- and decoder-based              models that allows them to embed code snippets in
+                                             models. The trained encoder-based CCT-LM                 an efficient way. We demonstrate this by achiev-
+                                             model achieves a new state of the art on POJ-            ing state of the art on a preexisting clone detec-
+                                             104 (monolingual C++ clone detection bench-              tion dataset POJ-104 (Mou et al., 2016) and on
+                                             mark) with 96.73% MAP and AdvTest (mono-                 the newly formulated multilingual clone detection
+                                             lingual Python code search benchmark) with               dataset XCD. Interestingly, we also show that the
+                                             47.18% MRR. The decoder-based CCT-LM                     CCT technique allows a model to produce repre-
+                                             model shows comparable performance in these              sentations useful for code search as well. Code
+                                             tasks. In addition, we formulate the multi-              search, as formulated by Lu et al. (2021b), is the
+                                             and cross-lingual clone detection problem and            task where the query is a text description and the
+                                             present XCD, a new benchmark dataset pro-                possible documents are code snippets.
+                                             duced from CodeForces submissions.
+                                                                                                         Thus, the main contributions of our work are:
+                                        1 Introduction                                                (1) a pretraining method CCT that allows a model
+                                                                                                      to align code snippets in different programming
+                                        The clone detection problem stems from an im-                 languages; (2) a novel multilingual clone detec-
+                                        portant need arising in software development prac-            tion dataset XCD based on CodeForces submis-
+                                        tice: to identify code with the same behaviour and            sions; (3) new state of the art results obtained by
+                                        effective output; this is useful, e.g., for code uni-         CCT-LM model trained with CCT on the clone
+                                        fication, refactoring and control of side effects.            detection datasets POJ-104 and XCD2; (4) state
+                                        Mou et al. (2016) formulated the clone detection              of the art results of CCT-LM for code search on
+                                        task for C/C++ source code, and later the problem             the AdvTest dataset. The paper is organized as
+                                        was extended to other programming languages.                  follows: Section 2 surveys related work, Sec-
+                                        The natural next step for this problem is to detect           tion 3 discusses code search datasets and intro-
+                                        the same behaviour for code across different pro-
+                                        gramming languages.1 In this work, we formu-                      2We will release the XCD dataset and the source code for
+                                                                                                      CCT and CCT-LM upon acceptance.
+                                            1For an illustrative example, we refer here to the http:
+                                        //helloworldcollection.de/ website that contains
+                                        "Hello, world!" snippets in 603 programming languages.
+duces XCD, Section 4 shows the CCT pretraining        one as a classifier, for a hierarchical representation
+approach, Section 5 presents our results, Section 6   of code and text; although they experimented with
+analyzes them and presents an ablation study, Sec-    sharing encoder parameters, it lowered the final
+tion 7 concludes the paper, and Section 8 discusses   quality of their model. Our model, in contrast,
+the limitations of our work.                          uses a single decoder part of the transformer
+                                                      to embed queries and documents and skips the
+2 Related Work                                        classifier part.
+
+Our methods are inspired by natural language pro-        Clone Detection. To the best of our knowl-
+cessing, thus related work includes both pure NLP     edge, the attempt to detect similar program code
+and source code processing.                           was made by Baker (Baker, 1993) who proposed
+                                                      to find duplicate code in exact and parameter-
+   Datasets. Husain et al. (2019) presented the       ized forms. The latter approach could be re-
+CodeSearchNet dataset constructed from a GitHub       formulated as code obfuscation and search for
+dump where the authors split method bodies into       an obfuscated exact match. Krinke (2001) pro-
+the code itself and a description. This dataset       posed to apply graph theory, namely to compare
+contains 2 million code snippet-description pairs     shortest paths of abstract syntactic trees extracted
+in 6 programming languages, including Python.         from the code snippets. Early work on algorith-
+This dataset was partially used by Hasan et al.       mic clone detection was summarized by Roy and
+(2021) who combined CodeSearchNet and three           Cordy (2007). Last but not least, we note one of
+other datasets into a larger one. From Code-          the most recent algorithmic approaches Sourcer-
+SearchNet they used the Java part and Python          erCC (Sajnani et al., 2016), which proposes a so-
+part translated automatically into Java. The re-      phisticated algorithm that includes the construc-
+sulting dataset contains 4 million code snippet-      tion of a search index for candidate clone snip-
+description pairs. CodeXGLUE presented by             pets. Recent approaches are usually based on ma-
+Lu et al. (2021b) is a machine learning bench-        chine learning. Probabilistic approaches include
+mark collection of datasets for code understand-      Alomari and Stephan (2018) with Latent Dirichlet
+ing and generation tasks, which includes a mod-       allocation and Thaller et al. (2020) with a novel
+ification of CodeSearchNet. CodeXGLUE pro-            graph probabilistic model based on density esti-
+vides a benchmark for various code-to-code, code-     mation. One of the first successful deep learn-
+to-text, text-to-code tasks, including code search.   ing approaches was CClearner (Li et al., 2017)
+This benchmark includes code in 10 program-           that used text extracted from a program and its
+ming languages. There are two main datasets           AST features and had a simplistic multilayer per-
+for clone detection: POJ-104 (Mou et al., 2016)       ceptron architecture for clone classification on a
+and BigCloneBench (Wang et al., 2020). POJ-104        closed code base. More recent deep learning mod-
+represents a comparatively small corpus of C++        els include graph neural networks on ASTs (Wang
+solutions from a student judging system. Big-         et al., 2020) and employ pretrained language mod-
+CloneBench comprises a vast dataset containing        els Villmow et al. (2022).
+automatically mined data in the Java language.
+                                                         Language models for source code. After the
+   Code Search. Early works on code search            success of BERT-like models for natural language,
+mostly relied on classic information re-              these approaches were also applied to program-
+trieval (Bacchelli et al., 2010; Brandt et al.,       ming languages. Several pre-trained programming
+2010; Campbell and Treude, 2017; Chan et al.,         language models were presented recently, includ-
+2012). Brandt et al. (2010), Barzilay et al. (2013),  ing: CodeBERT (Feng et al., 2020), which is a bi-
+and Ponzanelli et al. (2014) utilized existing        modal pre-trained model for source code and nat-
+industrial Web search engines. Gu et al. (2018)       ural language based on the RoBERTa Transformer
+used modern dense vector representations for          architecture (Liu et al., 2019), trained on masked
+information retrieval, training two recurrent         language modeling (MLM) and replaced token de-
+neural networks to represent source code and          tection objectives; GraphCodeBERT (Guo et al.,
+text respectively. Feng et al. (2020) presented a     2021) that uses data flow during pre-training to
+language model-based approach to produce these        solve MLM, edge prediction, and node alignment
+representations. Gotmare et al. (2021) used three     tasks; SynCoBERT (Wang et al., 2021) that uses
+Transformer-based models, two as encoders and         multimodal contrastive learning and is pre-trained
+on identifier prediction and AST edge prediction.    tion generation, Riabi et al. (2020) suggested a
+In recent times, autoregressive decoder models       method to produce synthetic questions in a mul-
+like DeepSeek-Coder (Guo et al., 2024) have taken    tilingual way by using multilingual MiniLM, and
+over the world. They represent the decoder part      Shakeri et al. (2020) proposed a method to gener-
+of the transformer model, which is pre-trained on    ate multilingual question-answer pairs by a gener-
+a huge corpus of source code. They are used in       ative model (fine-tuned multilingual T5) based on
+source code generation tasks, such as code com-      samples automatically translated from English to
+pletion, documentation generation, and so on.        the target language. Generative QA was mostly
+                                                     considered for datasets with long answers, but
+   Multilingual NLP. Open-domain question an-        the generative model FiD (Izacard and Grave,
+swering task assumes answering factoid questions     2021) achieved competitive results on SQuAD-
+without a predefined domain (Kwiatkowski et al.,     like datasets, where an answer is supposed to be
+2019). Since we propose a novel benchmark in         a short text span. For open domain QA, Lewis
+cross-lingual code understanding, we also review     et al. (2021) used generative models in their RAG
+multilingual NLP models, where recent research       approach that processes top k passages from the
+has been focused on non-English question answer-     retriever in the encoder simultaneously and uses
+ing (QA) datasets and multilingual transfer learn-   their representations in the decoder for answer
+ing, usually from English to other languages.        generation, in a process called fusion. Process-
+                                                     ing the passages independently in the encoder al-
+   Until recently, appropriate training and eval-    lows a model to scale to many contexts, as it only
+uation datasets have been scarce, but in recent      runs self-attention over one context at a time. The
+years many works have collected loosely aligned      FiD model follows this paradigm, further improv-
+data obtained through automatic translation or by    ing the results in question generation. For QA
+parsing similar multilingual sources. Thus, Ahn      over a knowledge graph, Zhou et al. (2021) studied
+et al. (2004) presented an early attempt to multi-   unsupervised bilingual lexicon induction for zero-
+lingual question answering by translating an an-     shot multilingual transfer for multilingual QA in
+swer to the target language. Two years later, Bos    order to map training questions in the source lan-
+and Nissim (2006) presented another similar sys-     guage into questions in the target language for use
+tem using translation. Lee and Lee (Lee and          as augmented training data, which is important for
+Lee, 2019) showed successful transfer for multi-     zero-resource languages.
+lingual QA with training on English data and eval-
+uation in Chinese. Ferra´ndez et al. (2007) pre-     3 Datasets
+sented a work on multilingual knowledge base
+incorporating a system. Mitamura et al. (2006)       In this work we use two kinds of datasets, one for
+developed a system with the translation of key-      clone detection and another for code search.
+words extracted from question to get an answer
+in the target language. Artetxe et al. (2020) stud-     Code Search. For code search we use the
+ied multilingual transfer of monolingual repre-      CodeSearchNet dataset introduced by Husain et al.
+sentations for a Transformer-based masked lan-       (2019). The original version of CodeSearchNet
+guage model. M'hamdi et al. (2021) examined          consists of natural language queries paired with
+a multilingual optimization-based meta-learning      most relevant code snippets in six programming
+approach to learn to adapt to new languages for      languages. Each snippet represents the code of a
+QA. Gao and Callan (2021) proposed unsuper-          function collected from GitHub open source code.
+vised pretraining for dense passage retrieval, al-
+though the authors concentrated on retrieval it-        CodeSearchNet AdvTest is a Python-only
+self and ignored the multilingual nature of the      dataset constructed from the CodeSearchNet cor-
+data. Most approaches used extractive models,        pus by Lu et al. (2021b). Each example, again,
+mostly due to the prevalence of datasets where,      includes a function paired with a text document,
+similar to SQuAD (Rajpurkar et al., 2016), la-       and similar to Husain et al. (2019), AdvTest takes
+beled data includes an explicitly stated question,   the first paragraph of the documentation as the
+a passage containing an answer, and a span label-    query. Lu et al. (2021b) make an interesting ob-
+ing for the answer. However, several works have      servation: after normalizing function and variable
+considered generative QA: Kumar et al. (2019)        names with special tokens, the Mean Recipro-
+and Chi et al. (2019) studied multilingual ques-     cal Rank (MRR) scores of RoBERTa (Liu et al.,
+2019) and CodeBERT (Feng et al., 2020) mod-               fined as AP = i1=001(Ri - Ri-1) · Pi, where Ri
+                                                          and Pi are the precision and recall at threshold i,
+els for code search on the original CodeSearch-           i.e., computed taking into account only top i items
+                                                          from the candidate list. MAP is the mean AP over
+Net dataset drop from 0.809 to 0.419 and from             all queries. It is important to mention that for POJ-
+                                                          104 the maximal possible i is 499 since there are
+0.869 to 0.507 respectively (in Python). So, to im-       only 500 candidates in total.
+
+prove the quality of the dataset and make it harder,
+
+they first filtered the data by removing examples
+
+for which the code could not be parsed into an ab-
+
+stract syntax tree, the document was shorter than 3       3.1 XCD Dataset
+
+or longer than 256 tokens, the document contained
+
+special tokens such as "http://", or the document         In previous works, multilingual abilities of code
+
+was empty or not written in English. The filtered         language models were not sufficiently investi-
+
+dataset contains 251 820 / 9 604 / 19 210 examples        gated. To fill this gap, we introduce a new
+
+in its training/validation/test sets respectively.        multilingual clone detection/code retrieval dataset
+
+   Then, to better test the understanding and gen-        XCD. The dataset is evaluated in two different
+
+eralization abilities of the model, Lu et al. (2021b)     settings: clone detection approach similar to the
+
+normalized function and variable names in test-           BUCC dataset (Xu et al., 2018), retrieval style
+
+ing and development sets to nondescript tokens            clone detection similar to POJ-104 (Mou et al.,
+
+such as func for the function name and arg i              2016), and a hybrid approach. We use the Code-
+
+for the i-th variable name. The task remains to           Forces submissions dump as the data source, ran-
+
+search for source code based on a natural lan-            domly choosing 110 problems and 100 accepted
+
+guage query. Moreover, in contrast to the test-           solutions in one language for each problem. We
+
+ing phase of previous works (Husain et al., 2019;         chose 5 languages, namely Python, Java, C#, C++,
+
+Feng et al., 2020) that only involved 1 000 can-          C, getting 55 000 code snippets in total.
+
+didates, Lu et al. (2021b) used the entire test set       Full comparison evaluation setup. Here the
+
+for each query, which makes the AdvTest dataset           task is interpreted as binary classification, similar
+
+even more difficult. The training set comes from          to Xu et al. (2018). We evaluate a model on each
+                                                          pair from test set, which gives rise to n2 compar-
+the filtered CodeSearchNet dataset (Husain et al.,
+
+2019) where the code is represented in a raw              isons. Each pair could be either positive, if the pair
+
+form in addition to tokenization native to its pro-       consists of solutions for the same problem, or neg-
+
+gramming language. AdvTest uses MRR as the                ative otherwise. We use the classic F1 measure for
+
+basic evaluation metric, defined as MRR@Q =               evaluation  in this  setup:  F1  =  2·Precision·Recall  .
+                                                                                              Precision+Recall
+1  Q      1
+Q  i=1  ranki  ,  where  Q  is  the  number  of  queries  Retrieval style evaluation setup. For retrieval
+
+and rank is the position of the ground truth answer       style evaluation, we follow the design of POJ-
+
+document among ranked candidates.                         104. The task aims to retrieve 100 snippets per
+
+   Clone Detection. In the clone detection task,          language solving the same problem from the test
+
+the problem is to retrieve semantically similar           set. We evaluate ranking on 11 000 positive snip-
+
+codes given a code as the query. To train and test        pets, i.e., the model should rank 11 000 docu-
+
+models for clone detection, we use the POJ-104            ments, bringing on top the snippets solving the
+
+dataset introduced by Mou et al. (2016). It comes         same problem. Similar to Mou et al. (2016), we
+
+from a pedagogical programming open judge (OJ)            use mean average precision on the top 100 results
+
+system that automatically judges the validity of          (MAP@100) for evaluation.
+
+submitted source code for specific problems by            Hybrid evaluation setup. We also propose a
+
+running the code. The POJ-104 dataset consists            setup where we evaluate the models not only on
+
+of 104 problems and includes 500 student-written          positive snippets but on all snippets in the same
+
+C/C++ programs for each problem. The clone de-            language. This task is harder and more similar to
+
+tection here is, given a program's source code, to        AdvTest. As the metric we chose MRR@R, fol-
+
+retrieve other programs that solve the same prob-         lowing Lu et al. (2021b).
+
+lem. The problems are grouped into three sets             Cross-lingual evaluation. In addition to the
+
+with 64/16/24 problems for training, validation,          multilingual setting, i.e., evaluation in the set of
+
+and testing respectively. The default metric for          solutions in a single language, we define a more
+
+the POJ-104 dataset is Mean Average Precision             complex cross-lingual setting designed to measure
+
+(MAP), where the average precision (AP) is de-            cross-lingual code understanding. To achieve this,
+we extend the three setups to all languages at once,
+extending the sets of both relevant and irrelevant
+snippets to all programming languages.
+
+3.2 Additional Labeling                               StrongAlignment               WeakAlignment
+
+In addition to the solution status ("Accepted" or     non-relevant  document  cpp       python
+not), we also mined error statuses for the solutions  relevant      query
+since the platforms used for problem solving of-                              java
+ten provide them. In total, we mined more than 97
+million code snippets in more than 10 program-        Figure 1: Strong and weak cross-lingual alignment.
+ming languages. The CodeForces platform can re-
+turn 15 types of verdicts for a submitted solution.   aggregation, for example, averaging or last token,
+We split the verdicts into 4 groups: Defect (code     is closer to the source code, which solves the same
+has a defect), Skip (code cannot be judged), Ac-      problem regardless of the programming language.
+cepted (no defects detected), and Wrong (code that    This ensures that the embeddings of the source
+fails some tests or constraints). Below we describe   code differentiates between related snippets and
+and classify some of the most common verdicts:        random or similar but different (hard negative)
+(1) Memory limit exceeded: the program tries          snippets effectively.
+to consume more memory than allowed (Wrong);
+(2) Time limit exceeded: the program has not ter-        Noise-contrastive estimation and losses. To
+minated in allotted time (Wrong); (3) Runtime er-     learn a language-agnostic cross-lingual represen-
+ror: the program terminated with a non-zero return    tation space, we propose a training procedure
+code (e.g., due to division by zero, stack overflow   based on noise contrastive estimation (NCE). Let
+etc.) (Defect); (4) Wrong answer on some tests        X and Z be some finite sets and s : X × Z 
+(Wrong); (5) Idleness limit exceeded: the program     R be a relevance score function differentiable in
+did not use the CPU for a considerable time (De-        Rd. The goal is to learn  such that the clas-
+fect); (6) Denial of judgement: the solution was      sifier x  arg maxzZ s(x, z) has the optimal
+impossible to run due to a judging error or an er-    expected loss. This leads to conditional density
+ror in the program, e.g., using extra large arrays    estimation: for every x  X
+(Defect); (7) Rejected: the program does not pass
+tests for an unclear reason (Skip); (8) Accepted:                             es (x,z)
+the program passed all tests.                         p (z|x) = z-Z es(x,z-)                       (1)
+
+4 Method                                              with  = arg min Ex,z [- log p (z|x)] being the
+
+In this section, we introduce our pre-training ap-                               
+proach CCT (Cross-Consistency Training). Its
+goal is to robustly learn the embedding space of      optimum. In practice, optimizing this objective di-
+code snippets and create a strong alignment be-
+tween snippets solving the same problems across       rectly is infeasible: if Z is large the normalization
+programming languages. The difference between
+strong and weak alignment is illustrated in Fig. 1:   term in (1) is intractable. Therefore, NCE uses
+in a weakly aligned embedding space, the near-
+est neighbor might be a semantically similar snip-    subsampling, so (1) becomes
+pet from a different language but generally most
+neighbors are in the same language, while in a         (z|x) =                es (x,z)
+strongly aligned space the similarity is purely se-                 z-Bx,z es(x,z-) + es(x,z) , (2)
+mantic and does not care about the language at all.
+                                                      where Bx,z = {z-1 , z-2 , . . . , zn-} is a set of nega-
+   To achieve strong alignment, we employ a con-      tives sampled from Z that do not match the pos-
+trastive learning objective LXCD: for a randomly      itive answer z+ for this x. NCE also often uses
+code snippet, we train the vector representations
+of the source code tokens in such a way that their    objectives similar to (2) but with  (z^|z) where z
+                                                      and z^ come from the same space, and the objective
+
+                                                      corresponds to some similarity function.
+                                                         Cross-lingual objective. Contrastive learning
+
+                                                      frequently employs pretext tasks to learn data rep-
+
+                                                      resentations without the need for labeled exam-
+
+                                                      ples. In the context of learning from a multilingual
+set of documents, a possible pretext task would be                                             Clone Code
+to train a network to differentiate between docu-                                            detection search
+ments with similar content but written in different                                           (MAP) (MRR)
+languages (positive pairs) and those with dissimi-
+lar content (negative pairs). This leads to the loss  Endcoder-only
+function Training with this task leads to learning a
+representation space with strong alignment prop-      RoBERTa-base (Liu et al., 2019)        76.67  18.33
+erties, but the IR ability of the representations is  CodeBERT (Feng et al., 2020)           82.67  27.19
+mediocre.                                             SynCoBERT (Wang et al., 2021)          88.24  38.10
+                                                      CodeRoBERTa                                   42.35
+  LXCD() = E(z^,z)WXCD [- log  (z^|z)] , (3)          GraphCodeBERT (Guo et al., 2021)        --
+                                                      CasCode (Gotmare et al., 2021)         85.16   --
+where WXCD is a distribution on the set of pairs of   Villmow et al. (2022)                         43.98
+submissions in different programming languages        CCT-LMenc                               --
+from the XCD dataset (Section 3) that shows if the                                           91.34   --
+submissions are solving the same problem or not.                               Decoder-only  96.73  47.18
+
+   Hard negative mining. Previous works on con-       CodeGen (Nijkamp et al., 2023)         89.68 --
+trastive learning show the importance of training     CodeGPT (Lu et al., 2021a)             87.96 --
+on hard negative samples (Qu et al., 2021; Izacard    SantaCoder (Allal et al., 2023)        83.98 --
+and Grave, 2020). They used iterative training to     Phi-1 (Gunasekar et al., 2023)         92.72 --
+get hard negatives, but our data already contains     CCT-LMdec                              95.50 --
+strong negative examples as preliminary solutions
+from the same users that solve the same problems      Table 1: Results on code clone detection on the POJ-
+but fail some tests (that is why a user would submit  104 dataset and code search on the AdvTest dataset.
+an updated solution to get the "Accepted" verdict).
+Thus, we mine hard negative examples as failed           Monolingual Results. Tab. 1 presents the re-
+solutions from the same user; if there are none we    sults of CCT-LM models compared to existing ap-
+use failed solutions from random users, and only if   proaches, showing that CCT-LM outperform all
+there are none (e.g., for an unpopular problem) we    previous models by a large margin in this mono-
+use a random submission for a random problem.         lingual setting. Thus, strong alignment enforced
+                                                      by CCT pretraining is not only helpful for multi-
+5 Experiments                                         lingual transfer but also improves the latent space
+                                                      structure in general. It is important to mention,
+In this section, we describe the details about data   that CCT pretraining works for both encoder- and
+pre-training and our CCT pipeline for multilingual    decoder-based models, improving the results.
+clone detection and code search tasks.
+                                                      5.1 Multi- and Cross-lingual Evaluation
+   Pretraining. We train two models, one is
+encoder-based, which is initialized with pre-         For these types of evaluation on XCD we use sev-
+trained GraphCodeBERTbase model (Guo et al.,          eral setups described in Sec. 3.1. Since these se-
+2021); we call the resulting model CCT-LMenc.         tups are computationally intensive we work only
+Another one is decoder-based, which is ini-           with encoder-based models.
+tilized with a pretrained DeepSeek-Coder-1.3B
+model (Guo et al., 2024); we call the resulting          Multilingual Results. Results in the multi-
+model CCT-LMdec. Similarity scores are calcu-         lingual setting on the proposed XCD dataset are
+lated based on dot products of the last token vector  shown in the top half of Tab. 2. In the full compar-
+representations, but we also researched using var-    ison setup, it is interesting that knowledge transfer
+ious types of poolings and allowing bidirectional     from the POJ-104 dataset also does not help, and
+attention.                                            the metrics remain very low. However, CCT-LM
+                                                      shows much better results, obviously due to the
+   Hyperparameters. We use the AdamW opti-            multilingual design of CCT pretraining. We do
+mizer with learning rate 5e-5, weight decay 0.01,     not evaluate BM25 in this setup since it is not sup-
+and linear learning rate decay. We use gradient ac-   posed to compare two documents.
+cumulation for pretraining with an effective batch
+size of 2000.                                            For retrieval style evaluation, the results also
+                                                      show CCT-LMenc strongly outperforming all
+                                                      baselines and actually providing a viable solution
+                                                      for the problem while GraphCodeBERT does not
+                                                      yield reasonable results in any programming lan-
+                      Python Java C# Ruby JS Haskell PHP OCaml Perl Avg
+
+                                    Multilingual setting
+
+                             Full Comparison, F1 measure
+
+GraphCodeBERTbase     0.02   0.05 0.00 0.04 0.00             0.02   0.01   0.03   0.01 0.02
+GraphCodeBERTbPaOseJ  0.04   0.00 0.01 0.06 0.07             0.08   0.06   0.06   0.06 0.05
+CCT-LMenc             22.24  18.39 17.33 23.33 10.46         17.64  21.43  17.01  16.40 18.24
+
+                                    Retrieval Style, MAP@100
+
+BM25                  0.00   0.00   0.00   0.00       0.00   0.00   0.00   0.00   0.00   0.00
+                      7.21   9.25   1.33   4.28       1.59   5.78   6.08   2.90   10.37  5.42
+GraphCodeBERTbase     30.12  24.63  23.54  32.78      36.64  24.45  37.21  33.94  45.33  32.07
+GraphCodeBERTbPaOseJ  87.42  55.99  65.35  72.12      74.32  81.05  83.21  71.53  71.89  73.65
+CCT-LMenc
+
+                                    Hybrid, MRR@20
+
+BM25                  0.00   0.00   0.00   0.00       0.00   0.00   0.00   0.00   0.00   0.00
+                      2.08   5.42   0.22   2.59       0.80   1.99   2.90   1.40   5.23   2.51
+GraphCodeBERTbase     27.10  20.04  19.44  30.98      28.37  19.70  32.89  30.08  39.98  27.62
+GraphCodeBERTPbaOseJ  74.97  62.08  58.77  80.60      74.56  62.27  81.21  72.64  79.16  71.80
+CCT-LMenc
+
+                                    Cross-lingual setting
+
+                             Full Comparison, F1 measure
+
+GraphCodeBERTbase     0.01   0.01 0.00 0.01 0.00 0.01               0.01   0.01     0.01 0.01
+GraphCodeBERTPbaOseJ  0.01   0.00 0.01 0.01 0.01 0.01               0.01   0.01     0.01 0.01
+CCT-LMenc             8.92   9.46 4.78 6.01 7.33 5.82               6.47   5.33     3.56 6.40
+
+BM25                  0.00          Retrieval Style, MAP@100        0.00   0.00
+GraphCodeBERTbase     3.18                                          3.12   1.90
+GraphCodeBERTbPaOseJ  12.83  0.00   0.00   0.00       0.00   0.00   19.53  16.01  0.00   0.00
+CCT-LMenc             44.82  5.24   0.23   1.77       1.15   3.38   43.36  36.66  16.27  4.02
+                             14.75  9.33   12.78      17.16  15.94                23.88  15.80
+                             20.34  23.33  35.01      32.57  40.07                37.80  34.88
+
+                                    Hybrid, MRR@20
+
+BM25                  0.00   0.00   0.00   0.00       0.00   0.00   0.00   0.00   0.00   0.00
+                      1.24   2.42   0.34   1.28       0.82   0.93   1.43   0.76   2.15   1.26
+GraphCodeBERTbase     20.12  13.08  10.37  17.28      12.62  19.70  14.31  18.08  18.33  15.98
+GraphCodeBERTbPaOseJ  30.83  22.77  19.32  32.66      31.64  20.80  31.59  40.42  39.40  29.93
+CCT-LMenc
+
+Table 2: Multilingual clone detection in two evaluation setups on the XCD dataset.
+
+guage. We note that BM25 (a strong baseline for       ting are presented in the bottom half of Tab. 2.
+natural language IR tasks) does not work for clone    All conclusions derived for the multilingual case
+detection, which is natural since it relies on iden-  (above) apply here too, but in comparison to the
+tical tokens which could be scarce even between       multilingual setting, cross-lingual tasks are signif-
+code snippets solving the same problem.               icantly harder and all values are lower. We suggest
+                                                      that the difference in the results across program-
+   Results for the hybrid evaluation setup show the   ming languages could be caused by the imbalance
+same picture: BM25 still does not work, code lan-     in the pretraining dataset.
+guage models can transfer knowledge across dif-
+ferent solutions to some extent, and the improve-     6 Analysis
+ment in metrics here between a fully unsupervised
+method and training on POJ-104 clone detection is     Zero-shot Results. We investigated zero-shot
+noticeably greater. Still, CCT-LMenc far exceeds      transfer from Python to Java, Ruby, PHP, Go, and
+every other method here and generally sets a new      JavaScript on the CodeSearchNet dataset for pre-
+baseline for multilingual code-related tasks.         viously introduced code language models and our
+                                                      CCT-LM. The zero-shot results are presented in
+   Cross-lingual Results. Our results in this set-
+               Java Ruby PHP Go JS Avg                     CodeBERT                           CCT
+
+CodeBERTbase   46.37 50.65 37.83 50.65 50.48 47.19
+
+GraphCodeBERTbase 47.33 59.95 37.47 60.28 52.04 51.41
+
+CCT-LMenc      48.71 62.25 42.78 61.44 51.06 53.24
+
+Table 3: Zero-shot retrieval; F1 score, CodeSearchNet.
+
+GraphCodeBERT                    Clone Code Defect                  D18   G656  G784    D795  A795    K774
+                               Detection Search detection           J795  E795  D926    C953  F953    F926
+
+                                (MAP) (MRR) (Acc)
+
+                                                           problem
+
+Base                           85.16  45.80  62.51         (a) Projected embeddings of 12 coding problems.
+Base + LXCD                    95.92  29.93  61.05
+Base + LXCD + LLM              95.67  47.18  63.68         CodeBERT                           CCT
+Base + LXCD + LLM              96.03  45.22  64.91
+Base + LXCD + LLM + SL         96.46  47.33
+Base + LXCD + LLM + Lerr + SL  96.73  47.57    -
+                                             65.58
+
+Table 4: GraphCodeBERT variations: clone detection
+on POJ-104, code search on AdvTest, defect detection
+on Devign; SL denotes the size limit.
+
+Table 5: A comparison of DeepSeek-Coder 1.3b varia-        language java  cpp   python  c     csharp  ruby
+tions: clone detection on POJ-104, code search on Ad-
+vTest
+
+Table 3. As evidence for the power of pretrained               (b) The same embeddings by programming language.
+language models, we see that existing approaches
+show rather good results even though they have                   Figure 2: Sample multilingual embeddings.
+not been trained on the retrieval task. By lever-
+aging its multilingual ability, CCT-LM improves            7 Conclusion
+over the baselines in the zero-shot setup for all lan-
+guages except JavaScript (JS).                             Understanding semantic similarity is an important
+                                                           aspect of language processing that opens up ways
+   Latent space structure. Figure 1 showed                 to solve many different tasks, for both natural and
+an abstract representation of the basic CCT idea           programming languages. In this work, we have
+of semantically aligned language-agnostic embed-           presented a new method CCT-LM that improves
+ding space. Figure 2 turns this theory into prac-          this ability via a novel CCT pretraining approach
+tice with projections of actual embeddings for             and demonstrated its viability for both clone de-
+sample code snippets before and after CCT train-           tection and code search. We have formulated a
+ing. The snippets represent solutions for 12 sam-          novel task of multilingual clone detection and pre-
+ple tasks in six programming languages. We see             sented the XCD dataset for multilingual source
+that after CCT, representations of code snippets           code analysis, formalized in two evaluation setups.
+are not aligned by language but rather by prob-            The proposed CCT-LM models (both encoder- and
+lem (Fig. 2b), while their alignment had been              decoder-based) outperformed strong baselines in
+language-dependent before CCT (Fig. 2a).                   clone detection and code search task. CCT-LMenc
+                                                           exceed other models in all the setups for multi-
+   This illustrates that CCT training significantly        and cross-lingual evaluation, proving that CCT
+improves the multilingual latent space for code            pretraining provides better semantic similarity un-
+snippets, making it semantic and language-                 derstanding for a language model. We hope that
+agnostic.                                                  our method will be helpful in other source code
+                                                           processing tasks that we have left as future work.
+   Ablation Study. In this section, we study the           Moreover, we believe that modifications of our ap-
+effects of various parts of CCT. Table 5 shows the         proach can be useful for NLP and perhaps other
+results of several DeepSeek-Coder-based models             fields of machine learning.
+on clone detection, code search tasks. We com-
+pare the DeepSeek-Coder base model with differ-
+ent pretraining poolings and attention types.
+8 Limitations                                              artifacts. In Proceedings of the 32nd ACM/IEEE
+                                                           International Conference on Software Engineering-
+We have studied several programming languages,             Volume 1, pages 375­384.
+including Python and Java, in our XCD setup;
+although all our methods seem to be language-           Brenda S Baker. 1993. A program for identifying du-
+agnostic, a further study for other languages would        plicated code. Computing Science and Statistics,
+be interesting, especially since all considered lan-       pages 49­49.
+guages are interpreted rather than compiled (like
+C/C++). Many inputs exceed 512 tokens; we               Ohad Barzilay, Christoph Treude, and Alexey Zagal-
+used standard truncation for evaluation (taking            sky. 2013. Facilitating crowd sourced software engi-
+into consideration only the beginning of the code),        neering via stack overflow. In Finding Source Code
+which may be suboptimal, and more suitable in-             on the Web for Remix and Reuse, pages 289­308.
+put representations could be found. We expect              Springer.
+our model to improve with training on long docu-
+ments. We also suppose that the model would ben-        Johan Bos and Malvina Nissim. 2006. Cross-lingual
+efit from increasing the batch size by using more          question answering by answer translation. In CLEF
+powerful hardware with more memory. Note also              (Working Notes). Citeseer.
+that while CCT-LM significantly improved state of
+the art in clone detection and code search.             Joel Brandt, Mira Dontcheva, Marcos Weskamp, and
+                                                           Scott R Klemmer. 2010. Example-centric program-
+References                                                 ming: integrating web search into the development
+                                                           environment. In Proceedings of the SIGCHI Con-
+Kisuh Ahn, Beatrice Alex, Johan Bos, Tiphaine Dal-         ference on Human Factors in Computing Systems,
+   mas, Jochen L Leidner, and Matthew B Smillie.           pages 513­522.
+   2004. Cross-lingual question answering using off-
+   the-shelf machine translation. In Workshop of the    Brock Angus Campbell and Christoph Treude. 2017.
+   Cross-Language Evaluation Forum for European            Nlp2code: Code snippet content assist via natural
+   Languages, pages 446­457. Springer.                     language tasks. In 2017 IEEE International Confer-
+                                                           ence on Software Maintenance and Evolution (IC-
+Loubna Ben Allal, Raymond Li, Denis Kocetkov,              SME), pages 628­632. IEEE.
+   Chenghao Mou, Christopher Akiki, Carlos Munoz
+   Ferrandis, Niklas Muennighoff, Mayank Mishra,        Wing-Kwan Chan, Hong Cheng, and David Lo. 2012.
+   Alex Gu, Manan Dey, Logesh Kumar Umapathi,              Searching connected api subgraph via text phrases.
+   Carolyn Jane Anderson, Yangtian Zi, Joel Lamy           In Proceedings of the ACM SIGSOFT 20th Interna-
+   Poirier, Hailey Schoelkopf, Sergey Troshin, Dmitry      tional Symposium on the Foundations of Software
+   Abulkhanov, Manuel Romero, Michael Lappert,             Engineering, pages 1­11.
+   Francesco De Toni, Bernardo Garc´ia del R´io,
+   Qian Liu, Shamik Bose, Urvashi Bhattacharyya,        Zewen Chi, Li Dong, Furu Wei, Wenhui Wang, Xian-
+   Terry Yue Zhuo, Ian Yu, Paulo Villegas, Marco           Ling Mao, and Heyan Huang. 2019. Cross-lingual
+   Zocca, Sourab Mangrulkar, David Lansky, Huu             natural language generation via pre-training.
+   Nguyen, Danish Contractor, Luis Villa, Jia Li,
+   Dzmitry Bahdanau, Yacine Jernite, Sean Hughes,       Zhangyin Feng, Daya Guo, Duyu Tang, Nan Duan, Xi-
+   Daniel Fried, Arjun Guha, Harm de Vries, and Le-        aocheng Feng, Ming Gong, Linjun Shou, Bing Qin,
+   andro von Werra. 2023. Santacoder: don't reach for      Ting Liu, Daxin Jiang, and Ming Zhou. 2020. Code-
+   the stars!                                              BERT: A Pre-Trained Model for Programming and
+                                                           Natural Languages. In Findings of the Association
+Hakam W Alomari and Matthew Stephan. 2018. To-             for Computational Linguistics: EMNLP 2020, pages
+   wards slice-based semantic clone detection. In          1536­1547, Online. Association for Computational
+   2018 IEEE 12th International Workshop on Soft-          Linguistics.
+   ware Clones (IWSC), pages 58­59. IEEE.
+                                                        Sergio Ferra´ndez, Antonio Toral, Oscar Ferra´ndez, An-
+Mikel Artetxe, Sebastian Ruder, and Dani Yogatama.         tonio Ferra´ndez, and Rafael Munoz. 2007. Applying
+   2020. On the cross-lingual transferability of mono-     wikipedia's multilingual knowledge to cross­lingual
+   lingual representations. In Proceedings of the 58th     question answering. In International Conference
+   Annual Meeting of the Association for Computa-          on Application of Natural Language to Information
+   tional Linguistics, pages 4623­4637, Online. Asso-      Systems, pages 352­363. Springer.
+   ciation for Computational Linguistics.
+                                                        Luyu Gao and Jamie Callan. 2021. Unsupervised cor-
+Alberto Bacchelli, Michele Lanza, and Romain               pus aware language model pre-training for dense
+   Robbes. 2010. Linking e-mails and source code           passage retrieval.
+
+                                                        Akhilesh Deepak Gotmare, Junnan Li, Shafiq Joty, and
+                                                           Steven CH Hoi. 2021. Cascaded fast and slow mod-
+                                                           els for efficient semantic code search. arXiv preprint
+                                                           arXiv:2110.07811.
+Xiaodong Gu, Hongyu Zhang, and Sunghun Kim.             Tom Kwiatkowski, Jennimaria Palomaki, Olivia Red-
+   2018. Deep code search. In 2018 IEEE/ACM 40th           field, Michael Collins, Ankur Parikh, Chris Alberti,
+   International Conference on Software Engineering        Danielle Epstein, Illia Polosukhin, Jacob Devlin,
+   (ICSE), pages 933­944. IEEE.                            Kenton Lee, et al. 2019. Natural questions: a bench-
+                                                           mark for question answering research. Transactions
+Suriya Gunasekar, Yi Zhang, Jyoti Aneja, Caio              of the Association for Computational Linguistics,
+   Ce´sar Teodoro Mendes, Allie Del Giorno, Sivakanth      7:453­466.
+   Gopi, Mojan Javaheripi, Piero Kauffmann, Gustavo
+   de Rosa, Olli Saarikivi, Adil Salim, Shital Shah,    Chia-Hsuan Lee and Hung-Yi Lee. 2019. Cross-
+   Harkirat Singh Behl, Xin Wang, Se´bastien Bubeck,       lingual transfer learning for question answering.
+   Ronen Eldan, Adam Tauman Kalai, Yin Tat Lee, and        arXiv preprint arXiv:1907.06042.
+   Yuanzhi Li. 2023. Textbooks are all you need.
+                                                        Patrick Lewis, Ethan Perez, Aleksandra Piktus,
+Daya Guo, Shuo Ren, Shuai Lu, Zhangyin Feng,               Fabio Petroni, Vladimir Karpukhin, Naman Goyal,
+   Duyu Tang, Shujie Liu, Long Zhou, Nan Duan,             Heinrich Ku¨ttler, Mike Lewis, Wen tau Yih,
+   Alexey Svyatkovskiy, Shengyu Fu, Michele Tufano,        Tim Rockta¨schel, Sebastian Riedel, and Douwe
+   Shao Kun Deng, Colin Clement, Dawn Drain, Neel          Kiela. 2021. Retrieval-augmented generation for
+   Sundaresan, Jian Yin, Daxin Jiang, and Ming Zhou.       knowledge-intensive nlp tasks.
+   2021. GraphCodeBERT: Pre-training Code Repre-
+   sentations with Data Flow. In ICLR.                  Liuqing Li, He Feng, Wenjie Zhuang, Na Meng, and
+                                                           Barbara Ryder. 2017. Cclearner: A deep learning-
+Daya Guo, Qihao Zhu, Dejian Yang, Zhenda Xie, Kai          based clone detection approach. In 2017 IEEE Inter-
+   Dong, Wentao Zhang, Guanting Chen, Xiao Bi,             national Conference on Software Maintenance and
+   Y. Wu, Y. K. Li, Fuli Luo, Yingfei Xiong, and Wen-      Evolution (ICSME), pages 249­260. IEEE.
+   feng Liang. 2024. Deepseek-coder: When the large
+   language model meets programming ­ the rise of       Yinhan Liu, Myle Ott, Naman Goyal, Jingfei Du, Man-
+   code intelligence.                                      dar Joshi, Danqi Chen, Omer Levy, Mike Lewis,
+                                                           Luke Zettlemoyer, and Veselin Stoyanov. 2019.
+Masum Hasan, Tanveer Muttaqueen, Abdullah Al Ish-          Roberta: A robustly optimized bert pretraining ap-
+   tiaq, Kazi Sajeed Mehrab, Md Mahim Anjum                proach. arXiv preprint.
+   Haque, Tahmid Hasan, Wasi Ahmad, Anindya Iqbal,
+   and Rifat Shahriyar. 2021. Codesc: A large code­     Shuai Lu, Daya Guo, Shuo Ren, Junjie Huang, Alexey
+   description parallel dataset. In Findings of the        Svyatkovskiy, Ambrosio Blanco, Colin Clement,
+   Association for Computational Linguistics: ACL-         Dawn Drain, Daxin Jiang, Duyu Tang, Ge Li, Li-
+   IJCNLP 2021, pages 210­218.                             dong Zhou, Linjun Shou, Long Zhou, Michele Tu-
+                                                           fano, Ming Gong, Ming Zhou, Nan Duan, Neel Sun-
+Hamel Husain, Ho-Hsiang Wu, Tiferet Gazit, Miltiadis       daresan, Shao Kun Deng, Shengyu Fu, and Shujie
+   Allamanis, and Marc Brockschmidt. 2019. Code-           Liu. 2021a. Codexglue: A machine learning bench-
+   SearchNet Challenge: Evaluating the State of Se-        mark dataset for code understanding and generation.
+   mantic Code Search.
+                                                        Shuai Lu, Daya Guo, Shuo Ren, Junjie Huang, Alexey
+Gautier Izacard and Edouard Grave. 2020. Distilling        Svyatkovskiy, Ambrosio Blanco, Colin Clement,
+   knowledge from reader to retriever for question an-     Dawn Drain, Daxin Jiang, Duyu Tang, et al. 2021b.
+   swering.                                                Codexglue: A machine learning benchmark dataset
+                                                           for code understanding and generation. In Thirty-
+Gautier Izacard and E´ douard Grave. 2021. Leveraging      fifth Conference on Neural Information Processing
+   passage retrieval with generative models for open       Systems Datasets and Benchmarks Track (Round 1).
+   domain question answering. In Proceedings of the
+   16th Conference of the European Chapter of the As-   Meryem M'hamdi, Doo Soon Kim, Franck Der-
+   sociation for Computational Linguistics: Main Vol-      noncourt, Trung Bui, Xiang Ren, and Jonathan
+   ume, pages 874­880.                                     May. 2021. X-METRA-ADA: Cross-lingual meta-
+                                                           transfer learning adaptation to natural language un-
+J. Krinke. 2001. Identifying similar code with program     derstanding and question answering. In Proceed-
+   dependence graphs. In Proceedings Eighth Work-          ings of the 2021 Conference of the North Ameri-
+   ing Conference on Reverse Engineering, pages 301­       can Chapter of the Association for Computational
+   309.                                                    Linguistics: Human Language Technologies, pages
+                                                           3617­3632, Online. Association for Computational
+Vishwajeet Kumar, Nitish Joshi, Arijit Mukherjee,          Linguistics.
+   Ganesh Ramakrishnan, and Preethi Jyothi. 2019.
+   Cross-lingual training for automatic question gen-   Teruko Mitamura, Mengqiu Wang, Hideki Shima, and
+   eration. In Proceedings of the 57th Annual Meet-        Frank Lin. 2006. Keyword translation accuracy
+   ing of the Association for Computational Linguis-       and cross-lingual question answering inchinese and
+   tics, pages 4863­4872, Florence, Italy. Association     japanese. In Proceedings of the Workshop on Multi-
+   for Computational Linguistics.                          lingual Question Answering-MLQA `06.
+Lili Mou, Ge Li, Lu Zhang, Tao Wang, and Zhi Jin.           on Software Analysis, Evolution and Reengineering
+   2016. Convolutional neural networks over tree            (SANER), pages 261­271. IEEE.
+   structures for programming language processing.
+                                                         Xin Wang, Yasheng Wang, Fei Mi, Pingyi Zhou, Yao
+Erik Nijkamp, Bo Pang, Hiroaki Hayashi, Lifu Tu,            Wan, Xiao Liu, Li Li, Hao Wu, Jin Liu, and Xin
+   Huan Wang, Yingbo Zhou, Silvio Savarese, and             Jiang. 2021. SynCoBERT: Syntax-Guided Multi-
+   Caiming Xiong. 2023. Codegen: An open large lan-         Modal Contrastive Pre-Training for Code Represen-
+   guage model for code with multi-turn program syn-        tation. arXiv preprint. Number: arXiv:2108.04556
+   thesis.                                                  arXiv:2108.04556 [cs].
+
+Luca Ponzanelli, Gabriele Bavota, Massimiliano           Ruochen Xu, Yiming Yang, Naoki Otani, and Yuexin
+   Di Penta, Rocco Oliveto, and Michele Lanza. 2014.        Wu. 2018. Unsupervised cross-lingual transfer of
+   Mining stackoverflow to turn the ide into a self-        word embedding spaces. In Proceedings of the 2018
+   confident programming prompter. In Proceedings           Conference on Empirical Methods in Natural Lan-
+   of the 11th working conference on mining software        guage Processing, pages 2465­2474, Brussels, Bel-
+   repositories, pages 102­111.                             gium. Association for Computational Linguistics.
+
+Yingqi Qu, Yuchen Ding, Jing Liu, Kai Liu, Ruiyang       Yucheng Zhou, Xiubo Geng, Tao Shen, Wenqiang
+   Ren, Xin Zhao, Daxiang Dong, Hua Wu, and                 Zhang, and Daxin Jiang. 2021. Improving zero-shot
+   Haifeng Wang. 2021. Rocketqa: An opti-                   cross-lingual transfer for multilingual question an-
+   mized training approach to dense passage re-             swering over knowledge graph. In Proceedings of
+   trieval for open-domain question answering. ArXiv,       the 2021 Conference of the North American Chap-
+   abs/2010.08191.                                          ter of the Association for Computational Linguistics:
+                                                            Human Language Technologies, pages 5822­5834,
+Pranav Rajpurkar, Jian Zhang, Konstantin Lopyrev,           Online. Association for Computational Linguistics.
+   and Percy Liang. 2016. Squad: 100,000+ ques-
+   tions for machine comprehension of text. Preprint,
+   arXiv:1606.05250.
+
+Arij Riabi, Thomas Scialom, Rachel Keraron, Beno^it
+   Sagot, Djame´ Seddah, and Jacopo Staiano. 2020.
+   Synthetic data augmentation for zero-shot cross-
+   lingual question answering. arXiv preprint
+   arXiv:2010.12643.
+
+Chanchal Roy and James Cordy. 2007. A survey on
+   software clone detection research. School of Com-
+   puting TR 2007-541.
+
+Hitesh Sajnani, Vaibhav Saini, Jeffrey Svajlenko,
+   Chanchal K Roy, and Cristina V Lopes. 2016.
+   Sourcerercc: Scaling code clone detection to big-
+   code. In Proceedings of the 38th International Con-
+   ference on Software Engineering, pages 1157­1168.
+
+Siamak Shakeri, Noah Constant, Mihir Sanjay Kale,
+   and Linting Xue. 2020. Multilingual syn-
+   thetic question and answer generation for cross-
+   lingual reading comprehension. arXiv preprint
+   arXiv:2010.12008v1.
+
+Hannes Thaller, Lukas Linsbauer, and Alexander
+   Egyed. 2020. Towards semantic clone detection via
+   probabilistic software modeling. In 2020 IEEE 14th
+   International Workshop on Software Clones (IWSC),
+   pages 64­69. IEEE.
+
+Johannes Villmow, Viola Campos, Adrian Ulges, and
+   Ulrich Schwanecke. 2022. Addressing leakage in
+   self-supervised contextualized code retrieval. arXiv
+   preprint.
+
+Wenhan Wang, Ge Li, Bo Ma, Xin Xia, and Zhi
+   Jin. 2020. Detecting code clones with graph neu-
+   ral network and flow-augmented abstract syntax
+   tree. In 2020 IEEE 27th International Conference
+

@@ -1,0 +1,950 @@
+                                        DeepSpeed Inference: Enabling Efficient Inference
+                                          of Transformer Models at Unprecedented Scale
+
+                                                         Reza Yazdani Aminabadi, Samyam Rajbhandari, Minjia Zhang, Ammar Ahmad Awan,
+                                                       Cheng Li, Du Li, Elton Zheng, Jeff Rasley, Shaden Smith, Olatunji Ruwase, Yuxiong He
+
+                                                                                                         Microsoft Corporation
+                                        {yazdani.reza,samyamr,minjiaz,ammar.awan,chengli1,du.li,elton.zheng,jeff.rasley,shaden.smith,olruwase,yuxhe}@microsoft.com
+
+arXiv:2207.00032v1 [cs.LG] 30 Jun 2022     Abstract--The past several years have witnessed the success       latency requirements, and thus the batch sizes used are generally
+                                        of transformer-based models, and their scale and application         small. For small batch sizes, inference latency of a model is
+                                        scenarios continue to grow aggressively. The current landscape of    lower bounded by the time it takes to load all the model
+                                        transformer models is increasingly diverse: the model size varies    parameters from memory to registers. Meeting the latency
+                                        drastically with the largest being of hundred-billion parameters;    requirements of a transformer model inference therefore is
+                                        the model characteristics differ due to the sparsity introduced      equivalent to achieving adequate overall memory bandwidth.
+                                        by the Mixture-of-Experts; the target application scenarios can
+                                        be latency-critical or throughput-oriented; the deployment hard-        Maximizing effective memory bandwidth at small batch sizes
+                                        ware could be single- or multi-GPU systems with different types      requires reading memory at near peak memory bandwidth for
+                                        of memory and storage, etc. With such increasing diversity           fully-connected (or, linear) layers which contain the majority
+                                        and the fast-evolving pace of transformer models, designing a        of the model weights, while also minimizing kernel launch
+                                        highly performant and efficient inference system is extremely        and data movement overhead of other operators like layernorm
+                                        challenging.                                                         and softmax. The GeMM implementations and other kernels
+                                                                                                             designed for training primarily focus on maximizing compute
+                                           In this paper, we present DeepSpeed Inference, a comprehen-       utilization at very large batch sizes and are sub-optimal for
+                                        sive system solution for transformer model inference to address      latency-critical inference.
+                                        the above-mentioned challenges. DeepSpeed Inference consists
+                                        of (1) a multi-GPU inference solution to minimize latency while         In addition, for large models, even the peak memory band-
+                                        maximizing the throughput of both dense and sparse transformer       width of a single device may not be sufficient to meet inference
+                                        models when they fit in aggregate GPU memory, and (2) a              latency constraints. It requires aggregate memory bandwidth
+                                        heterogeneous inference solution that leverages CPU and NVMe         across multiple devices, which needs optimal parallelism
+                                        memory in addition to the GPU memory and compute to enable           strategies for partitioning the model computation across devices
+                                        high inference throughput with large models which do not fit in      that minimizes the communication overhead across devices.
+                                        aggregate GPU memory.                                                Such parallelism strategies must cater to the variation in
+                                                                                                             transformer architecture and hardware characteristics.
+                                           DeepSpeed Inference reduces latency by up to 7.3× over
+                                        the state-of-the-art for latency oriented scenarios and increases       With respect to transformer architectures, we view them in
+                                        throughput by over 1.5x for throughput oriented scenarios.           two broad categories -- dense or sparse Mixture-of-Experts
+                                        Moreover, it enables trillion parameter scale inference under        (MoE) transformer models. The optimal parallelism strategy
+                                        real-time latency constraints by leveraging hundreds of GPUs, an     depends on the model architecture. For example, tensor
+                                        unprecedented scale for inference. It can inference 25× larger       and pipeline parallelism work only for dense transformers,
+                                        models than with GPU-only solutions, while delivering a high         while expert parallelism only works for sparse transformers.
+                                        throughput of 84 TFLOPS (over 50% of A6000 peak).                    Moreover, transformer-based MoE models contain both dense
+                                                                                                             and sparse transformer components, requiring a combination
+                                                                  I. INTRODUCTION                            of different parallelism techniques to maximize the effective
+                                                                                                             memory bandwidth across devices. Finally, with respect to
+                                           The past several years have witnessed the success of              hardware characteristics, modern clusters have heterogeneous
+                                                                                                             network topology (eg. intra-node NVLink/NVSwitch and inter-
+                                        transformer-based models; their scale and application scenarios      node InfiniBand) which requires further consideration when
+                                                                                                             developing parallelism strategies.
+                                        continue to grow aggressively. The current landscape of
+                                                                                                                Throughput Challenges: In addition to meeting latency,
+                                        transformer models is increasingly diverse: the model size           production workloads also have throughput targets to meet
+                                                                                                             cost budget. At small batch sizes, where the workload is still
+                                        varies drastically with the largest being over trillion parameters;  memory bandwidth bound, the latency of the workload does not
+                                                                                                             increase as long as the computation is entirely overlapped with
+                                        the model characteristics differ due to the sparsity introduced      model weight reads. Therefore, maximizing throughput while
+
+                                        by the Mixture-of-Experts technique; the target application
+
+                                        scenarios can be latency-critical or throughput-oriented; the
+
+                                        deployment hardware could be single- or multi-GPU systems
+
+                                        with different types of memory and storage, etc. With such
+
+                                        increasing diversity and the fast-evolving pace of transformer
+
+                                        models, designing a highly performant and efficient inference
+
+                                        system is extremely challenging.
+                                           Latency Challenges: Using a transformer based model
+
+                                        for online scenarios in production requires meeting stringent
+meeting the latency SLA requires not only maximizing the              a unique aspect of the latency challenge: batch size, scaling
+memory bandwidth utilization, but also overlapping compute            dense models, and scaling sparse models, but are compatible
+with the model weight reads, and at the same time achieving           and built on top of each other, we create a comprehensive
+high compute efficiency at small batch sizes to maximize the          system capable of achieving state-of-art latency and throughput
+batch size whose compute can be overlapped with reading the           at unprecedented scales for both dense and sparse transformer
+model weights. Inference kernels must therefore achieve high          models despite the heterogeneity in batch size, model scale
+memory bandwidth utilization and high compute utilization             and model characteristics.
+at small batch sizes, whereas training kernels simply need to
+achieve high compute utilization at much larger batch sizes.             2) ZeRO-Inference: ZeRO-Inference is a heterogeneous
+This makes developing inference kernels quite challenging.            GPU+CPU+NVMe based solution to address the memory
+                                                                      challenge by enabling massive model inference with mini-
+   Moreover, even for throughput bound scenarios with large           mal GPU resources. In contrast to DeepSpeed Transformer,
+batch sizes, inference workloads can differ from training             for applications that are less latency sensitive but resource
+workloads in terms of data flow and computation dependencies,         constrained, ZeRO-Inference allows inference of models with
+requiring novel solutions to achieve high throughput. For             hundreds of billions of parameters on a single or multiple
+example, generative transformers have dependencies between            GPUs as long as there is enough CPU or NVMe memory to
+each generated token and the next token, which does not               store the model parameters. In addition, even when the model
+exist during training. As a result, it incurs higher memory           does fit in aggregate GPU memory, ZeRO-Inference delivers
+requirement during inference to keep track of previously              better per GPU efficiency than DeepSpeed Transformer by
+generated states. For large models that may require pipeline          supporting much larger batch sizes.
+parallelism to fit the model in memory, this dependency across
+generated tokens also requires new pipeline schedules to keep            The main contributions of the paper are as follows:
+all devices busy compared to training scenarios.                         · Single GPU transformer kernels for minimizing la-
+
+   Feasibility Challenges under Limited Resources: A model                  tency and maximizing throughput via memory-bandwidth-
+with tens of billions of parameters is simply too large to fit              centric fusion schedules and GeMM kernels (Sec. III).
+in the memory of a single GPU device, and at hundreds of                 · A many-GPU dense transformer inference system that
+billions of parameters, it is too large to even fit in the aggregate        combines tensor-parallelism to minimize latency with
+GPU memory of a single node. For example, inferencing MT-                   inference optimized pipeline parallelism schedules and
+NLG 530B [1] requires about 1TB of GPU memory just to                       memory optimizations to maximize throughput (Sec. IV).
+fit the model for inference, requiring over three DGX-2 nodes            · A massive-GPU sparse model inference system that
+consisting over two dozen of NVIDIA A100 40GB GPUs.                         combines: i) expert, data, and tensor parallelism, ii)
+Most data scientists simply do not have access to such GPU                  novel communication optimizations and iii) sparse kernel
+resources needed for inference of these massive models.                     optimizations to scale sparse inference on trillions of
+                                                                            parameters across hundreds of GPUs (Sec. V).
+   In this paper, we present DeepSpeed Inference, a compre-              · ZeRO-Inference that leverages CPU, NVMe and GPU
+hensive solution for transformer model inference designed to                memory along with GPU compute to make massive model
+address the above challenges. DeepSpeed Inference consists                  inference accessible with limited resources (Sec. VI).
+of two components:                                                       · Extensive evaluation of DeepSpeed Inference on a wide
+                                                                            range of transformer models covering four aspects: i)
+   1) DeepSpeed Transformer: DeepSpeed Transformer, is                      For latency sensitive scenarios, DeepSpeed Transformer
+a GPU only solution, designed to minimize latency while                     shows latency reduction over state-of-the-art of up to 1.9×
+maximizing throughput for both dense and sparse transformer                 for dense models (up to 175B parameters) and 7.2× for
+models. It achieves state-of-art latency and throughput for                 sparse models (a 1T model under 25 ms), while scaling
+transformer models of all sizes and supports running on a                   to 256 GPUs at 33% peak memory bandwidth utilization,
+single GPU or scaling to hundreds of GPUs to inference multi-               an unprecedented scale for inference. ii) For throughput
+trillion parameter models.                                                  oriented scenarios, DeepSpeed Transformer demonstrates
+                                                                            over 1.5× gain over state-of-the-art (Sec. VII-C). iii) Eval-
+   The DeepSpeed Transformer solution is a three-layered sys-               uation of ZeRO-Inference on GPU resource constrained
+tem architecture consisting of i) single GPU transformer kernels            systems that shows ZeRO-Inference can support inference
+optimized for memory bandwidth utilization at low batch sizes               with 25× larger models than with GPU only solution
+and high throughput at large batch sizes, ii) many-GPU dense                while achieving over 50% of peak hardware performance.
+transformer layer, for scaling dense transformer models across              (Sec. VII-D). iv) Performance analysis and breakdown of
+GPUs using tensor-slicing and inference-optimized pipeline                  the different optimizations discussed throughout the paper
+parallelism, and iii) massive-GPU scale sparse transformer                  (Sec. VII-E).
+layer, designed to scale MoE transformer layers to hundreds              Despite the diversity in transformer inference landscape,
+of GPUs using a combination of parallelism techniques and             DeepSpeed Inference offers a versatile solution capable of
+communication optimization strategies, while also minimizing          achieving state-of-art latency and throughput for all variations
+single GPU sparse computation overhead using optimized                of transformer model inference: dense or sparse, small or
+sparse kernels.
+
+   By taking this layered approach, where each layer addresses
+large batches, billions to trillions of parameters, single GPU       could pose functionality, performance and convergence related
+or across hundreds of GPUs. Furthermore, it democratizes             restrictions for pipeline parallelism.
+access to large transformer inference by enabling them on
+systems with limited GPU resources. DeepSpeed Inference                 ZeRO [20] takes a different approach and removes the
+is available for everyone to leverage though our open-source         memory redundancies in conventional data parallelism by
+repository: https://github.com/microsoft/DeepSpeed.                  partitioning model states across the data-parallel processes
+                                                                     instead of replicating them. 3D parallelism [21] combines
+            II. BACKGROUND AND RELATED WORK                          data, tensor, and pipeline parallelism efficiently to scale to
+                                                                     models of trillions of parameters.
+   a) Dense Transformer Models: The size of transformer-
+based language models has been increasing by 10× each                   Expert parallelism [22] places different experts on different
+year for the past few years, from models with a few hundred          GPUs and executes them in parallel. Each expert only processes
+millions of parameters [2], [3], [4], [5], to models with dozens     a subset of tokens on each expert based on a learned top-k
+of billions parameters [6], [7]. Recently, GPT-3 175B [8],           gating function. The classic all-to-all communication primitive
+Gopher 280B [9], and MT-NLG 530B [1] further push this limit         has been used to implement expert parallelism [23], [15], [22].
+to hundreds of billions of parameters. As larger models have
+demonstrated outstanding accuracy performance on various                The above parallelism strategies are mainly designed for
+natural language understanding and generation tasks, this            maximizing training throughput and their effectiveness can
+exponential growth in model scale would continue as long             be limited during inference because of insufficient parallelism
+as the system and hardware technology could keep up with it.         with small batch sizes in inference. Our work leverages these
+                                                                     techniques and applies innovative optimizations to make them
+   b) Sparse Transformer Models: The success of scaling dense        effective and performant in inference.
+language models has motivated researchers and practitioners
+to further propose the Mixture-of-Experts (MoE) technique               d) Optimized Transformer Kernels: There is also a suite of
+which introduces sparsity in transformer models [10]. Typical        work focused on accelerating the performance of transformer
+transformer model [11] architectures have transformer blocks         kernels [24], [25], [26]. A record training time for BERT
+that consist of two consecutive sub-layers, a self-attention         was accomplished with stochastic transformer kernels that
+sub-layer followed by a position-wise feed-forward (FF) block.       fused operators and reduced activation memory to support
+MoE models add conditional computation by replacing the feed-        large batch sizes [24]. Ianov et al. [25] use transformer
+forward blocks with a Position-wise MoE layer with a variable        dataflow graphs to fuse elementwise and reduction operators
+number of experts and a top-k gating function. Increasing the        and accelerate training. TurboTransformers [26] similarly fuses
+number of experts allows scaling the MoE model size with             elementwise and reduction operators for transformer inference.
+only sublinear increase in computation cost, greatly reducing        E.T. [27] combines fusion, custom GeMM, and pruning together
+the training cost of the model. However, MoE models can              to accelerate inference speed of Transformers. The kernel
+be up to 8× larger than their quality-equivalent dense models        optimizations presented in this work fuse a wider variety
+[12], [13], [14], [15], requiring much higher aggregate memory       of operators, such as head-wise transformation that requires
+bandwidth to achieve comparable latency during inference.            additional data layout transformation and layers beyond the self-
+                                                                     attention sublayers, such as the intermediate layers and MoE
+   c) System Technology for Memory and Performance Scaling:          specific layers. In addition, the kernels presented in this work
+The major challenge in scaling model sizes resides in the            also support auto-regressive generative models that require KV-
+memory bottleneck. To satisfy the memory requirement, prior          caching [8] to be performant during inference, where as the
+works have proposed various parallelism strategies to use the        above mentioned work do not consider support for KV-caching.
+aggregated GPU memory within and across nodes.
+                                                                        e) DNN Inference Optimizations: There has also been
+   Tensor parallelism [16] splits model layers horizontally          extensive work on optimizing DNN inference through platforms,
+across GPU devices. As the number of GPU increases for tensor-       libraries, compilation, and compression strategies. Several com-
+slicing, two primary trade-offs show up: (i) lower compute           pilers and runtimes exist to facilitate the deployment of models,
+granularity due to the smaller local problem size, and (ii) all-     such as TVM [28], ONNXRuntime [29] and TensorRT [30].
+reduce communications in each transformer layer to aggregate         These platforms have been mostly focused on optimizing DNN
+the partial activations. When scaling across node boundaries,        models that can fit in a single GPU, such as small transformers
+the inter-node bandwidth is limited comparing to the fast            with a few hundreds millions of parameters. In contrast, our
+intra-node connections, thus tensor parallelism can cause a          work targets billion-scale or even trillion-scale transformers
+significant latency degradation. In practice, tensor parallelism is  that do not easily fit on a single GPU device. The most related
+often restricted to groups of GPUs sharing the high-bandwidth        work to ours is FastTransformer [31], which supports multi-
+interconnect within a node (e.g., NVIDIA NVLink).                    GPU inference for transformer models, which we will provide
+                                                                     a more detailed comparison in Section VII. Finally, there
+   Pipeline parallelism [17], [18], [19] splits a model vertically   has been numerous works that improves the deployment of
+into pipeline stages and use micro-batching to hide pipeline         DNN models through model compression techniques, such
+bubbles. It only requires communication for data aggregation         as distillation, quantization, and sparsification, which could
+between adjacent pipeline stages, thus more efficient to scale       reduce the computation time and memory consumption with a
+across nodes. However, model splitting and micro-batching            small accuracy trade-off. Our work is complimentary to these
+model compression techniques and can be combined together              tile granularity, Deep-Fusion can fuse not only element-wise
+to boost performance further.                                          operations but also reductions, data transpositions, and GeMMs
+                                                                       as long as there are no cross-tile dependencies. For example,
+   III. INFERENCE-OPTIMIZED TRANSFORMER KERNELS                        all micro-operations in a layer-norm [33] can be tiled along the
+                                                                       token dimension, while the reduction dimensions are processed
+   In this part, we discuss the challenges, design, and opti-          within a tile. This allows all the micro-operations inside a
+mizations for transformer kernels capable of achieving high-           layernorm to be fused into a single kernel despite consisting of
+performance inference for both small and large batch sizes.            multiple reduction operations. Furthermore, the data produced
+                                                                       by each tile is either kept in registers or in shared memory
+A. Inference Challenges on Different Batch Sizes                       when possible to allow for data-reuse across operators without
+                                                                       incurring global memory data-transfer overheads.
+   As discussed in Sec.I, small batch performance is limited by
+the memory bandwidth utilization in reading model weights.             C. SBI-GeMM: Custom GeMM for Small Batch Size
+There are three main challenges to optimizing for memory
+bandwidth at small-batch inference. First, due to limited work            Our custom GeMM implementation is designed to be
+at different kernels performing the operations of a transformer        fusable with Deep-Fusion while achieving maximum memory
+layer using small batch, inference performance suffers from            bandwidth utilization. Its design can be viewed in three parts:
+the kernel-invocation overhead. Second, each kernel-invocation         tiling strategies, cooperative-group reduction, and data-layout
+writes data to global memory which is read by GPU cores                transformation for better memory bandwidth utilization.
+during the next kernel invocation, and this data-transfer between
+GPU cores and global memory adds an additional overhead.                  1) Tiling Strategies: Fig. 1(a) depicts our GeMM scheduling
+Finally, neither cuBLAS nor CUTLASS GeMM libraries are                 for a skinny matrix multiplication. We first tile the computation
+well tuned for extremely small batch sizes, and cannot achieve         along the output dimension. That allows us to implement
+good memory-bandwidth utilization.                                     GeMM using a single kernel by keeping the reduction within
+                                                                       a tile. For small models, where the output dimension is too
+   Large-batch inference performance on the other-hand is              small to create enough parallel tiles to achieve good memory
+limited by compute utilization, and while compute heavy                bandwidth, we tile the input dimension as well and implement
+operations like GeMM inside a transformer layer can achieve            GeMM as two kernels to allow for reduction across tiles.
+very good compute utilization using CUBLAS and CUTLASS
+libraries, the overall utilization can still be limited by the kernel     2) Cooperative-Group Reduction: With the aforementioned
+launch overheads and data-transfers between GPU cores and              tiling strategy, each warp in a thread block is responsible for
+global memory across different kernels other than GeMMs.               producing a partially reduced result for a tile of outputs and a
+                                                                       final reduction is needed across all the warps within the thread
+   To address these challenges, we introduce two techniques: i)        block. Usually this is implemented as a binary tree based
+Deep-Fusion to reduce kernel-invocation and data-movement              reduction in shared memory which requires multiple warp-
+overheads by fusing multiple kernels beyond element-wise               level synchronizations, thus creating a performance bottleneck.
+operations, and ii) A custom GeMM kernel designed for                  To avoid this, we perform a single data-layout transpose in
+improving the memory bandwidth utilization when the batch              shared memory such that partial results of the same output
+size is relatively small while also allowing it to be fused using      element are contiguous in memory, and can be reduced by
+Deep-Fusion. We discuss these techniques in detail next.               a single warp using cooperative-group collectives directly in
+                                                                       registers (See Fig. 1(a)). At the end, the first thread of each
+B. Deep-Fusion                                                         warp holds the final result and writes it to shared memory.
+                                                                       The results in shared memory are contiguous, allowing for a
+   While operator fusion is a common technique used in deep            coalesced write to global memory.
+learning to reduce kernel launch and data-movement overhead,
+it is limited primarily to element-wise operators [32], [28],             3) Leveraging Full Cache-line: In GPU architecture, each
+[29]. In contrast, transformer consists of operators like data         L1 cache-line is 128 bytes, however a coalesced memory access
+layout transformations, reductions, and GeMMs which create             with a single FP16 or INT8 element per thread in the warp
+data dependencies across thread blocks, making them difficult          cannot fully consume the full cache-line. Reading multiple
+to fuse. This is because on GPU, if a data produced by a               elements per thread along the output dimension to address this
+thread-block is consumed by a different one, a global memory           issue reduces the number of parallel tiles which also hurts
+synchronization is needed which invokes a new kernel.                  memory bandwidth. Therefore, our solution is to transpose the
+                                                                       weight matrix during initialization such that M rows for each
+   To avoid the need for a global synchronization, Deep-Fusion         column are contiguous in memory, allowing each thread to
+tiles the computation-space along dimensions of the iteration          read M elements along the input dimension (See Fig. 1(b)).
+space which incur no cross-tile data-dependencies and executes         We set M as 2 for half precision and 4 for the INT8 data types
+them in parallel across different thread-blocks. The dimensions        considering a 128-byte cache line.
+of the computation-space which does contain data dependencies
+are not tiled, and instead processed by the same thread-block.         D. Putting It Together
+
+   After this tiling, two operators can be fused using Deep-              Small-batch Transformer Kernel: Fig. 1.c shows the different
+Fusion if each tile of the second operator depends on exactly          components of a transformer layer, and the operations which
+one output tile of the first operator. By performing fusion at
+                                     Output                                                        Output       GeMM Kernel
+                                           ....
+           Input              Input                        ... ... ...  Output                     Section 1
+            ....                     ... .......
+Batch                                                                     Shared   Batch                                                                QKV   Query + Q-trans Attn Soft Attention
+                                                                         Memory             Input               Block 1       Block K  GeMM
+                                                                        Transpose                  ...                   ...                                                                       Score Max
+
+  Input                                                                                                         Block N-K+1 Block N    Reduce        X  Norm                Q_bias
+Broadcast
+                                         Local                                                     Section N/K                         N/K sections           Key + K-trans
+   to all
+  blocks                      W0 W1      weight  W0 W1                                                                                                                       K_bias                  Attn
+                              W2 W3       Read                                                                                                                                                     Context
+                                                                                                                                                              Value + V-trans
+                               Block 1                  W2 W3
+       Lanes                                                                                                                                                             V_bias
+                                         ....
+        Local GeMM                             Block n                                    Output Data-layout Transformation                                                                 Attn
+                                                                                   M                                                                                                       Output
+                         ×                                                                                                                                    Attn_bias    All                     Transform
+                           +                                                                                           M M × Output                                      Reduce
+
+       Local GeMM                                                                                                                                            ++
+
+Warps                  ×        Shared                                             Input           ...                      ...                         Norm                                                  Bias-add
+                         +     Memory                                                                                                                               Feed-Forward
+                                                                                                                Input/M
+       Local GeMM             Transpose                                                                                                                 Intermediate                       Output
+                                                                                                                                                              FF                              FF                           Y
+                       ×
+                         +
+
+       Local GeMM                                                                                                                                                        GELU +                      All      +         +
+                                                                                                                                                                                                   Reduce
+                       ×                                                                                                                                                           I_bias
+                         +                       Reduce                                                                                                                                                       O_bias
+
+                                         (a)                                                                             (b)                                                               (c)
+
+Fig. 1. (a) GeMM scheduling at different GPU architectural levels: threads-blocks, Warps and CUDA threads. Warps show different cooperative threads (32
+
+threads), Lanes show the thread index at each Warp. (b) GeMM modification to support 2-dimensional partitioning of the weight matrix and new data-layout.
+
+(c) Deep-Fusion strategy for the small-batch inference.
+
+are considered for Deep-Fusion in the small-batch inference                                                                                (a) Baseline schedule with observed data dependencies.
+case. As the figure shows, we fuse the operations inside a
+transformer layer at four main regions: 1) the QKV GeMM                                                                                        (b) Pipeline schedule to hide data dependencies.
+and input layer-norm, 2) transposition plus attention, 3) post-                                                               Fig. 2. A pipeline-parallel schedule for generating the first three tokens
+attention layer-norm and intermediate GeMM, and 4) bias and                                                                   of four sequences S0, . . . , S3 using four pipeline stages. Sequence colors
+residual addition. To support the fusion of GeMM with the rest                                                                indicate the token being generated. Data dependencies exist between the first
+of the operations in a single kernel for 3), we broadcast the input                                                           and last pipeline stages: we illustrate the dependencies for only S0. Gray
+batch across the SMs and perform the same operations that                                                                     blocks denote pipeline bubbles.
+come before GeMM, so that there is no need of communicating
+data between SMs for adding the GeMM schedule. We observe                                                                     Fig. 3. Illustration of three different batch size combinations for prompt
+that in spite of replicating the work across SMs, we still gain                                                               processing and token generation: A small micro-batch count reduces the
+performance benefit compared to the non-replicated, non-fused                                                                 latency of token-generation but prolongs the latency of prompt processing, and
+kernel implementation for the very small batch sizes.                                                                         vice versa. By using a hybrid scheduling where different micro-batch counts
+                                                                                                                              are induced to different stages, the latency of both prompt processing and
+   Large-batch Transfomer Kernel: We follow the same fusion                                                                   token-generation is reduced.
+strategy as discussed above, with the difference that we use
+CUBLAS for GeMM operations, and keep them unfused.                                                                            multiple nodes to fit massive models. While model parallelism
+                                                                                                                              is extensively studied in the context of training, there are unique
+   Support for Different Data Types: Our kernels support                                                                      challenges in inference, requiring new solutions.
+FP32, FP16 and INT8 data types for the GeMM operations.
+To support INT-8, we use CUTLASS [34] INT8 GeMM
+implementation tuned for different batch sizes. We also add
+quantize operation before GeMM that we fuse using Deep-
+Fusion and de-quantization after GeMM that we fuse using
+CUTLASS's epilogue functionality.
+
+   Eliminating Kernel Invocation Overhead via Cuda-Graph:
+For small to moderate sized models with small batch sizes, as
+we reduce the actual execution time of the kernels, the main
+latency bottleneck shifts from kernel execution to the kernel
+launch overhead on the CPU side. To address this issue, we
+add the CUDA-Graph [35] support in our inference pipeline.
+More specifically, we store the trace of the kernels the first
+time they are launched during the forward computation at
+inferencing and create the computation-graph that can be reused
+for the following requests, which largely eliminates the kernel
+launching overhead and substantially improves the performance.
+
+IV. INFERENCE-ADAPTED DENSE TRANSFORMER MODELS                                                                                A. Aggregate Memory Bandwidth via Tensor Parallelism
+                     ON MANY-GPU SYSTEMS
+                                                                                                                                 We leverage the aggregate memory bandwidth across mul-
+   This section presents the model parallelism techniques that                                                                tiple GPU devices via tensor-slicing parallelism (TP) from
+we use on top of the single transformer kernels discussed in                                                                  Megatron-LM [16]. DeepSpeed Inference can automatically
+Sec. I with two goals: i) reducing latency further by leveraging                                                              scale a dense transformer model to multiple devices by
+aggregate memory bandwidth across GPUs and ii) increasing                                                                     partitioning transformer operators across multiple devices while
+memory capacity by leveraging aggregate GPU memory across                                                                     also adding appropriate communication operations needed
+across GPUs. Under the hood, it leverages the single GPU           for generating the next token. Fig. 2 illustrates our pipeline-
+kernels to maximize per GPU memory bandwidth utilization,          parallel sequence generation schedule. We set the number of
+while using NCCL all-reduce collectives to perform the             micro-batches to the pipeline depth, P . Having at least P micro-
+necessary across GPU communication as described in [19].           batches is critical to utilize all of the pipeline stages, but avoid
+This allows DeepSpeed Inference to achieve excellent aggregate     additional micro-batches due to latency and memory costs of
+memory bandwidth utilization across several GPUs with a node.      the larger batch size. However, we cannot repeatedly inference
+However, as discussed in Section II, tensor slicing can not        a batch of P micro-batches without significant pipeline bubble
+be scaled efficiently beyond a single node due to significant      overheads ruining efficiency. We avoid intermediate pipeline
+communication overhead. Thus to further scale to multi-node        bubbles by dynamically queuing micro-batches of generated
+systems, DeepSpeed Inference uses pipeline parallelism.            tokens until the sequences terminate. The resulting schedule
+                                                                   amortizes the pipeline bubble over all generated tokens without
+B. Aggregate Memory via Pipeline Parallelism -- Challenges         allocating extra activations from a larger batch size.
+
+   As models exceed the memory capacity of a single node, we          However, this is not sufficient to get the best performance.
+use pipeline parallelism (PP) [17], [18]. Although PP does not     As mentioned in in Section IV-B, autoregressive models, such
+help with the aggregate memory bandwidth since each micro-         as GPT-3, often consist of two stages that have different
+batch traverses the full depth of the model in sequence across     performance characteristics, and using the same micro-batch
+the pipeline stages, it has smaller communication overhead         size for both stages is sub-optimal.
+(as discussed in Sec. II) compared to TP, thus more efficient
+to scale across nodes. However, applying PP in inference is           The prompt processing component of inference has a large
+non-trivial and requires different considerations from training:   number of tokens per sample that can saturate the GPU compute
+                                                                   and the choice of micro-batches only affects the pipeline bubble
+   First, transformer decoders are autoregressive, i.e., the       but not the GPU execution time. However, for token generation,
+inputs to the model inference are previously-generated outputs.    each sample has a single token, the total number of tokens
+Therefore, when generating a sequence, the next token in           across the entire micro-batch is small, and the kernel execution
+the sequence is a function of the previous tokens. Existing        time is entirely memory bandwidth bound. That means, the
+training pipelines inference at the granularity of batches, and    execution time for a micro-batch does not change much with
+so batch boundaries are defined by the data dependencies of        change in the size of micro-batch as most of the time is spent
+sequence generation. These data dependencies induce frequent       in fetching model parameters. However, the overall execution
+pipeline bubbles that degrade inference performance (see Fig. 2).  time is proportional to the number of micro-batches, as the
+Second, autoregressive generation models have two distinct         forward pass on each micro-batch requires fetching the weights
+phases: i) prompt processing phase where the entire input          all over again. Therefore, efficient token generation requires
+prompt is processed to generate the first token and ii) token      minimizing the number of micro-batches while keeping it large
+generation phase, where the results of the prompt processing is    enough to hide the pipeline bubble.
+reused via KV-caching, and the new computation only depends
+on a single previously generated token. As the number of              To address the varying requirements for prompt processing
+tokens processed in each phase is drastically different, they      and token generation, we adopt a hybrid scheduling strategy,
+have different performance characteristics requiring different     where we use different number of micro-batches for the prompt
+considerations.                                                    processing and token-generation. Figure3 illustrates how the
+                                                                   hybrid scheduling works. We use larger number of micro-
+   Third, autoregressive inferencing caches the key and value      batches during the prompt processing stage to minimize the
+activations of each transformer layer in order to avoid recom-     pipeline bubble, while during the token generation phase, we
+putation for each token. This activation memory scales with        reduce the number of micro-batches to reduces the overall
+the number of sequences that are concurrently generated. In        execution time.
+effect, inference performance for large transformer models can
+be limited by memory capacity.                                        2) Offloading Activations to CPU Memory: The cached key
+                                                                   and value activation tensors have a predictable reuse pattern.
+C. Inference Optimized Pipeline Parallelism                        The activations of sequence si will not be used again until
+                                                                   generating the next token of si. When the allocated activation
+   In order to overcome the inference-specific challenges, our     memory exceeds a threshold, we offload some activations from
+approach includes three important aspects: scheduling, memory      GPU to CPU memory while not in use. The saved GPU memory
+footprint reduction, and communication optimization.               allows for larger batch sizes and enable better system utilization.
+
+   1) Hiding data dependencies and hybrid scheduling:                 3) Communication Optimization: Inference performance
+Suppose our goal is to inference a batch of B sequences,           will ultimately degrade if the transformer kernels are stalled
+s1, s2, . . . , sB. We divide the sequence into groups of micro-   on communications for CPU memory offloading over the low-
+batches, where one micro-batch is the unit of computation          bandwidth PCIe. To avoid the stall we overlap the communi-
+provided to each kernel invocation. A micro-batch progresses       cation with computation, and more importantly we employ
+through the stages of the model pipeline until the next tokens     an architecture-aware communication optimized offloading
+are produced by the last stage of the model. If sequence si does   strategy. Most system architectures do not have a unique PCIe
+not terminate, the generated token will be used as the input       bus for each GPU and share a single link across two GPUs. To
+                                                                                                           Parallelism-coordinated AlltoAll optimization
+
+Total GPUs = 16, Total Experts = 8                               Expert-parallelism                        MP 0 GPU 0 A B C D       Local                 MP 0 GPU 0 A C B D            MP 0 GPU 0 A E
+expert-slicing degree = 2,                                                                                 MP 1 GPU 1 A B C D   Transform +               MP 1 GPU 1 A C B D
+expert-parallel degree = 8          Expert-slicing               ........ Expert-slicing                                                                  MP 0 GPU 2 E G F H  Inter-MP MP 1 GPU 1                BF
+tensor-slicing degree = 4,                                                                                 MP 0 GPU 2 E F G H     Splitting               MP 1 GPU 3 E G F H  AlltoAll
+data-parallel degree = 4                        Expert-Slice 0                           Expert-Slice 0    MP 1 GPU 3 E F G H                                                    MP 0 GPU 2 C G
+                                                   (GPU 0)       Alltoall                   (GPU 7)
+            Output
+                                                                                                                                                                                        MP 1 GPU 3               DH
+  MoE Transformer Layer
+        Expert Parameters           All-reduce  Expert-Slice 1   All-reduce              Expert-Slice 1                                                                                       Inter-MP AlltoAll
+                                                   (GPU 8)                                 (GPU 15)
+               (e.g., MLP)                                                                                                                                                                    
+
+     Non-expert Parameters                        Allgather                                 Allgather         Local             MP 0 GPU 0 A C B D               Intra-MP               MP 0 GPU 0 A C
+            (e.g., Attention)                   (GPU0 <-> GPU8)                          (GPU7 <-> GPU15)  Transform            MP 1 GPU 1 A C B D               AllGather
+                                                                                                                                MP 0 GPU 2 E G F H
+             Input                                                                                                              MP 1 GPU 3 E G F H                                      MP 1 GPU 1               BD
+
+                                    Tensor-slicing                         Tensor-slicing                                                                                               MP 0 GPU 2 E G
+
+                                                Slice 0                                   Slice 0                                                                                       MP 1 GPU 3           FH
+                                                (GPU 0)                                  (GPU 12)
+
+                                                Slice 1          .....A...ll...to.a. ll   Slice 1           Baseline AlltoAll:               MP 0 GPU 0 A A E E                         MP 0 GPU 0 A B C D
+                                                (GPU 1)          (Expert 0..7)           (GPU 13)                               Global
+                                    All-reduce                                                             MP 0 GPU 0 A B C D   AlltoAll MP 1 GPU 1 B B F F                   Global    MP 1  GPU 1 A  B  C      D
+                                                Slice 2               All-reduce          Slice 2          MP 1 GPU 1 A B C D                                                 AlltoAll
+                                                (GPU 2)                                  (GPU 14)          MP 0 GPU 2 E F G H       MP 0 GPU 2 C C G G
+                                                                                                           MP 1 GPU 3 E F G H                                                  MP 0 GPU 2 E F G H
+                                                Slice 3                                   Slice 3                                            MP 1 GPU 3 D D H H
+                                                (GPU 3)                                  (GPU 15)                                                                                       MP 1 GPU 3 E F G H
+
+                                                Data-parallelism (no communication)
+
+       Fig. 4. Expert, data and tensor parallelism in DeepSpeed-MoE.                                       Fig. 5. The parallelism coordinated communication (PCC) optimization follows
+                                                                                                           four steps: 1) local transformation and splitting of the original data, 2) Intra-
+avoid contention between GPUs, odd-numbered GPUs offload                                                   tensor-model-parallel (MP) and inter-MP alltoall, followed by 3) intra-MP
+activations for odd-numbered layers, while even-numbered                                                   allgather, and 4) finally a local transform operation. Despite four steps, it is
+GPUs offload activation for even-numbered layers. This is                                                  faster than the baseline alltoall shown in the bottom half of this illustration.
+crucial to fully leverage the PCIe bandwidth. Scheduling odd
+and even layer offloading across GPUs prevents contention on                                               B. PCC: Parallelism Coordinated Communication for MoE
+the PCIe link, allowing each GPU to fully leverage the PCIe
+bandwidth when it needs to offload.                                                                           Expert parallelism places expert operators across GPUs and
+                                                                                                           requires all-to-all communication between all expert-parallel
+      V. MASSIVE SCALE SPARSE MODEL INFERENCE                                                              GPUs. However, it is not efficient to scale expert parallelism
+                                                                                                           to hundreds of devices needed for sparse model inference
+   While the techniques developed so far enables DeepSpeed                                                 as the latency increases linearly with the increase in devices.
+Inference to achieve state-of-art latency and throughput for                                               Fortunately, when combining expert parallelism and tensor-
+dense transformer models, new considerations are necessary for                                             slicing within a single model, there are opportunities for
+sparse transformer models that consist of both sparse and dense                                            communication optimization that can reduce the communication
+components. The key challenge is that on one hand, sparse                                                  latency. Note that tensor-slicing splits individual operators
+models are much larger than quality equivalent dense models                                                across GPUs and requires all-reduce between them. The all-
+(Sec. II), requiring much higher aggregate memory bandwidth                                                reduce operation in tensor-slicing replicates data among the
+to achieve latency comparable to quality equivalent dense                                                  involved devices. When executing tensor-parallel operators
+models, and on the other hand it has a different computational                                             followed by expert-parallel operators, this replication allows
+structure than dense models, requiring different parallelism                                               creating an optimized communication schedule for the all-to-all
+approaches compared to dense transformers [23].                                                            operator that does not require communicating between all the
+                                                                                                           expert parallel processes: the all-to-all can happen within just
+   In this section, we introduce a massive scale MoE-based                                                 the subset of devices that share the same tensor-slicing rank,
+transformer model inference system capable of addressing the                                               since the data across tensor-parallel ranks are replicated (Fig. 5).
+above challenges. It is built on top of the dense components                                               As a result, the latency of all-to-all is bounded by O(p/L)
+discussed before and consists of three main components:                                                    instead of O(p) where L is the tensor-slicing parallelism degree
+                                                                                                           and p is the total number of GPU devices.
+A. Orchestration of Tensor, Data, &Expert Parallelism for MoE
+                                                                                                              Similarly, when executing expert-parallel operators followed
+   We use tensor parallelism, referred in Fig. 4 as tensor-slicing                                         by tensor-slicing operators, the final all-to-all can be done in
+(for non-expert parameters) and expert-slicing (for expert                                                 the same way, but this time followed by an allgather operator
+parameters), to split individual parameters across multiple                                                between tensor-parallel ranks to replicate the data needed by
+GPUs to leverage the aggregate memory bandwidth across                                                     tensor-slicing (Fig. 5). This reduces the latency overhead from
+GPUs. However, tensor parallelism can only scale efficiently to                                            O(p) to O(p/L) + O(L).
+a few GPUs due to communication overhead and fine-grained
+parallelism. To address this, we use expert parallelism in                                                    This reduced latency overhead allows better scaling to a large
+conjunction with tensor parallelism to scale experts parameters                                            number of devices. For example, when scaling to 128 GPUs
+to hundreds of GPUs. Expert parallelism does not reduce                                                    with 8-way tensor-slicing and 128-way expert parallelism, this
+computation granularity of individual operators, therefore                                                 approach reduces the latency overhead of the all-to-all from
+allowing our system to leverage aggregate memory bandwidth                                                 (128C1 + C2) to (16C1 + C2) due to 8-way tensor-slicing,
+across hundreds of GPUs. To scale the non-expert computation                                               where C1 and C2 are some constants determined by point-to-
+to the same number of GPUs, we use data parallelism at no                                                  point latency, message size, and bandwidth.
+communication overhead.
+                                                                                                           C. Highly Optimized Computation Kernels for MoE
+
+                                                                                                              MoE-related computation consists of four major components:
+                                                                                                           (1) a gating function that determines the assignment of tokens
+to experts, where the result is represented as a sparse tensor (a    VI. DEMOCRATIZATION OF LARGE MODEL INFERENCE.
+one-hot vector representing the assigned expert for each token
+in the sequence); (2) a sequence of sparse operators including        DeepSpeed Transformer needs the model to fit in aggregate
+a cumsum operator to compute an inverse mapping from               GPU memory, requiring a large number of GPUs for large
+experts to token IDs (experts-to-token) using the previously       models. This is a barrier for many data scientists who lack
+mentioned token-to-expert one-hot vector; (3) a scatter operator   access to large number of GPUs, e.g., dozens of GPUs are
+to distribute tokens to its corresponding experts. This is         required to inference models like MT-NLG-530B. To broaden
+implemented as a sparse einsum operator between the expert-to-     access to large models, we propose ZeRO-Inference which
+token computed in the previous step and input tokens; and (4)      enables large model inference using as few as a single GPU.
+a final sparse einsum based gather operation that re-distributes   For non-latency sensitive applications, ZeRO-Inference achieves
+tokens processed at each expert back to their original ordering.   high performance by leveraging DRAM and NVMe memories
+                                                                   in addition to GPU memory and compute. Compared to a
+   The sparse tensor representation in the gating function         CPU only based solution, ZeRO-Inference can achieve orders
+and sparse einsum operators introduce a significant latency        of magnitude higher throughput by efficiently exploiting the
+overhead. The gating function includes numerous operations         available GPU hardware. Moreover, it offers similar or even
+to create token-masks, select top-k experts, and perform           better throughput than DeepSpeed Transformer by supporting
+cumulative-sum (cumsum) to find the token-id going to each         larger batch sizes. We now discuss the design of ZeRO-
+expert and sparse matrix-multiply, all of which are not only       Inference and the performance optimizations that make it very
+wasteful due to the sparse tenor representation, but also          efficient for throughput oriented inference.
+extremely slow due to many kernel call invocations. Moreover,
+the sparse einsums have a complexity of S × E × M × ce,            A. ZeRO-Inference Design
+where S represents the total number of tokens, E represents
+the number of experts, M represents model hidden dimension,           ZeRO-Inference utilizes available heterogeneous memory
+and ce represents expert capacity (S, E, and M are the main        (i.e., GPU memory, DRAM, and NVMe) to satisfy the memory
+complexity factors, while ce is normally very small). In this      requirement of fitting massive models. This is motivated by
+equation, (E - 1) out of E operators for each token are            the observation that environments with limited GPU resources
+multiplications and additions with zeros, since only one expert    are often equipped with terabytes of aggregate heterogeneous
+is typically selected to process ce tokens. This comes from        memory, which is sufficient to fit hundreds of billion-parameter
+the fact that generalizing the gating operations results in the    models. ZeRO-Inference builds on the offloading techniques
+einsums over several masking matrices or one-hot vectors that      of ZeRO-Infinity [36], and adapts them to inference.
+produce a lot of non-necessary computation with zeros to select
+the correct token for each expert. We optimize these operators        An important design decision is how to apportion GPU
+using dense representation and kernel-fusion.                      memory among model weights, inference inputs, and interme-
+                                                                   diate results. One approach is to pin as much of the model
+   We optimize each of the four steps in the gating function in    weights as possible into GPU memory, and fetch the remainder
+the following way: 1) we replace the one-hot representation of     (from DRAM or NVMe) when needed for computation. A
+the token to expert mapping using a table data-structure, greatly  benefit of this approach is avoidance of the latency of fetching
+reducing the memory overhead from eliminating all the zeros in     weights that are already pinned in GPU memory. However,
+the one-hot vectors; 2) we create the inverse mapping (expert-to-  this approach has two downsides: (i) it allows only small batch
+tokens mapping table) from the tokens-to-expert mapping table      sizes which hurts efficiency, and (ii) the latency savings for
+by simply scanning though the token-to-expert table in parallel.   hundred-billion parameter models are negligible since only a
+3) we replace the sparse einsum based scatter operation using      small fraction of the weights can fit in GPU memory anyway.
+a data-layout transformation that achieves the same result by
+first identifying the token IDs assigned to an expert using the       ZeRO-Inference adopts a different approach that pins the
+expert-to-token mapping table created in the previous step, and    model weights either in DRAM (if large enough) or NVMe,
+then copying these tokens to the appropriate expert location; 4)   and streams each layer into GPU memory for computation
+after the tokens are processed by their corresponding experts,     when needed. Despite the latency of fetching model weights
+we use a similar data-layout transformation to replace the         over PCIe, ZeRO-Inference is able to achieve high efficiency
+sparse einsum based gather operation.                              for two reasons. First, by limiting GPU memory usage of the
+                                                                   model to one or a few layers of weights, ZeRO-Inference is able
+   Using the data-layout transformation instead of sparse          to use large batch sizes for inference. Second, a large model
+einsums reduces the complexity of these operations from            layer requires significant amount of compute, especially given
+S × E × M × ce to S × M × ce. We use shared memory                 their long input sequence length (e.g., 2048). For example, one
+for data-layout transformations and fuse all but the final data-   GPT3-175B layer requires about 7 TFlops to process an input
+layout transformation together into a single kernel using basic    of batch size 1. Therefore, large batch sizes cause compute
+fusion principles. Combined, these optimizations result in over    time to dominate the latency of fetching model weights, which
+6× reduction in MoE kernel-related latency.                        ultimately improves efficiency. In summary, ZeRO-Inference's
+                                                                   strategy to utilize GPU memory to support large batch sizes
+                                                                   results in high performance inference for large models.
+Name     # params(B) hidden dim (K)                # layers      # attention heads Fig 6 Fig 6     Fig 8      Fig 9
+                                                                                                              N/A
+GPT-[2, Neo, J, 13B] 1.5, 2.7, 6, 13 1.6, 2.5, 4, 5 48, 32, 28, 40 25, 20, 32, 40 TP=1 N/A         N/A        TP=1
+                                                                                                              TP=1
+GPT-[NeoX, 50B, 87B] 20, 50, 87      6, 8, 12, 12  44, 62, 48       64, 64, 96       N/A TP=2,4,8  N/A        TP=1
+
+LM-175B              175             12            96                   96           N/A TP=16 TP=8, PP=2
+
+LM-530B              530             20            105                  128          N/A  N/A      TP=8,PP=5
+
+                                                   TABLE I
+
+         MODEL CONFIGURATIONS USED FOR THE DENSE MODEL INFERENCE PERFORMANCE EVALUATION.
+
+         Model Size (billions) #Layers Hidden size MP degree EP degree Expert-slicing #GPUs
+
+      1.3B+MoE-128               52      24        2048          1              128       1        128
+
+      2.4B+MoE-128        107.7          16        3584          1              128       1        128
+
+         8B+MoE-128       349.0          30        4096          4              128       1        128
+
+      24B+MoE-128         1064.9         40        8192          8              128       2        256
+
+      47B+MoE-128         2024.0         58        8192          8              128       2        256
+
+                                                   TABLE II
+
+MODEL CONFIGURATIONS USED FOR THE SPARSE MODEL INFERENCE PERFORMANCE EVALUATION. MP STANDS FOR MODEL-PARALLELISM. EP REFERS TO
+
+                                                   EXPERT-PARALLELISM.
+
+B. Performance Optimizations                                     use a full-featured distributed PyTorch implementation that
+                                                                 supports both tensor and expert parallelism [37].
+   ZeRO-Inference implements two optimizations to further
+mitigate the impact of fetching model weights from DRAM             2) Metrics: We use three performance metrics: (i) latency,
+or NVMe for inference computations.                              i.e., end-to-end output generation time for a batch of input
+                                                                 prompts, (ii) token throughput, i.e., tokens-per-second pro-
+   Prefetching: ZeRO-Inference prefetches a configurable num-    cessed, and (iii) compute throughput, i.e., TFLOPS per GPU.
+ber of layers ahead of use, overlapping with computation of
+the current layer. Prefetching gives the flexibility to improve     3) Workloads: For the performance evaluation, we focus
+throughput at the cost of a configurable increase in GPU         on evaluating GPT-style transformer-based decoder models [8],
+memory consumption.                                              where we vary the hidden dimension, the number of transformer
+                                                                 layers, and attention heads based on the GPT-3 paper as well as
+   Multi-GPU PCI-e bandwith utilization: In multi-GPU sce-       its publicly available variants to cover a wide range of model
+narios, the aggregate PCI-e bandwidth is used to reduce the      configurations and different number of parameters. Table I
+layer transfer time by having each GPU only fetch a partition    elaborates the model architectures. For sparse MoE models, we
+of the layer and then aggregating partitions over the much       further vary the expert degree to cover models ranging from 52B
+faster GPU-GPU interconnect.                                     parameters to 2 trillion parameters. Sparse model configurations
+                                                                 are shown in Table II. Since generative text language models
+   Beyond the above optimizations, ZeRO-Inference also per-      like GPT-3 produces tokens based on a prompt, which is the
+forms several other efficiency optimizations to achieve close    text given to the model to be completed, we measure the latency
+to peak NVMe IO bandwidth, such as bulk read/write requests      of generating 8 tokens with an input prompt of 128 tokens
+for asynchronous completion, aggressive parallelization of I/O   for dense models varying batch sizes, which reflects scenarios
+requests, work scheduling, memory pinning, and avoiding data     that correspond to more latency-sensitive applications. For
+copy. However, we do not claim novelty on those optimizations    the sparse MoE model, we measure the per-token latency by
+as they were introduced by prior work [36].                      generating 100 tokens at a time with a prompt of 128 tokens
+                                                                 and batch size 8. For throughput oriented applications, we
+                VII. PERFORMANCE EVALUATION                      measure the performance with an input prompt of 512 tokens
+                                                                 while generating 50 tokens at a time. For resource constrained
+   We present an extensive evaluation of DeepSpeed Inference     systems, we measure the compute throughput using maximum
+covering four aspects. i) For latency sensitive applications,    batch size possible for generating a single token.
+DeepSpeed Inference achieves up to 1.9× and 7.3× lower
+latency than state-of-art for a wide range of dense models with     4) Testbeds: We conduct our experiments on: a cluster
+hundreds of billions of parameters, and sparse models with       of up to 256 NVIDIA Ampere A100 40GB GPUs (32
+trillions of parameters scaling to hundreds of GPUs. ii) For     8×A100 DGX boxes [38]), a lambda A6000 workstation [39]
+throughput-oriented inference of massive models, DeepSpeed       (2×A6000-48GB-GPU, 256GB DRAM, and 2TB NVME)
+Inference achieves up to 1.5× higher throughput. iii) On         and a DGX2 V100 server [40] (16×V100-32GB-SXM-GPU,
+resource constrained systems DeepSpeed Inference enables         1500GB DRAM, and 30TB NVME).
+inference of 25× larger models than GPU-only solution
+(530B vs 20B) while achieving over 50% of peak hardware          B. Evaluation of DeepSpeed Inference for Latency Sensitive
+performance, democratizing large-model inference with limited    Workloads
+GPU resources. iv) We present a performance breakdown to
+zoom into the contributions of individual optimizations.            DeepSpeed Inference provides a comprehensive system
+                                                                 solution to support fast inference of dense models over 530B
+A. Evaluation Methodology                                        parameters as well sparse models that have more than 2 trillion
+                                                                 parameters at unprecedented scale.
+   1) Baseline: For dense models, we use FasterTransformer
+(FT) [31], an efficient implementation of transformer models
+provided by NVIDIA. For experiments of sparse models, we
+                   GPT2                                                        GPT-Neo-2.7B                   Tput (#tokens-per-sec)  300  GPTJ-6B                   120   Tput (#tokens-per-sec)  600  GPT-13B                   80
+                                                                                                                  Latency (ms)                                                 Latency (ms)
+            140                              200  Tput (#tokens-per-sec)  160                            250                                                                                                                                          Tput (#tokens-per-sec)
+                                                      Latency (ms)
+120                                          160                          140                            200                          250                            100                                                                          60
+                                                                          120                                                                                                                      400
+Latency (ms)100                                                                                                                       200                            80
+                                                                          100                                                                                                                                                                     40
+              80                             120                                                         150                          150                            60                            200
+                                                                          80
+              60                             80                                                          100                                                                                                                                      20
+                                                                          60                                                          100                            40
+              40
+                                             40                           40                             50                           50                             20
+              20                                                          20
+
+              0                              0                            0                              0                            0                              0                              0                             0
+
+                   1-batch 8-batch 16-batch                                    1-batch 8-batch 16-batch                                    1-batch 8-batch 16-batch                                     1-batch 8-batch 16-batch
+
+              450  GPT-Neox-20B              40                                GPT-50B                                                600  GPT-87B                      30                         900  LM-175B                   16
+
+              400                                 Tput (#tokens-per-sec)  600                            30   Tput (#tokens-per-sec)                                        Tput (#tokens-per-sec) 800                            14                  Tput (#tokens-per-sec)
+                                                       Latency (ms)                                                 Latency (ms)                                                 Latency (ms)
+              350                            30                           500                            25                           500                                                          700                            12
+
+Latency (ms)  300                                                         400                            20                           400                               20                         600                            10
+
+              250                            20                           300                            15                           300                                                          500                            8
+              200                                                                                                                                                                                  400
+
+              150                            10                           200                            10                           200                               10                         300                            6
+
+              100                                                                                                                                                                                  200                            4
+
+              50                                                          100                            5                            100                                                          100                            2
+
+              0                              0                            0                              0                            0                                 0                           0                             0
+
+                   1-batch 8-batch 16-batch                                    1-batch 8-batch 16-batch                                    1-batch 8-batch 16-batch                                     1-batch 8-batch 16-batch
+
+                   FT (Fp16) latency  DS-Inference (Fp16) latency              DS-Inference (INT8) latency                                 FT (Fp16) tput  DS-Inference (Fp16) tput                     DS-Inference (INT8) tput
+
+Fig. 6. Latency and throughput comparison of DeepSpeed Transformer with FasterTransformer [31] for different models and batch sizes.
+
+Fig. 7. Latency and throughput improvement offered by DeepSpeed-MoE over baseline on 256 GPUs. Throughput shown is per GPU and the speedup values
+along the arrows refer to improvement in latency.
+
+   1) Dense Model Evaluation: Fig. 6 shows the latency                                                        and the latency of the GeMM operators only increases sub-
+and throughput improvements of DeepSpeed Inference on                                                         linearly with the batch size in this modest batch size regime.
+up to 175B parameter models running with up to 16-way                                                         However,the latency of the non-GeMM operations increase
+tensor parallelism (see Tab. I). In particular, we compare                                                    linearly due to proportional increase in data movement from
+both FP16 (DeepSpeed-FP16) and INT8 (DeepSpeed-INT8)                                                          GPU memory, making it a bigger fraction of the overall
+implementations of DeepSpeed Inference with the FasterTrans-                                                  latency. Deep-fusion reduces this data movement by keeping
+former FP16 baseline (FT-FP16) 1 Both the baseline and                                                        intermediate data for fused operators in shared memory or
+DeepSpeed Inference uses identical TP strategy so all the                                                     registers to achieve higher performance. The DeepSpeed-INT8
+latency differences in these results come from the differences                                                further improves upon the DeepSpeed-FP16 performance by
+in kernel implementations described below.                                                                    utilizing the higher peak of the INT8 tensor-cores compared
+                                                                                                              to FP16.
+   Small Batch Sizes For small batch size, DeepSpeed-FP16
+achieves a speedup of up to 1.55× over the baseline. The                                                         2) Sparse Model Evaluation: Fig. 7 shows the single output
+performance improvements for both single GPU and multi-                                                       token generation latency and throughput of serving 100B to 2T
+GPU configs are primarily due to deep-fusion and custom                                                       MoE models with up to 256 GPUs with and without DeepSpeed-
+GeMMs. The latency reduction is the largest for the smallest                                                  MoE. Compared to baseline, DeepSpeed-MoE achieves better
+model sizes, as they have the largest kernel-launch overhead                                                  performance than the state-of-the-art, with up to 7.3× reduction
+due to limited work per kernel, and worst GeMM memory                                                         in latency. To have a fair comparison, the configuration for
+bandwidth utilization from CUBLAS as they are not optimized                                                   data/tensor/expert parallelism is the same for both the baseline
+for small and skinny GeMMs. DeepSpeed-INT8 enables a                                                          and DeepSpeed Inference-MoE. The main differences are
+further performance boost of up to 1.95× over the FP16                                                        optimizations that DeepSpeed Inference has, such as expert-
+baseline by reducing the overall size of the parameters in                                                    slicing, parallelism coordinated all-to-all and MoE-specific
+half compared to FP16.                                                                                        kernels, but the PyTorch-MoE baseline does not. By effectively
+                                                                                                              exploiting hundreds of GPUs in parallel, DeepSpeed-MoE
+   Larger Batch Sizes For larger batch sizes, DeepSpeed-FP16                                                  achieves an unprecedented scale for inference at incredibly low
+reduces the latency by up to 1.57× over the baseline, and                                                     latency - a staggering trillion parameter MoE model can be
+up to 1.93× using DeepSpeed-INT8. The primary source of                                                       served under 25ms by leveraging an aggregate GPU memory
+performance improvement for DeepSpeed-FP16 is the reduction                                                   bandwidth of 128 TB/sec (33 % of peak memory bandwidth),
+of non-GeMM data-movement overhead via deep-fusion. As                                                        making it possible to serve such a massive model even in
+batch size increases, the GeMM becomes much more efficient,                                                   extremely interactive online applications.
+
+   1As the time of writing, FasterTransformer only supports INT8 computation                                     While we realize that 33% compute utilization on 256 GPUs
+for Transformer models with just the encoders, e.g., BERT, but not decoders                                   would be a fairly low for a compute bound application such
+used in state-of-the-art large-scale Transformer models such as GPT3 [8].
+as training with high arithmetic intensity, a 33% memory                                                                        by offloading the parameters to CPU or NVMe and using GPU
+bandwidth utilization for enabling a low latency massive                                                                        memory to store activations. The benefit of larger batch size
+model inference with virtually no arithmetic intensity is an                                                                    is shown in Fig. 9(a).
+unprecedented result due to the intensive communication
+required in such scenarios.                                                                                                        3) Scalability: When additional GPUs are available, ZeRO-
+                                                                                                                                Inference can leverage them in parallel to achieve near perfect
+        LM-175B                        LMLM-5-3503B0B                                                                           linear throughput (see Fig. 9 (c)) by leveraging the aggregate
+Tput (#tokens/sec/GPU)21C80hart Title67                                                                                   635   PCIe bandwidth across GPUs as described in Sec. VI-B.
+                                              TFLOPS-per-GPU                                                              630
+19                    70  6                                                                                               525   E. Performance Breakdown and Analysis
+                                                     Tput (#tokens/sec/GPU)55
+                                                                                               TTFFLLOPSP-S-pepre-r-GGPPUU40107    1) Dense GPU kernel performance breakdown: Fig. 10(a)
+  15                  60  44                                                                                              520   shows that compared to PyTorch baseline, deep-fusion offers
+                                                                                                                          4155  a significant reduction in latency by reducing kernel launch
+30103                     3                                                                                                     and data movement overheads, while our custom GeMM
+                                                                                                                                implementation offers further reduction for small batch sizes
+20101                 50                                                                                                        by increasing memory bandwidth utilization of GeMM.
+
+1009                  40  32                                                                                              4100     2) Throughput breakdown for massive model GPU-Inference:
+   057                                                                                                                    355   Fig. 10(b) shows the impact of several optimizations in Deep-
+                          1                                                                                                     Speed Inference to the inference throughput, such as the dense
+                                                                                                                                optimized kernel, inference optimized scheduling, memory
+                      30 Latency20                     300                                                                      optimizations that lead to increased batch size, communication
+                                                                                                                                optimizations that reduce PCIe data movement overheads as
+        Tput  Tflops                                                                                                            described in Sec. IV.
+
+        FT (TP-only) DS-Inference (TP-only) FT (PP+TP) DS-Inference (PP+TP)                                                        3) Prompt latency improvement with hybrid scheduling:
+                                                                                                                                Fig.13 shows that DeepSpeed Inference with hybrid scheduling
+Fig. 8. Throughput comparison of DeepSpeed Transformer with FT for 175B                                                         achieves 1.18x and 3.06x prompt processing speed-up over
+and 530B models on 16 and 40 GPUs. We run with batch sizes that give the                                                        FasterTransformer for GPT-3 175B model with PP + MP
+best performance for each configuration.                                                                                        configuration and MP-only configuration, respectively. This
+                                                                                                                                experiment was conducted on two nodes each with 8 A100
+C. Throughput Oriented Massive Model Inference                                                                                  GPUs. We enable both pipeline and tensor parallelism. We set
+                                                                                                                                the batch size to 24, because the latency dramatically increases
+   Massive models are capable of processing large input                                                                         when the batch size is larger than 24. We suspect this is related
+prompts and generating large number of coherent tokens. In                                                                      to an issue in the AllReduce kernel in Pytorch. The results
+some applications (e.g., offline query rewriting in web-scale                                                                   demonstrate hybrid scheduling has the potential to reduce
+search and recommendation systems), this token generation                                                                       prompt processing latency and we leave fixing the AllReduce
+process can be less latency focused and more throughput                                                                         issue as future work.
+oriented. In this sub-section we show throughput improvement
+of DeepSpeed Inference for massive model inference.                                                                                4) Memory bandwidth scalability for sparse MoE models:
+                                                                                                                                Fig. 11 shows that DeepSpeed Inference achieves much
+   Fig.8 shows that DeepSpeed Inference achieves 1.51×                                                                          higher per GPU memory bandwidth than PyTorch baseline
+throughput improvement over the best FasterTransformer (FT)                                                                     for a 52B MoE models on an 8×A100-GPU node while
+configuration for the GPT-3 175B model running on two nodes                                                                     also demonstrating significantly better memory bandwidth
+(2 × 8 A100). This improvement comes from our improved                                                                          scalability all the way to 128 GPUs that leads to the faster
+pipeline parallelism schedule, and ability to run much larger                                                                   sparse model inference latency and higher throughput. This is
+batch sizes using memory optimization and communication                                                                         the combined effect of MoE kernels and all-to-all optimizations
+minimization strategies described in Sec. IV. For the 530B,                                                                     presented in Section V.
+we could not run FT using a combination of TP and PP
+without crashing, but compared to the TP only version of                                                                           5) Impact of pre-fetching on ZeRO-Inference throughput:
+FT, DeepSpeed Inference achieves over 1.53× throughput                                                                          Fig. 10(c) shows that prefetching (Sec. VI-B) improves through-
+improvement running on 5 nodes.                                                                                                 put at small batch sizes while the benefit diminishing at larger
+                                                                                                                                batch sizes dues to higher arithmetic intensity to hide the
+D. Democratizing Larger Model Inference with ZeRO-Inference                                                                     CPU/NVMe to GPU communication overhead.
+
+   We evaluate three aspects of ZeRO-Inference:                                                                                    6) Comparison with E.T.: We also compared with a state-
+   1) Model Scale: ZeRO-Inference can inference a 530B                                                                          of-the-art transformer kernel E.T. [27] for smaller scale
+parameter model on a single A6000 GPU, 25× larger than the                                                                      DistilBERT and BERT encoder models on NVIDIA A100
+largest model that can be inferenced with a GPU-only solution                                                                   GPUs for a batch size 1 and sequence length 128. Fig. 12 shows
+(and 10× larger compared to the CPU-only solution), making                                                                      that DeepSpeed Inference is 1.7x and 1.4x faster than E.T. on
+it possible for data-scientists to test massive models on single                                                                those two models. DeepSpeed Inference achieves lower latency
+GPU workstations without requiring massive GPU clusters or                                                                      because DeepFusion fuses more operators, leading to lower
+incurring huge cost (see Fig. 9(b)).
+   2) Inference Throughput: ZeRO-Inference achieves excellent
+inference throughput of up to 84 TFLOPS, 54% of theoretical
+peak (158.4 TFLOPS) for offline inference with very large
+batch sizes (see Fig. 9(b)). In fact, for models that fit in CPU
+memory, it offers over 25× higher throughput than the CPU-
+only solution. Furthermore, even for models that fit in single
+GPU memory, it offers over 50% better throughput than the
+GPU-only solution. This is possible, because ZeRO-Inference
+can support much larger batch sizes than a GPU-only solutions
+                   (a)                                                 (b)  (c)
+
+Fig. 9. (a) Throughput of GPT-NeoX-20B across batch sizes on a A6000 GPU. (b) Throughput across models on a A6000 GPU. (c) Throughput of GPT-50B
+using up to 16 GPUs over a single GPU (67 TFLOPS, 53% of peak) on the DGX2 V100.
+
+                   (a)                                                 (b)  (c)
+
+Fig. 10. (a) Benefit of the Deep-Fusion and optimized GeMM over Megatron baseline for the GPT2 model. (b) Throughput improvement with different
+pipeline parallelism optimizations for 530B Model. (c) Impact of prefetching on ZeRO-Inference performance on a single V100 GPU.
+
+Fig. 11. Aggregate memory bandwidth scalability of DeepSpeed-MoE            Fig. 13. Prompt processing latency and TFLOPS comparison between
+compared to baseline.                                                       DeepSpeed with hybrid scheduling and FasterTransformer.
+
+                   E.T. [27] DS-Inference                                                            VIII. CONCLUSION
+
+Latency (ms)  1.8                                                              This paper presents DeepSpeed Inference, a system that en-
+              1.6                                                           ables efficient inference of transformer models at unprecedented
+              1.4                                                           scale, with respect to model size, the number of GPUs, and
+              1.2                                                           performance. With innovations across the entire system stack,
+                                                                            DeepSpeed Inference delivers speedy, efficient and economic
+                1                                                           inference as the model size grows, model architecture evolves,
+              0.8                                                           or the latency requirements become more stringent, supporting
+              0.6                                                           the increasing diversity of the transformer models and their
+              0.4                                                           application scenarios. DeepSpeed Inference offers previously
+              0.2                                                           unattainable low latencies at unprecedented model scales, and
+                                                                            make these gigantic models servable with unimaginably few
+                0                                                           resources. With such capabilities, we hope DeepSpeed Inference
+                                                                            will not only facilitate the fast pace of innovation in transformer
+                   DistilBert  Bert                                         models but also further the state of using these models in
+                                                                            production and research for everyone in need.
+Fig. 12. Comparison with alternative Transformer kernels (E.T. [27]).
+
+kernel invocation overhead and higher memory bandwidth
+utilization. In addition to being faster for small encoder models,
+we remark that the scope of our work is also much broader than
+E.T., where DeepSpeed Inference supports encoder, decoder,
+and sparsely gated MoE models at much larger scale.
+                             REFERENCES                                            [21] D. Team and R. Majumder, "DeepSpeed: Extreme-scale model training for
+
+ [1] S. Smith, M. Patwary, B. Norick, P. LeGresley, S. Rajbhandari, J. Casper,     everyone," https://www.microsoft.com/en-us/research/blog/deepspeed-
+      Z. Liu, S. Prabhumoye, G. Zerveas, V. Korthikanti et al., "Using
+      deepspeed and megatron to train megatron-turing nlg 530b, a large-scale      extreme-scale-model-training-for-everyone/, 2020.
+      generative language model," arXiv preprint arXiv:2201.11990, 2022.
+                                                                                   [22] W. Fedus, B. Zoph, and N. Shazeer, "Switch transformers: Scaling
+ [2] J. Devlin, M.-W. Chang, K. Lee, and K. Toutanova, "Bert: Pre-training
+      of deep bidirectional transformers for language understanding," arXiv        to trillion parameter models with simple and efficient sparsity," arXiv
+      preprint arXiv:1810.04805, 2018.
+                                                                                   preprint arXiv:2101.03961, 2021.
+ [3] Y. Liu, M. Ott, N. Goyal, J. Du, M. Joshi, D. Chen, O. Levy, M. Lewis,
+      L. Zettlemoyer, and V. Stoyanov, "Roberta: A robustly optimized bert         [23] S. Rajbhandari, C. Li, Z. Yao, M. Zhang, R. Yazdani Aminabadi, A. A.
+      pretraining approach," arXiv preprint arXiv:1907.11692, 2019.
+                                                                                   Awan, J. Rasley, and Y. He, "DeepSpeed-MoE: Advancing Mixture-of-
+ [4] A. Radford, K. Narasimhan, T. Salimans, and I. Sutskever, "Improving
+      language understanding by generative pre-training," OpenAI Blog, 2018.       Experts Inference and Training to Power Next-Generation AI Scale,"
+
+ [5] A. Radford, J. Wu, R. Child, D. Luan, D. Amodei, I. Sutskever et al.,         ArXiv, January 2022. [Online]. Available: https://www.microsoft.com/en-
+      "Language models are unsupervised multitask learners," OpenAI blog,
+      vol. 1, no. 8, p. 9, 2019.                                                   us/research/publication/deepspeed-moe-advancing-mixture-of-experts-
+
+ [6] S. Black, S. Biderman, E. Hallahan, Q. Anthony, L. Gao, L. Golding,           inference-and-training-to-power-next-generation-ai-scale/
+      H. He, C. Leahy, K. McDonell, J. Phang, M. Pieler, U. S. Prashanth,
+      S. Purohit, L. Reynolds, J. Tow, B. Wang, and S. Weinbach, "GPT-NeoX-        [24] "Microsoft DeepSpeed achieves the fastest BERT training time," https://
+      20B: An open-source autoregressive language model," 2022.
+                                                                                   www.deepspeed.ai/2020/05/27/fastest-bert-training.html, accessed: 2022-
+ [7] "Turing-NLG: A 17-billion-parameter language model by Mi-
+      crosoft," https://www.microsoft.com/en-us/research/blog/turing-nlg-a-17-     04-01.
+      billion-parameter-language-model-by-microsoft/, accessed: 2022-03-20.
+                                                                                   [25] A. Ivanov, N. Dryden, T. Ben-Nun, S. Li, and T. Hoefler, "Data movement
+ [8] T. Brown, B. Mann, N. Ryder, M. Subbiah, J. D. Kaplan, P. Dhariwal,
+      A. Neelakantan, P. Shyam, G. Sastry, A. Askell et al., "Language models      is all you need: A case study on optimizing transformers," Proceedings
+      are few-shot learners," Advances in neural information processing systems,
+      vol. 33, pp. 1877­1901, 2020.                                                of Machine Learning and Systems, vol. 3, pp. 711­732, 2021.
+
+ [9] J. W. Rae, S. Borgeaud, T. Cai, K. Millican, J. Hoffmann, F. Song,            [26] J. Fang, Y. Yu, C. Zhao, and J. Zhou, "Turbotransformers: an efficient
+      J. Aslanides, S. Henderson, R. Ring, S. Young et al., "Scaling language
+      models: Methods, analysis & insights from training gopher," arXiv            gpu serving system for transformer models," in Proceedings of the
+      preprint arXiv:2112.11446, 2021.
+                                                                                   26th ACM SIGPLAN Symposium on Principles and Practice of Parallel
+[10] D. Lepikhin, H. Lee, Y. Xu, D. Chen, O. Firat, Y. Huang, M. Krikun,
+      N. Shazeer, and Z. Chen, "Gshard: Scaling giant models with conditional      Programming, 2021, pp. 389­402.
+      computation and automatic sharding," arXiv preprint arXiv:2006.16668,
+      2020.                                                                        [27] S. Chen, S. Huang, S. Pandey, B. Li, G. R. Gao, L. Zheng, C. Ding,
+
+[11] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez,       and H. Liu, "E.T.: re-thinking self-attention for transformer models on
+      L. Kaiser, and I. Polosukhin, "Attention is all you need," in Advances in
+      neural information processing systems, 2017, pp. 5998­6008.                  gpus," in SC '21: The International Conference for High Performance
+
+[12] W. Fedus, B. Zoph, and N. Shazeer, "Switch transformers: Scaling to           Computing, Networking, Storage and Analysis, St. Louis, Missouri, USA,
+      trillion parameter models with simple and efficient sparsity," CoRR, vol.
+      abs/2101.03961, 2021.                                                        November 14 - 19, 2021, B. R. de Supinski, M. W. Hall, and T. Gamblin,
+
+[13] Google, "More efficient in-context learning with glam,"                       Eds. ACM, 2021, pp. 25:1­25:18.
+      https://ai.googleblog.com/2021/12/more-efficient-in-context-learning-
+      with.html, 2021.                                                             [28] T. Chen, T. Moreau, Z. Jiang, L. Zheng, E. Yan, H. Shen, M. Cowan,
+
+[14] A. Yang, J. Lin, R. Men, C. Zhou, L. Jiang, X. Jia, A. Wang, J. Zhang,        L. Wang, Y. Hu, L. Ceze et al., "{TVM}: An automated {End-to-End}
+      J. Wang, Y. Li, D. Zhang, W. Lin, L. Qu, J. Zhou, and H. Yang, "M6-t:
+      Exploring sparse expert models and beyond," 2021. [Online]. Available:       optimizing compiler for deep learning," in 13th USENIX Symposium
+      https://arxiv.org/abs/2105.15082
+                                                                                   on Operating Systems Design and Implementation (OSDI 18), 2018, pp.
+[15] Y. J. Kim, A. A. Awan, A. Muzio, A. F. Cruz-Salinas, L. Lu, A. Hendy,
+      S. Rajbhandari, Y. He, and H. H. Awadalla, "Scalable and efficient moe       578­594.
+      training for multitask multilingual models," CoRR, vol. abs/2109.10465,
+      2021. [Online]. Available: https://arxiv.org/abs/2109.10465                  [29] ONNX Runtime developers, "ONNX Runtime," 11 2018. [Online].
+
+[16] M. Shoeybi, M. Patwary, R. Puri, P. LeGresley, J. Casper, and B. Catan-       Available: https://github.com/microsoft/onnxruntime
+      zaro, "Megatron-LM: Training multi-billion parameter language models
+      using gpu model parallelism," arXiv preprint arXiv:1909.08053, 2019.         [30] "NVIDIA TensorRT," https://developer.nvidia.com/tensorrt, accessed:
+
+[17] Y. Huang, Y. Cheng, D. Chen, H. Lee, J. Ngiam, Q. V. Le, and                  2022-03-20.
+      Z. Chen, "Gpipe: Efficient training of giant neural networks using pipeline
+      parallelism," ArXiv, vol. abs/1811.06965, 2018.                              [31] "NVIDIA  FasterTransformer,"         https://github.com/NVIDIA/
+
+[18] A. Harlap, D. Narayanan, A. Phanishayee, V. Seshadri, N. Devanur,             FasterTransformer, accessed: 2022-03-20.
+      G. Ganger, and P. Gibbons, "Pipedream: Fast and efficient pipeline
+      parallel dnn training," arXiv preprint arXiv:1806.03377, 2018.               [32] TensorFlow XLA developers, "Xla: Optimizing compiler for machine
+
+[19] D. Narayanan, M. Shoeybi, J. Casper, P. LeGresley, M. Patwary,                learning." [Online]. Available: https://github.com/tensorflow/tensorflow/
+      V. Korthikanti, D. Vainbrand, P. Kashinkunti, J. Bernauer, B. Catanzaro,
+      A. Phanishayee, and M. Zaharia, "Efficient large-scale language              tree/master/tensorflow/compiler/xla
+      model training on gpu clusters using megatron-lm," in Proceedings
+      of the International Conference for High Performance Computing,              [33] M. Dehghani, A. Arnab, L. Beyer, A. Vaswani, and Y. Tay, "The efficiency
+      Networking, Storage and Analysis, ser. SC '21. New York, NY,
+      USA: Association for Computing Machinery, 2021. [Online]. Available:         misnomer," ArXiv, vol. abs/2110.12894, 2021.
+      https://doi.org/10.1145/3458817.3476209
+                                                                                   [34] "Nvidia cutlass," accessed: 2022-03-20. [Online]. Available: https:
+[20] S. Rajbhandari, J. Rasley, O. Ruwase, and Y. He, "Zero: Memory
+      optimizations toward training trillion parameter models," in SC20:           //github.com/NVIDIA/cutlass
+      International Conference for High Performance Computing, Networking,
+      Storage and Analysis. IEEE, 2020, pp. 1­16.                                  [35] Alan Gray, "Getting stared with cuda graphs," 11.
+
+                                                                                   [36] S. Rajbhandari, O. Ruwase, J. Rasley, S. Smith, and Y. He, "Zero-
+
+                                                                                   infinity: Breaking the gpu memory wall for extreme scale deep learning,"
+
+                                                                                   in Proceedings of the International Conference for High Performance
+
+                                                                                   Computing, Networking, Storage and Analysis, ser. SC '21, 2021.
+
+                                                                                   [37] Y. J. Kim, A. A. Awan, A. Muzio, A. F. C. Salinas, L. Lu, A. Hendy, S. Ra-
+
+                                                                                   jbhandari, Y. He, and H. H. Awadalla, "Scalable and efficient moe training
+
+                                                                                   for multitask multilingual models," arXiv preprint arXiv:2109.10465,
+
+                                                                                   2021.
+
+                                                                                   [38] "NVIDIA DGX A100," https://www.nvidia.com/en-us/data-center/dgx-
+
+                                                                                   a100/, accessed: 2022-03-20.
+
+                                                                                   [39] "Lambda Vector," https://lambdalabs.com/gpu-workstations/vector, ac-
+
+                                                                                   cessed: 2022-03-20.
+
+                                                                                   [40] "NVIDIA DGX-2," https://www.nvidia.com/en-us/data-center/dgx-2/,
+
+                                                                                   accessed: 2022-03-20.
+

@@ -1,0 +1,2196 @@
+arXiv:2206.00927v3 [cs.LG] 13 Oct 2022      DPM-Solver: A Fast ODE Solver for Diffusion
+                                          Probabilistic Model Sampling in Around 10 Steps
+
+                                                 Cheng Lu, Yuhao Zhou, Fan Bao, Jianfei Chen, Chongxuan Li, Jun Zhu
+                                                       Dept. of Comp. Sci. & Tech., Institute for AI, BNRist Center, THBI Lab
+
+                                                   Tsinghua-Bosch Joint ML Center, Tsinghua University, Beijing, 100084 China
+                                                        Gaoling School of Artificial Intelligence, Renmin University of China,
+
+                                             Beijing Key Laboratory of Big Data Management and Analysis Methods, Beijing, China
+                                                 {lucheng.lc15, yuhaoz.cs}@gmail.com; bf19@mails.tsinghua.edu.cn
+                                                      chongxuanli@ruc.edu.cn; {jianfeic, dcszj}@tsinghua.edu.cn
+
+                                                                                    Abstract
+
+                                                  Diffusion probabilistic models (DPMs) are emerging powerful generative models.
+                                                  Despite their high-quality generation performance, DPMs still suffer from their
+                                                  slow sampling as they generally need hundreds or thousands of sequential function
+                                                  evaluations (steps) of large neural networks to draw a sample. Sampling from
+                                                  DPMs can be viewed alternatively as solving the corresponding diffusion ordinary
+                                                  differential equations (ODEs). In this work, we propose an exact formulation of
+                                                  the solution of diffusion ODEs. The formulation analytically computes the linear
+                                                  part of the solution, rather than leaving all terms to black-box ODE solvers as
+                                                  adopted in previous works. By applying change-of-variable, the solution can be
+                                                  equivalently simplified to an exponentially weighted integral of the neural network.
+                                                  Based on our formulation, we propose DPM-Solver, a fast dedicated high-order
+                                                  solver for diffusion ODEs with the convergence order guarantee. DPM-Solver
+                                                  is suitable for both discrete-time and continuous-time DPMs without any further
+                                                  training. Experimental results show that DPM-Solver can generate high-quality
+                                                  samples in only 10 to 20 function evaluations on various datasets. We achieve
+                                                  4.70 FID in 10 function evaluations and 2.87 FID in 20 function evaluations on the
+                                                  CIFAR10 dataset, and a 4  16× speedup compared with previous state-of-the-art
+                                                  training-free samplers on various datasets.2
+
+                                        1 Introduction
+
+                                        Diffusion probabilistic models (DPMs) [1­3] are emerging powerful generative models with promis-
+                                        ing performance on many tasks, such as image generation [4, 5], video generation [6], text-to-image
+                                        generation [7], speech synthesis [8, 9] and lossless compression [10]. DPMs are defined by discrete-
+                                        time random processes [1, 2] or continuous-time stochastic differential equations (SDEs) [3], which
+                                        learn to gradually remove the noise added to the data points. Compared with the widely-used genera-
+                                        tive adversarial networks (GANs) [11] and variational auto-encoders (VAEs) [12], DPMs can not only
+                                        compute exact likelihood [3], but also achieve even better sample quality for image generation [4].
+                                        However, to obtain high-quality samples, DPMs usually need hundreds or thousands of sequential
+                                        steps of large neural network evaluations, thereby resulting in a much slower sampling speed than the
+                                        single-step GANs or VAEs. Such inefficiency is becoming a critical bottleneck for the adoption of
+                                        DPMs in downstream tasks, leading to an urgent request to design fast samplers for DPMs.
+
+                                           Corresponding Author.
+                                            2Code is available at https://github.com/LuChengTHU/dpm-solver
+
+                                        36th Conference on Neural Information Processing Systems (NeurIPS 2022).
+NFE = 10  NFE = 15  NFE = 20  NFE = 100  NFE = 10
+
+          (a) DDIM [19]                  (b) DPM-Solver (ours)
+
+Figure 1: Samples by DDIM [19] with 10, 15, 20, 100 number of function evaluations (NFE), and DPM-Solver
+(ours) with only 10 NFE, using the pre-trained DPMs on ImageNet 256×256 with classifier guidance [4].
+
+Existing fast samplers for DPMs can be divided into two categories. The first category includes
+knowledge distillation [13, 14] and noise level or sample trajectory learning [15­18]. Such methods
+require a possibly expensive training stage before they can be used for efficient sampling. Furthermore,
+their applicability and flexibility might be limited. It might require nontrivial effort to adapt the
+method to different models, datasets, and number of sampling steps. The second category consists
+of training-free [19­21] samplers, which are suitable for all pre-trained DPMs in a simple plug-and-
+play manner. Training-free samplers include adopting implicit [19] or analytical [21] generation
+process, advanced differential equation (DE) solvers [3, 20, 22­24] and dynamic programming [18].
+However, these methods still require  50 function evaluations [21] to generate high-quality samples
+(comparable to those generated by plain samplers in about 1000 function evaluations), thereby are
+still time-consuming.
+
+In this work, we bring the efficiency of training-free samplers to a new level to produce high-quality
+samples in the "few-step sampling" regime, where the sampling can be done within around 10 steps
+of sequential function evaluations. We tackle the alternative problem of sampling from DPMs as
+solving the corresponding diffusion ordinary differential equations (ODEs) of DPMs, and carefully
+examine the structure of diffusion ODEs. Diffusion ODEs have a semi-linear structure -- they consist
+of a linear function of the data variable and a nonlinear function parameterized by neural networks.
+Such structure is omitted in previous training-free samplers [3, 20], which directly use black-box
+DE solvers. To utilize the semi-linear structure, we derive an exact formulation of the solutions of
+diffusion ODEs by analytically computing the linear part of the solutions, avoiding the corresponding
+discretization error. Furthermore, by applying change-of-variable, the solutions can be equivalently
+simplified to an exponentially weighted integral of the neural network. Such integral is very special
+and can be efficiently approximated by the numerical methods for exponential integrators [25].
+
+Based on our formulation of solutions, we propose DPM-Solver, a fast dedicated solver for diffusion
+ODEs by approximating the above integral. Specifically, we propose first-order, second-order and
+third-order versions of DPM-Solver with convergence order guarantees. We further propose an
+adaptive step size schedule for DPM-Solver. In general, DPM-Solver is applicable to both continuous-
+time and discrete-time DPMs, and also conditional sampling with classifier guidance [4]. Fig. 1
+demonstrates the speedup performance of a Denoising Diffusion Implicit Models (DDIM) [19]
+baseline and DPM-Solver, which shows that DPM-Solver can generate high-quality samples with as
+few as 10 function evaluations and is much faster than DDIM on the ImageNet 256x256 dataset [26].
+Our additional experimental results show that DPM-Solver can greatly improve the sampling speed of
+both discrete-time and continuous-time DPMs, and it can achieve excellent sample quality in around
+10 function evaluations, which is much faster than all previous training-free samplers of DPMs.
+
+2 Diffusion Probabilistic Models
+
+We review diffusion probabilistic models and their associated differential equations in this section.
+
+                         2
+2.1 Forward Process and Diffusion SDEs
+
+Assume that we have a D-dimensional random variable x0  RD with an unknown distribution
+q0(x0). Diffusion Probabilistic Models (DPMs) [1­3, 10] define a forward process {xt}t[0,T ] with
+T > 0 starting with x0, such that for any t  [0, T ], the distribution of xt conditioned on x0 satisfies
+
+           q0t(xt|x0) = N (xt|(t)x0, 2(t)I),                                          (2.1)
+
+where (t), (t)  R+ are differentiable functions of t with bounded derivatives, and we denote
+
+them as t, t for simplicity. The choice for t and t is referred to as the noise schedule of a
+DPM. Let qt(xt) denote the marginal distribution of xt, DPMs choose noise schedules to ensure
+that qT (xT )  N (xT |0, ~2I) for some ~ > 0, and the signal-to-noise-ratio (SNR) t2/t2 is strictly
+decreasing w.r.t. t [10]. Moreover, Kingma et al. [10] prove that the following stochastic differential
+
+equation (SDE) has the same transition distribution q0t(xt|x0) as in Eq. (2.1) for any t  [0, T ]:
+
+     dxt = f (t)xtdt + g(t)dwt, x0  q0(x0),                                           (2.2)
+
+where wt  RD is the standard Wiener process, and
+
+     f (t) = d log t ,                 g2(t)  =   dt2  -   2  d  log  t  t2.          (2.3)
+                  dt                               dt             dt
+
+Under some regularity conditions, Song et al. [3] show that the forward process in Eq. (2.2) has an
+equivalent reverse process from time T to 0, starting with the marginal distribution qT (xT ):
+
+dxt = [f (t)xt - g2(t)x log qt(xt)]dt + g(t)dw¯t, xT  qT (xT ),                       (2.4)
+
+where w¯t is a standard Wiener process in the reverse time. The only unknown term in Eq. (2.4) is
+the score function x log qt(xt) at each time t. In practice, DPMs use a neural network (xt, t)
+parameterized by  to estimate the scaled score function: -tx log qt(xt). The parameter  is
+optimized by minimizing the following objective [2, 3]:
+
+        1T                                                                    2
+L(; (t)) :=            (t)Eqt(xt)             (xt, t) + tx log qt(xt)         2   dt
+                 2
+                    0
+
+        1T                                        (xt, t) -           2
+     =                 (t)Eq0(x0)Eq( )                                2  dt + C,
+        2
+                    0
+
+where (t) is a weighting function,  q( ) = N ( |0, I), xt = tx0 + t , and C is a constant
+independent of . As (xt, t) can also be regarded as predicting the Gaussian noise added to xt, it
+is usually called the noise prediction model. Since the ground truth of (xt, t) is -tx log qt(xt),
+DPMs replace the score function in Eq. (2.4) by - (xt, t)/t and define a parameterized reverse
+process (diffusion SDE) from time T to 0, starting with xT  N (0, ~2I):
+
+                      g2(t)                                      xT  N (0, ~2I).      (2.5)
+dxt = f (t)xt + t (xt, t) dt + g(t)dw¯t,
+
+Samples can be generated from DPMs by solving the diffusion SDE in Eq. (2.5) with numerical
+solvers, which discretize the SDE from T to 0. Song et al. [3] proved that the traditional ancestral
+sampling method for DPMs [2] can be viewed as a first-order SDE solver for Eq. (2.5). However, these
+first-order methods usually need hundreds of or thousands of function evaluations to converge [3],
+leading to extremely slow sampling speed.
+
+2.2 Diffusion (Probability Flow) ODEs
+
+When discretizing SDEs, the step size is limited by the randomness of the Wiener process [27, Chap.
+11]. A large step size (small number of steps) often causes non-convergence, especially in high
+dimensional spaces. For faster sampling, one can consider the associated probability flow ODE [3],
+which has the same marginal distribution at each time t as that of the SDE. Specifically, for DPMs,
+Song et al. [3] proved that the probability flow ODE of Eq. (2.4) is
+
+dxt  =  f (t)xt        -  1  g2        (t)x  log  qt(xt),     xT  qT (xT ),           (2.6)
+dt                        2
+
+                                        3
+where the marginal distribution of xt is also qt(xt). By replacing the score function with the noise
+prediction model, Song et al. [3] defined the following parameterized ODE (diffusion ODE):
+
+                    dxt                                   g2(t)               (xt, t),         xT  N (0, ~2I).       (2.7)
+                    dt     = h(xt, t) := f (t)xt + 2t
+
+Samples can be drawn by solving the ODE from T to 0. Comparing with SDEs, ODEs can be solved
+
+with larger step sizes as they have no randomness. Furthermore, we can take advantage of efficient
+
+numerical ODE solvers to accelerate the sampling. Song et al. [3] used the RK45 ODE solver [28]
+for the diffusion ODEs, which generates samples in  60 function evaluations to reach comparable
+
+quality with a 1000-step SDE solver for Eq. (2.5) on the CIFAR-10 dataset [29]. However, existing
+general-purpose ODE solvers still cannot generate satisfactory samples in the few-step ( 10 steps)
+
+sampling regime. To the best of our knowledge, there is still a lack of training-free samplers for
+
+DPMs in the few-step sampling regime, and the sampling speed of DPMs is still a critical issue.
+
+3 Customized Fast Solvers for Diffusion ODEs
+
+As highlighted in Sec. 2.2, discretizing SDEs is generally difficult in high dimensions [27, Chap. 11]
+and it is hard to converge within few steps. In contrast, ODEs are easier to solve, yielding a potential
+for fast samplers. However, as mentioned in Sec. 2.2, the general black-box ODE solver used in
+previous work [3] empirically fails to converge in few steps. This motivates us to design a dedicated
+solver for diffusion ODEs to enable fast and high-quality few-step sampling. We start with a detailed
+investigation of the specific structure of diffusion ODEs.
+
+3.1 Simplified Formulation of Exact Solutions of Diffusion ODEs
+
+The key insight of this work is that given an initial value xs at time s > 0, the solution xt at each
+time t < s of diffusion ODEs in Eq. (2.7) can be simplified into a very special exact formulation
+
+which can be efficiently approximated.
+
+Our first key observation is that a part of the solution xt can be exactly computed by considering the
+
+particular structure of diffusion ODEs. The r.h.s. of diffusion ODEs in Eq. (2.7) consists of two parts:
+
+the  part  f (t)xt  is  a  linear  function       of  xt,  and   the       other  part   g 2 (t)  (xt, t) is generally a nonlinear
+                                                                                          2t
+
+function of xt because of the neural network (xt, t). This type of ODE is referred to as semi-linear
+
+ODE. The black-box ODE solvers adopted by previous work [3] are ignorant of this semi-linear
+
+structure as they take the whole h(xt, t) in Eq. (2.7) as the input, which causes discretization errors
+of both the linear and nonlinear term. We note that for semi-linear ODEs, the solution at time t can
+
+be exactly formulated by the "variation of constants" formula [30]:
+
+                                      t                       t         t            g2  (  )
+                                      s                                 
+                           xt  =   e     f  (  )d  xs  +             e     f  (r)dr            (x ,  )  d.           (3.1)
+
+                                                           s                         2
+
+This formulation decouples the linear part and the nonlinear part. In contrast to black-box ODE
+
+solvers, the linear part is now exactly computed, which eliminates the approximation error of the
+
+linear term. However, the integral of the nonlinear part is still complicated because it couples the
+
+coefficients about the noise schedule (i.e., f ( ), g( ),  ) and the complex neural network , which
+is still hard to approximate.
+
+Our second key observation is that the integral of the nonlinear part can be greatly simplified by
+introducing a special variable. Let t := log(t/t) (one half of the log-SNR), then t is a strictly
+decreasing function of t (due to the definition of DPMs as discussed in Sec. 2.1). We can rewrite g(t)
+
+in Eq. (2.3) as
+
+           g2(t)        =  dt2     -   2  d  log  t   t2   =  2t2          d log t - d log t        =   -2t2  dt  .  (3.2)
+                            dt                dt                                                              dt
+                                                                              dt               dt
+
+Combining with f (t) = d log t/dt in Eq. (2.3), we can rewrite Eq. (3.1) as
+
+                                   xt  =     t  xs    -  t        t     d                (x ,  )d.                   (3.3)
+                                             s                   s      d         
+
+As (t) = t is a strictly decreasing function of t, it has an inverse function t(·) satisfying
+t = t((t)). We further change the subscripts of x and  from t to  and denote x^ := xt(),
+^(x^, ) := (xt(), t()). Rewrite Eq. (3.3) by "change-of-variable" for , then we have:
+
+                                                                        4
+Proposition 3.1 (Exact solution of diffusion ODEs). Given an initial value xs at time s > 0, the
+solution xt at time t  [0, s] of diffusion ODEs in Eq. (2.7) is:
+
+                                  xt  =     t  xs  - t       t                                                        (3.4)
+                                            s
+                                                                e- ^(x^, )d.
+
+                                                            s
+
+We call the integral e- ^(x^, )d the exponentially weighted integral of ^, which is very
+special and highly related to the exponential integrators in the literature of ODE solvers [25]. To the
+best of our knowledge, such formulation has not been revealed in prior work of diffusion models.
+
+Eq. (3.4) provides a new perspective for approximating the solutions of diffusion ODEs. Specifically,
+given xs at time s, According to Eq. (3.4), approximating the solution at time t is equivalent to
+directly approximating the exponentially weighted integral of ^ from s to t, which avoids the
+error of the linear terms and is well-studied in the literature of exponential integrators [25, 31]. Based
+on this insight, we propose fast solvers for diffusion ODEs, as detailed in the following sections.
+
+3.2 High-Order Solvers for Diffusion ODEs
+
+In this section, we propose high-order solvers for diffusion ODEs with convergence order guarantee
+by leveraging our proposed solution formulation Eq. (3.4). The proposed solvers and analysis are
+highly motivated by the methods of exponential integrators [25, 31] in the ODE literature.
+
+Specifically, given an initial value xT at time T and M + 1 time steps {ti}iM=0 decreasing from
+t0 = T to tM = 0. Let x~t0 = xT be the initial value. The proposed solvers use M steps to iteratively
+compute a sequence {x~ti }iM=0 to approximate the true solutions at time steps {ti}iM=0. In particular,
+the last iterate x~tM approximates the true solution at time 0.
+
+In order to reduce the approximation error between x~tM and the true solution at time 0, we need to
+reduce the approximation error for each x~ti at every step [30]. Starting with the previous value x~ti-1
+at time ti-1, according to Eq. (3.4), the exact solution xti-1ti at time ti is given by
+
+                          xti-1 ti   =    ti    x~ti-1   - ti        ti e- ^(x^, )d.                                  (3.5)
+                                         ti-1
+                                                                    ti-1
+
+Therefore, to compute the value x~ti for approximating xti-1ti , we need to approximate the
+
+exponentially weighted integral of ^ from ti-1 to ti . Denote hi := ti -ti-1 , and ^(n)(x^, ) :=
+dn ^ (x^,)
+     dn     as  the  n-th  order  total  derivative  of     ^(x^, )      w.r.t.  .  For  k     1,  the  (k  -  1)-th  order
+
+Taylor expansion of ^(x^, ) w.r.t.  at ti-1 is
+
+                                k-1  (   -  ti-1 )n
+                                            n!
+                ^ (x^  ,  )  =                           ^(n)(x^ti-1  ,  ti-1 )  +  O((     -  ti-1 )k),
+
+                                n=0
+
+Substituting the above Taylor expansion into Eq. (3.5) yields
+
+xti-1 ti    =   ti   x~ti-1  - ti  k-1      ^(n)(x^ti-1  ,  ti-1 )   ti e-       (  -  ti-1  )n  d  +   O(hki +1),    (3.6)
+               ti-1                n=0                                                 n!
+                                                                    ti-1
+
+where the integral   e-      (-ti-1     )n  d   can  be  analytically    computed   by   repeatedly     applying  n   times
+                                    n!
+of integration-by-parts (see Appendix B.2). Therefore, to approximate xti-1ti , we only need to
+
+approximate the n-th order total derivatives ^(n)(x^, ) for n  k - 1, which is a well-studied
+problem in the ODE literature [31, 32]. By dropping the O(hik+1) error term and approximating the
+first (k - 1)-th total derivatives with the "stiff order conditions" [31, 32], we can derive k-th-order
+
+ODE solvers for diffusion ODEs. We name such solvers as DPM-Solver overall, and DPM-Solver-k
+
+for a specific order k. Here we take k = 1 for demonstration. In this case, Eq. (3.6) becomes
+
+                xti-1 ti     =   ti     x~ti-1  - ti     (x~ti-1 , ti-1)   ti e-d + O(h2i )
+                                ti-1
+                                                                          ti-1
+
+                             =   ti     x~ti-1  -  ti (ehi  -  1)   (x~ti-1 , ti-1) + O(hi2).
+                                ti-1
+
+                                                            5
+By dropping the high-order error term O(hi2), we can obtain an approximation for xti-1ti . As
+k = 1 here, we call this solver DPM-Solver-1, and the detailed algorithm is as following.
+
+DPM-Solver-1. Given an initial value xT and M + 1 time steps {ti}M i=0 decreasing from t0 = T
+to tM = 0. Starting with x~t0 = xT , the sequence {x~ti }M i=1 is computed iteratively as follows:
+
+              x~ti  =   ti     x~ti-1  -  ti (ehi   -   1)  (x~ti-1 , ti-1),  where hi = ti - ti-1 .           (3.7)
+                       ti-1
+
+For k  2, approximating the first k terms of the Taylor expansion needs additional intermediate
+points between t and s [31]. The derivation is more technical so we defer it to Appendix B. Below we
+propose algorithms for k = 2, 3 and name them as DPM-Solver-2 and DPM-Solver-3, respectively.
+
+Algorithm 1 DPM-Solver-2.
+
+Require: initial value xT , time steps {ti}iM=0, model 
+
+1: x~t0  xT
+
+2: for i  1 to M do
+                       ti-1 +ti
+3:        si  t               2
+
+4:        ui         x~ si  ti-1  - si       e hi   -1  (x~ti-1 , ti-1)
+                                                 2      (ui, si)
+                    ti-1
+                     x~ ti
+5:        x~ti              ti-1  - ti       ehi - 1
+                    ti-1
+
+6: end for
+
+7: return x~tM
+
+Algorithm 2 DPM-Solver-3.
+
+Require: initial value xT , time steps {ti}iM=0, model 
+                            1           2
+1:  x~t0   xT , r1          3  ,  r2    3
+
+2: for i  1 to M do
+
+3:        s2i-1  t ti-1 + r1hi , s2i  t ti-1 + r2hi
+
+                       s2i-1                        er1hi - 1
+                       ti-1
+4:        u  x~ -  2i-1                                        (x~ti-1 , ti-1)
+                                  ti-1       s2i-1
+
+5:        D2i-1  (u2i-1, s2i-1) - (x~ti-1 , ti-1)
+
+6:        u2i       x~ s2i  ti-1      - s2i  er2hi - 1      (x~ti-1 , ti-1)   -   s2i r2  - 1 er2hi -1  D2i-1
+                                                                                     r1
+                    ti-1                                                                    r2 hi
+
+7:        D2i  (u2i, s2i) - (x~ti-1 , ti-1)
+
+8:        x~ti       x~ ti  ti-1  - ti       ehi - 1    (x~ti-1 , ti-1)  -    ti  ehi -1  -  1  D2i
+                                                                              r2     h
+                    ti-1
+
+9: end for
+
+10: return x~tM
+
+Here, t(·) is the inverse function of (t), which has an analytical formulation for the practical noise
+schedule used in [2, 16], as shown in Appendix D. The chosen intermediate points are (si, ui) for
+DPM-Solver-2 and (s2i-1, u2i-1) and (s2i, u2i) for DPM-Solver-3. As shown in the algorithm,
+DPM-Solver-k requires k function evaluations per step for k = 1, 2, 3. Despite the more expensive
+steps, higher-order solvers (k = 2, 3) are usually more efficient since they require much fewer steps
+to converge, due to their higher convergence order. We show that DPM-Solver-k is k-th-order solver,
+as stated in the following theorem. The proof is in Appendix B.
+
+Theorem 3.2 (DPM-Solver-k as a k-th-order solver). Assume (xt, t) follows the regularity condi-
+tions detailed in Appendix B.1, then for k = 1, 2, 3, DPM-Solver-k is a k-th order solver for diffusion
+ODEs, i.e., for the sequence {x~ti }M i=1 computed by DPM-Solver-k, the approximation error at time 0
+satisfies x~tM - x0 = O(hmk ax), where hmax = max1iM (ti - ti-1 ).
+
+Finally, solvers with k  4 need much more intermediate points as shown by previous work [31, 32]
+for exponential integrators. Therefore, we only consider k from 1 to 3 in this work, while leaving the
+solvers with higher k for future study.
+
+                                                           6
+3.3 Step Size Schedule
+
+The proposed solvers in Sec. 3.2 need to specify the time steps {ti}iM=0 in advance. We propose two
+
+choices of the time step schedule. One choice is handcrafted, which is to uniformly split the interval
+
+[T ,  0],  i.e.  ti  =    T   +   i  (0  - T ),  i   =  0, . . . , M .  Note     that    this  is  different  from  previous
+                                 M
+work [2, 3] which chooses uniform steps for ti. Empirically, DPM-Solver with uniform time steps
+
+ti can already generate quite good samples in few steps, where results are listed in Appendix E. As
+the other choice, we propose an adaptive step size algorithm, which dynamically adjusts the step size
+
+by combining different orders of DPM-Solver. The adaptive algorithm is inspired by [20] and we
+
+defer its implementation details to Appendix C.
+
+For few-step sampling, we need to use up all the number of function evaluations (NFE). When the
+NFE is not divisible by 3, we firstly apply DPM-Solver-3 as much as possible, and then add a single
+step of DPM-Solver-1 or DPM-Solver-2 (dependent on the reminder of K divided by 3), as detailed
+in Appendix D. In the subsequent experiments, we use such combination of solvers with the uniform
+step size schedule for NFE  20, and otherwise the adaptive step size schedule.
+
+3.4 Sampling from Discrete-Time DPMs
+
+Discrete-time DPMs [2] train the noise prediction model at N fixed time steps {tn}Nn=1, and the
+noise prediction model is parameterized by ~(xn, n) for n = 0, . . . , N - 1, where each xn is
+
+corresponding to the value at time tn+1. We can transform the discrete-time noise prediction model to
+
+the continuous version by letting        (x, t)  :=  ~ (x,  (N  -1)t    ),  for  all  x    Rd, t     [0,  T ].  Note  that  the
+                                                                T
+input time of ~ may not be integers, but we find that the noise prediction model can still work well,
+
+and we hypothesize that it is because of the smooth time embeddings (e.g., position embeddings [2]).
+
+By such reparameterization, the noise prediction model can adopt the continuous-time steps as input,
+
+and thus we can also use DPM-Solver for fast sampling.
+
+4 Comparison with Existing Fast Sampling Methods
+
+Here, we discuss the relationship and highlight the difference between DPM-Solver and existing
+ODE-based fast sampling methods for DPMs. We further briefly discuss the advantage of training-free
+samplers over those training-based ones.
+
+4.1 DDIM as DPM-Solver-1
+
+Denoising Diffusion Implicit Models (DDIM) [19] design a deterministic method for fast sampling
+
+from DPMs. For two adjacent time steps ti-1 and ti, assume that we have a solution x~ti-1 at time
+ti-1, then a single step of DDIM from time ti-1 to time ti is
+
+                        x~ti  =   ti   x~ti-1  - ti     ti-1 - ti                (x~ti-1 , ti-1).                     (4.1)
+                                 ti-1                   ti-1    ti
+
+Although motivated by entirely different perspectives, we show that the updates of DPM-Solver-1
+
+and Denoising Diffusion Implicit Models (DDIM) [19] are identical. By the definition of , we have
+ti-1
+ti-1  = e-ti-1       and  ti  = e-ti . Plugging these and hi = ti -ti-1 to Eq. (4.1) results in exactly
+                          ti
+
+a step of DPM-Solver-1 in Eq. (3.7). However, the semi-linear ODE formulation of DPM-Solver
+
+allows for principled generalization to higher-order solvers and convergence order analysis.
+
+Recent work [13] also show that DDIM is a first-order discretization of diffusion ODEs by differenti-
+ating both sides of Eq. (4.1). However, they cannot explain the difference between DDIM and the
+first-order Euler discretization of diffusion ODEs. In contrast, by showing that DDIM is a special
+case of DPM-Solver, we reveal that DDIM makes full use of the semi-linearity of diffusion ODEs,
+which explains its superiority over traditional Euler methods.
+
+4.2 Comparison with Traditional Runge-Kutta Methods
+
+One can obtain a high-order solver by directly applying traditional explicit Runge-Kutta (RK) methods
+to the diffusion ODE in Eq. (2.7). Specifically, RK methods write the solution of Eq. (2.7) in the
+
+                                                        7
+Table 1: FID  on CIFAR-10 for different orders of Runge-Kutta (RK) methods and DPM-Solvers, varying the
+number of function evaluations (NFE). For RK methods, we evaluate diffusion ODEs w.r.t. both t (Eq. (2.7)) and
+ (Eq. (E.1)). We use uniform step size in t for RK (t), and uniform step size in  for RK () and DPM-Solvers.
+
+Sampling method \ NFE           12 18 24 30 36 42 48
+
+RK2 (t)                          16.40 7.25 3.90 3.63 3.58 3.59 3.54
+RK2 ()                          107.81 42.04 17.71 7.65 4.62 3.58 3.17
+DPM-Solver-2
+                                   5.28 3.43 3.02 2.85 2.78 2.72 2.69
+
+RK3 (t)                         48.75 21.86 10.90 6.96 5.22 4.56 4.12
+RK3 ()                          34.29 4.90 3.50 3.03 2.85 2.74 2.69
+DPM-Solver-3                     6.03 2.90 2.75 2.70 2.67 2.65 2.65
+
+following integral form:
+
+                             t        t  g2( )
+
+xt = xs + h(x ,  )d = xs +               f ( )x + 2  (x ,  ) d,         (4.2)
+
+                          s        s
+
+and use some intermediate time steps between [t, s] and combine the evaluations of h at these time
+steps to approximate the whole integral. The approximation error of explicit RK methods depends on
+h, which consists of the error corresponding to both the linear term f ( )x and the nonlinear noise
+prediction model . However, the error of the linear term may increase exponentially because the
+exact solution of the linear term has an exponential coefficient (as shown in Eq. (3.1)). There are many
+empirical evidence [25, 31] showing that directly using explicit RK methods for semi-linear ODEs
+may suffer from unstable numerical issues for large step size. We also demonstrate the empirical
+difference of the proposed DPM-Solver and the traditional explicit RK methods in Sec. 5.1, which
+shows that DPM-Solver have smaller discretization errors than the RK methods with the same order.
+
+4.3 Training-based Fast Sampling Methods for DPMs
+
+Samplers that need extra training or optimization include knowledge distillation [13, 14], learning
+the noise level or variance [15, 16, 33], and learning the noise schedule or sample trajectory [17, 18].
+Although the progressive distillation method [13] can obtain a fast sampler within 4 steps, it needs
+further training costs and loses part of the information in the original DPM (e.g., after distillation, the
+noise prediction model cannot predict the noise (score function) at every time step between [0, T ]).
+In contrast, training-free samplers can keep all the information of the original model, and thereby can
+be directly extended to the conditional sampling by combining the original model and an external
+classifier [4] (e.g. see Appendix D for the conditional sampling with classifier guidance).
+
+Beyond directly designing fast samplers for DPMs, several works also propose novel types of
+DPMs which supports faster sampling. For instance, defining a low-dimensional latent variable for
+DPMs [34]; designing special diffusion processes with bounded score functions [35]; combining
+GANs with the reverse process of DPMs [36]. The proposed DPM-Solver may also be suitable for
+accelerating the sampling of these DPMs, and we leave them for future work.
+
+5 Experiments
+
+In this section, we show that as a training-free sampler, DPM-Solver can greatly speedup the sampling
+of existing pre-trained DPMs, including both continuous-time and discrete-time ones, with both
+linear noise schedule [2, 19] and cosine noise schedule [16]. We vary different number of function
+evaluations (NFE) which is the number of calls to the noise prediction model (xt, t), and compare
+the sample quality between DPM-Solver and other methods. For each experiment, We draw 50K
+samples and use the widely adopted FID score [37] to evaluate the sample quality, where lower FID
+usually implies better sample quality.
+
+Unless explicitly mentioned, we always use the solver combination with the uniform step size
+schedule in Sec. 3.3 if the NFE budget is less than 20, and otherwise the DPM-Solver-3 with the
+adaptive step size schedule in Sec. 3.3. We refer to Appendix D for other implementation details of
+DPM-Solver and Appendix E for detailed settings.
+
+                                8
+     100.0                                                                                                          DPM-Solver                                                                                             DPM-Solver
+                                                                                                                                                                                                                           DDPM
+                                                         ODE (DPM-Solver)                                           DDPM                                                                                                   Analytic-DDPM
+                                                         ODE (RK45)                                                                                                                                                        DDIM
+                                                         SDE (Euler)            100                                 Analytic-DDPM                      100                                                                 Analytic-DDIM
+                                                         SDE (Adaptive)                                                                                                                                                    PNDM
+                                                                                                                    DDIM                                30                                                                 FastDPM
+                                                                                                                                                        15                                                                 Ito^-Taylor
+                                                                                                                    Analytic-DDIM                       10
+
+FID                                                                        FID  30                                  PNDM                          FID     6
+                                                                                                                                                          5
+     10.0                                                                                                                             GGDM                4
+                                                                                                                                                          3
+                                                                                15
+                                                                                                                                                                10 12 15 20
+     5.0                  50       200              1000                        67                 50          200                          1000                                                             50       200             1000
+     4.0                                                                        5
+                                                                                4
+     3.0                                                                        3
+     2.5
+     2.0                                                                              10 12 15 20
+
+             10 12 15 20
+
+                              NFE                                                                         NFE                                                                                                    NFE
+
+           (a) CIFAR-10 (continuous)                                                 (b) CIFAR-10 (discrete)                                                                                    (c) CelebA 64x64 (discrete)
+
+                                                                                                                                                                                                                                DPM-Solver
+
+                                        DPM-Solver                                                                       DPM-Solver                                                                                             DDPM
+
+                                        DDPM                                    100                                      DDPM                          100                                                                      DDIM
+
+                                        Analytic-DDPM                                                                                      DDIM
+
+                                        DDIM                                                                                                                                                50
+                                                                                50
+
+     100                                Analytic-DDIM                                                                                             FID
+
+FID  70                                 GGDM                               FID
+
+     60                                                                                                                                                10
+
+     50
+
+     40                                                                         10                                                                     76
+
+                                                                                7                                                                      4
+
+     25                                                                         5                                                                      3
+     19                                                                         4
+     17                                                                         3                                                                      2
+
+            10 12 15 20                                                         2                                                                                                               10 12 15 20      50        100        250
+                                                                                      10 12 15 20
+                          50       200              1000                                                  50        100                     250                                                                  NFE
+
+                              NFE                                                                         NFE
+
+     (d) ImageNet 64x64 (discrete)                                              (e) ImageNet 128x128 (discrete)                                   (f) LSUN bedroom 256x256 (dis-
+                                                                                                                                                  crete)
+
+Figure 2: Sample quality measured by FID  of different sampling methods for DPMs on CIFAR-10 with both
+continuous-time and discrete-time models, CelebA 64x64, ImageNet 64x64, ImageNet 128x128 and LSUN
+
+bedroom 256x256 with discrete-time models, varying the number of function evaluations (NFE). The method
+GGDM [18] needs extra training to optimize the sample trajectory, while other methods are training-free. To
+
+get the strongest baseline, we use the quadratic step size for DDIM on CelebA, which has a better FID than that
+
+of the uniform step size in the original paper [19].
+
+5.1 Comparison with Continuous-Time Sampling Methods
+
+We firstly compare DPM-Solver with other continuous-time sampling methods for DPMs. The
+compared methods include the Euler-Maruyama discretization for diffusion SDEs [3], the adaptive
+step size solver for diffusion SDEs [20] and the RK methods for diffusion ODEs [3, 28] in Eq. (2.7).
+We compare these methods for sampling from a pre-trained continuous-time "VP deep" model [3] on
+the CIFAR-10 dataset [29] with the linear noise schedule.
+
+Fig. 2a shows the efficiency of compared solvers. We use uniform time steps with 50, 200, 1000 NFE
+for the diffusion SDE with Euler discretization, and vary the tolerance hyperparameter [3, 20] for the
+adaptive step size SDE solver [20] and RK45 ODE solver [28] to control the NFE. DPM-Solver can
+generate good sample quality within around 10 NFE, while other solvers have large discretization
+error even in 50 NFE, which shows that DPM-Solver can achieve 5 speedup of the previous best
+solver. In particular, we achieve 4.70 FID with 10 NFE, 3.75 FID with 12 NFE, 3.24 FID with 15
+NFE, and 2.87 FID with 20 NFE, which is the fastest sampler on CIFAR-10.
+
+As an ablation study, we also compare the second-order and third-order DPM-Solver and RK methods,
+as shown in Table 1. We compare RK methods for diffusion ODEs w.r.t. both time t in Eq. (2.7) and
+half-log-SNR  by applying change-of-variable (see detailed formulations in Appendix E.1). The
+results show that given the same NFE, the sample quality of DPM-Solver is consistently better than
+RK methods with the same order. The superior efficiency of DPM-Solver is particularly evident in
+the few-step regime under 15 NFE, where RK methods have rather large discretization errors. This
+is mainly because DPM-Solver analytically computes the linear term, avoiding the corresponding
+discretization error. Besides, the higher order DPM-Solver-3 converges faster than DPM-Solver-2,
+which matches the order analysis in Theorem 3.2.
+
+5.2 Comparison with Discrete-Time Sampling Methods
+
+We use the method in Sec. 3.4 for using DPM-Solver in discrete-time DPMs, and then compare
+DPM-Solver with other discrete-time training-free samplers, including DDPM [2], DDIM [19],
+Analytic-DDPM [21], Analytic-DDIM [21], PNDM [22], FastDPM [38] and Itô-Taylor [24]. We
+also compare with GGDM [18], which uses the same pre-trained model but needs further training for
+the sampling trajectory. We compare the sample quality by varying NFE from 10 to 1000.
+
+                                                                                                       9
+Specifically, we use the discrete-time model trained by Lsimple in [2] on the CIFAR-10 dataset with
+linear noise schedule; the discrete-time model in [19] on CelebA 64x64 [39] with linear noise
+schedule; the discrete-time model trained by Lhybrid in [16] on ImageNet 64x64 [26] with cosine
+noise schedule; the discrete-time model with classifier guidance in [4] on ImageNet 128x128 [26]
+with linear noise schedule; the discrete-time model in [4] on LSUN bedroom 256x256 [40] with
+linear noise schedule. For the models trained on ImageNet, we only use their "mean" model and
+omit the "variance" model. As shown in Fig. 2, on all datasets, DPM-Solver can obtain reasonable
+samples within 12 steps (FID 4.65 on CIFAR-10, FID 3.71 on CelebA 64x64 and FID 19.97 on
+ImageNet 64x64, FID 4.08 on ImageNet 128x128), which is 4  16× faster than the previous fastest
+training-free sampler. DPM-Solver even outperforms GGDM, which requires additional training.
+
+6 Conclusions
+
+We tackle the problem of fast and training-free sampling from DPMs. We propose DPM-Solver,
+a fast dedicated training-free solver of diffusion ODEs for fast sampling of DPMs in around 10
+steps of function evaluations. DPM-Solver leverages the semi-linearity of diffusion ODEs and
+it directly approximates a simplified formulation of exact solutions of diffusion ODEs, which
+consists of an exponentially weighted integral of the noise prediction model. Inspired by numerical
+methods for exponential integrators, we propose first-order, second-order and third-order DPM-
+Solver to approximate the exponentially weighted integral of noise prediction models with theoretical
+convergence guarantee. We propose both handcrafted and adaptive step size schedule, and apply
+DPM-Solver for both continuous-time and discrete-time DPMs. Our experimental results show that
+DPM-Solver can generate high-quality samples in around 10 function evaluations on various datasets,
+and it can achieve 4  16× speedup compared with previous state-of-the-art training-free samplers.
+
+Limitations and broader impact Despite the promising speedup performance, DPM-Solver is
+designed for fast sampling, which may be not suitable for accelerating the likelihood evaluations of
+DPMs. Besides, compared to the commonly-used GANs, diffusion models with DPM-Solver are still
+not fast enough for real-time applications. In addition, like other deep generative models, DPMs may
+be used to generate adverse fake contents, and the proposed solver may further amplify the potential
+undesirable influence of deep generative models for malicious applications.
+
+Acknowledgements
+
+This work was supported by National Key Research and Development Project of China (No.
+2021ZD0110502); NSF of China Projects (Nos. 62061136001, 61620106010, 62076145, U19B2034,
+U1811461, U19A2081, 6197222, 62106120); Beijing NSF Project (No. JQ19016); Beijing Outstand-
+ing Young Scientist Program NO. BJJWZYJH012019100020098; a grant from Tsinghua Institute
+for Guo Qiang; the NVIDIA NVAIL Program with GPU/DGX Acceleration; the High Performance
+Computing Center, Tsinghua University; the Fundamental Research Funds for the Central Universi-
+ties, and the Research Funds of Renmin University of China (22XNKJ13). J.Z is also supported by
+the XPlorer Prize.
+
+References
+
+ [1] J. Sohl-Dickstein, E. Weiss, N. Maheswaranathan, and S. Ganguli, "Deep unsupervised learning
+      using nonequilibrium thermodynamics," in International Conference on Machine Learning.
+      PMLR, 2015, pp. 2256­2265.
+
+ [2] J. Ho, A. Jain, and P. Abbeel, "Denoising diffusion probabilistic models," in Advances in Neural
+      Information Processing Systems, vol. 33, 2020, pp. 6840­6851.
+
+ [3] Y. Song, J. Sohl-Dickstein, D. P. Kingma, A. Kumar, S. Ermon, and B. Poole, "Score-based
+      generative modeling through stochastic differential equations," in International Conference on
+      Learning Representations, 2021.
+
+ [4] P. Dhariwal and A. Q. Nichol, "Diffusion models beat GANs on image synthesis," in Advances
+      in Neural Information Processing Systems, vol. 34, 2021, pp. 8780­8794.
+
+                                                          10
+ [5] C. Meng, Y. Song, J. Song, J. Wu, J.-Y. Zhu, and S. Ermon, "SDEdit: Image synthesis and editing
+      with stochastic differential equations," in International Conference on Learning Representations,
+      2022.
+
+ [6] J. Ho, T. Salimans, A. Gritsenko, W. Chan, M. Norouzi, and D. J. Fleet, "Video diffusion
+      models," arXiv preprint arXiv:2204.03458, 2022.
+
+ [7] A. Ramesh, P. Dhariwal, A. Nichol, C. Chu, and M. Chen, "Hierarchical text-conditional image
+      generation with CLIP latents," arXiv preprint arXiv:2204.06125, 2022.
+
+ [8] N. Chen, Y. Zhang, H. Zen, R. J. Weiss, M. Norouzi, and W. Chan, "Wavegrad: Estimating
+      gradients for waveform generation," in International Conference on Learning Representations,
+      2021.
+
+ [9] N. Chen, Y. Zhang, H. Zen, R. J. Weiss, M. Norouzi, N. Dehak, and W. Chan, "Wavegrad
+      2: Iterative refinement for text-to-speech synthesis," in International Speech Communication
+      Association, 2021, pp. 3765­3769.
+
+[10] D. P. Kingma, T. Salimans, B. Poole, and J. Ho, "Variational diffusion models," in Advances in
+      Neural Information Processing Systems, 2021.
+
+[11] I. J. Goodfellow, J. Pouget-Abadie, M. Mirza, B. Xu, D. Warde-Farley, S. Ozair, A. C. Courville,
+      and Y. Bengio, "Generative adversarial nets," in Advances in Neural Information Processing
+      Systems, vol. 27, 2014, pp. 2672­2680.
+
+[12] D. P. Kingma and M. Welling, "Auto-encoding variational bayes," in International Conference
+      on Learning Representations, 2014.
+
+[13] T. Salimans and J. Ho, "Progressive distillation for fast sampling of diffusion models," in
+      International Conference on Learning Representations, 2022.
+
+[14] E. Luhman and T. Luhman, "Knowledge distillation in iterative generative models for improved
+      sampling speed," arXiv preprint arXiv:2101.02388, 2021.
+
+[15] R. San-Roman, E. Nachmani, and L. Wolf, "Noise estimation for generative diffusion models,"
+      arXiv preprint arXiv:2104.02600, 2021.
+
+[16] A. Q. Nichol and P. Dhariwal, "Improved denoising diffusion probabilistic models," in Interna-
+      tional Conference on Machine Learning. PMLR, 2021, pp. 8162­8171.
+
+[17] M. W. Lam, J. Wang, R. Huang, D. Su, and D. Yu, "Bilateral denoising diffusion models," arXiv
+      preprint arXiv:2108.11514, 2021.
+
+[18] D. Watson, W. Chan, J. Ho, and M. Norouzi, "Learning fast samplers for diffusion models by dif-
+      ferentiating through sample quality," in International Conference on Learning Representations,
+      2022.
+
+[19] J. Song, C. Meng, and S. Ermon, "Denoising diffusion implicit models," in International
+      Conference on Learning Representations, 2021.
+
+[20] A. Jolicoeur-Martineau, K. Li, R. Piché-Taillefer, T. Kachman, and I. Mitliagkas, "Gotta go fast
+      when generating data with score-based models," arXiv preprint arXiv:2105.14080, 2021.
+
+[21] F. Bao, C. Li, J. Zhu, and B. Zhang, "Analytic-DPM: An analytic estimate of the optimal
+      reverse variance in diffusion probabilistic models," in International Conference on Learning
+      Representations, 2022.
+
+[22] L. Liu, Y. Ren, Z. Lin, and Z. Zhao, "Pseudo numerical methods for diffusion models on
+      manifolds," in International Conference on Learning Representations, 2022.
+
+[23] V. Popov, I. Vovk, V. Gogoryan, T. Sadekova, M. Kudinov, and J. Wei, "Diffusion-based voice
+      conversion with fast maximum likelihood sampling scheme," in International Conference on
+      Learning Representations, 2022.
+
+                                                          11
+[24] H. Tachibana, M. Go, M. Inahara, Y. Katayama, and Y. Watanabe, "Itô-Taylor sampling
+      scheme for denoising diffusion probabilistic models using ideal derivatives," arXiv preprint
+      arXiv:2112.13339, 2021.
+
+[25] M. Hochbruck and A. Ostermann, "Exponential integrators," Acta Numerica, vol. 19, pp.
+      209­286, 2010.
+
+[26] J. Deng, W. Dong, R. Socher, L. Li, K. Li, and L. Fei-Fei, "ImageNet: A large-scale hierarchical
+      image database," in 2009 IEEE Conference on Computer Vision and Pattern Recognition. IEEE,
+      2009, pp. 248­255.
+
+[27] P. E. Kloeden and E. Platen, Numerical Solution of Stochastic Differential Equations. Springer,
+      1992.
+
+[28] J. R. Dormand and P. J. Prince, "A family of embedded Runge-Kutta formulae," Journal of
+      computational and applied mathematics, vol. 6, no. 1, pp. 19­26, 1980.
+
+[29] A. Krizhevsky, "Learning multiple layers of features from tiny images," Tech. Rep., 2009.
+
+[30] K. Atkinson, W. Han, and D. E. Stewart, Numerical solution of ordinary differential equations.
+      John Wiley & Sons, 2011, vol. 108.
+
+[31] M. Hochbruck and A. Ostermann, "Explicit exponential Runge-Kutta methods for semilinear
+      parabolic problems," SIAM Journal on Numerical Analysis, vol. 43, no. 3, pp. 1069­1090, 2005.
+
+[32] V. T. Luan, "Efficient exponential Runge-Kutta methods of high order: Construction and
+      implementation," BIT Numerical Mathematics, vol. 61, no. 2, pp. 535­560, 2021.
+
+[33] F. Bao, C. Li, J. Sun, J. Zhu, and B. Zhang, "Estimating the optimal covariance with imperfect
+      mean in diffusion probabilistic models," arXiv preprint arXiv:2206.07309, 2022.
+
+[34] A. Vahdat, K. Kreis, and J. Kautz, "Score-based generative modeling in latent space," in
+      Advances in Neural Information Processing Systems, vol. 34, 2021, pp. 11 287­11 302.
+
+[35] T. Dockhorn, A. Vahdat, and K. Kreis, "Score-based generative modeling with critically-damped
+      Langevin diffusion," in International Conference on Learning Representations, 2022.
+
+[36] Z. Xiao, K. Kreis, and A. Vahdat, "Tackling the generative learning trilemma with denoising
+      diffusion GANs," in International Conference on Learning Representations, 2022.
+
+[37] M. Heusel, H. Ramsauer, T. Unterthiner, B. Nessler, and S. Hochreiter, "GANs trained by a two
+      time-scale update rule converge to a local Nash equilibrium," in Advances in Neural Information
+      Processing Systems, I. Guyon, U. von Luxburg, S. Bengio, H. M. Wallach, R. Fergus, S. V. N.
+      Vishwanathan, and R. Garnett, Eds., vol. 30, 2017, pp. 6626­6637.
+
+[38] Z. Kong and W. Ping, "On fast sampling of diffusion probabilistic models," arXiv preprint
+      arXiv:2106.00132, 2021.
+
+[39] Z. Liu, P. Luo, X. Wang, and X. Tang, "Deep learning face attributes in the wild," in Proceedings
+      of the IEEE International Conference on Computer Vision, 2015, pp. 3730­3738.
+
+[40] F. Yu, A. Seff, Y. Zhang, S. Song, T. Funkhouser, and J. Xiao, "LSUN: Construction of
+      a large-scale image dataset using deep learning with humans in the loop," arXiv preprint
+      arXiv:1506.03365, 2015.
+
+[41] Y. Song, C. Durkan, I. Murray, and S. Ermon, "Maximum likelihood training of score-based
+      diffusion models," in Advances in Neural Information Processing Systems, vol. 34, 2021, pp.
+      1415­1428.
+
+[42] K. Yang, J. Yau, L. Fei-Fei, J. Deng, and O. Russakovsky, "A study of face obfuscation in
+      ImageNet," arXiv preprint arXiv:2103.06191, 2021.
+
+                                                          12
+Checklist
+
+       1. For all authors...
+            (a) Do the main claims made in the abstract and introduction accurately reflect the paper's
+                contributions and scope? [Yes]
+           (b) Did you describe the limitations of your work? [Yes] See section 6.
+            (c) Did you discuss any potential negative societal impacts of your work? [Yes] See
+                section 6.
+           (d) Have you read the ethics review guidelines and ensured that your paper conforms to
+                them? [Yes]
+
+       2. If you are including theoretical results...
+            (a) Did you state the full set of assumptions of all theoretical results? [Yes] See Ap-
+                pendix B.
+           (b) Did you include complete proofs of all theoretical results? [Yes] See Appendix B.
+
+       3. If you ran experiments...
+            (a) Did you include the code, data, and instructions needed to reproduce the main experi-
+                mental results (either in the supplemental material or as a URL)? [Yes] Code is attached
+                in the supplemental materials, with the appendix.
+           (b) Did you specify all the training details (e.g., data splits, hyperparameters, how they were
+                chosen)? [Yes] Our method is training-free. But we also report the hyperparameters
+                for evaluations used in our proposed solver.
+            (c) Did you report error bars (e.g., with respect to the random seed after running ex-
+                periments multiple times)? [No] We observe that the standard deviation of the FID
+                evaluations of DPM-Solver are rather small (mainly less than 0.01) because the FID is
+                already averaged over 50K samples, following existing work [18, 20, 21]. The small
+                standard deviation does not change the conclusion.
+           (d) Did you include the total amount of compute and the type of resources used (e.g., type
+                of GPUs, internal cluster, or cloud provider)? [Yes] The GPU type and amount is
+                detailed in Appendix E.
+
+       4. If you are using existing assets (e.g., code, data, models) or curating/releasing new assets...
+            (a) If your work uses existing assets, did you cite the creators? [Yes]
+           (b) Did you mention the license of the assets? [Yes] See Appendix E
+            (c) Did you include any new assets either in the supplemental material or as a URL? [Yes]
+                We include our code in the supplemental materials.
+           (d) Did you discuss whether and how consent was obtained from people whose data you're
+                using/curating? [No] All of the datasets used in the experiments are publicly available.
+            (e) Did you discuss whether the data you are using/curating contains personally identifiable
+                information or offensive content? [Yes] We mentioned the human privacy issues of the
+                ImageNet dataset in Appendix E.
+
+       5. If you used crowdsourcing or conducted research with human subjects...
+            (a) Did you include the full text of instructions given to participants and screenshots, if
+                applicable? [N/A]
+           (b) Did you describe any potential participant risks, with links to Institutional Review
+                Board (IRB) approvals, if applicable? [N/A]
+            (c) Did you include the estimated hourly wage paid to participants and the total amount
+                spent on participant compensation? [N/A]
+
+                                                          13
+Table 2: Formulations that are invariant to the choice of the noise schedules. The maximum likelihood
+training loss w.r.t.  is equivalent to the objectives in [10, 41], and the exact solution of the diffusion
+ODEs are proposed in Proposition 3.1.
+
+                       Method                                   Invariance Formulation
+          Maximum likelihood training
+          Sampling by diffusion ODEs                0
+
+                                                         Eq0(x0)E N (0,I)       (x^, ) -           2  d
+                                                                                                   2
+
+                                                    T                            t
+
+                                                    x^t  =   ^t  x^s  - ^t          e- ^(x^, )d
+                                                             ^s
+                                                                                s
+
+A Sampling with Invariance to the Noise Schedule
+
+In this section, we discuss more about the exact solution in Proposition 3.1 and give some insights
+about the formulation. Below we firstly restate the proposition w.r.t.  (i.e. the half-logSNR).
+
+Proposition 3.1 (Exact solution of diffusion ODEs). Given an initial value x^s at time s with the
+corresponding half-logSNR s, the solution x^t at time t of diffusion ODEs in Eq. (2.7) with the
+corresponding half-logSNR t is:
+
+                                x^t  =  t      x^s  - t       t                                           (A.1)
+                                        s
+                                                                 e- ^(x^, )d.
+
+                                                             s
+
+In the following subsections, we will show that such formulation decouples the model  from
+the specific noise schedule, and thus is invariant to the noise schedule. Moreover, such change-of-
+variable for  in Proposition 3.1 is highly related to the maximum likelihood training of diffusion
+models [10, 41]. We show that both the maximum likelihood training and the sampling of diffusion
+models have invariance formulations that are independent of the noise schedule.
+
+A.1 Decoupling the Sampling Solution from the Noise Schedule
+
+In this section, we show that Proposition 3.1 can decouples the exact solutions of the diffusion ODEs
+
+from the specific noise schedules (i.e. choice of the functions t = (t) and t = (t)). Namely,
+given a starting point s, a ending point t, an initial value x^s at s and a noise prediction model
+^, the solution of x^t is invariant of the noise schedule between s and t.
+
+We firstly consider the VP type diffusion models, which is equivalent to the original DDPM [2, 3].
+
+For VP type diffusion models, we always have t2 + t2 = 1, so defining the noise schedule is
+equivalent to defining the function t = (t) (For example, DDPM [2] uses a noise schedule such
+
+that (t)  =  d log t       is a linear function of t, and i-DDPM [16] uses a noise schedule such that
+                 dt
+
+(t)  =   d log t     is a  cosine function  of t).  As t   =  log t   - log t, we have t   =               1  and
+             dt                                                                                       1+e-2t
+
+t =          1    .  Thus,  we  can  directly  compute  the  t  and  t  for  a  given  t.  Denote  ^  :=     , 1
+         1+e2t
+                                                                                                          1+e-2
+we have
+                                                                                                            (A.2)
+                                x^t  =  ^t     x^s  -  ^t     t
+                                        ^s
+                                                                 e- ^(x^, )d.
+
+                                                             s
+
+We should notice that the integrand e- ^(x^, ) is a function of , so its integral from s to t is
+only dependent on the starting point s, the ending point t and the function ^, which is independent
+of the intermediate values. As other coefficients (^s and ^t ) are also only dependent on the starting
+point s and the ending point t, we can conclude that x^t is invariant of the specific choice of the
+noise schedules. Intuitively, this is because we converts the original integral of time t in Eq. (3.1)
+to the integral of , and the functions f (t) and g(t) are converted to an analytical formulation e-,
+
+which is invariant to the specific choices of f (t) and g(t). Finally, for other types of diffusion models
+
+(such as the VE type and the subVP type), they are all equivalent to the VP type by equivalently
+
+rescaling the noise prediction models, as proved in [10]. Therefore, the solutions of these types also
+
+have such property.
+
+                                                         14
+In summary, Proposition 3.1 decouples the solution of diffusion ODEs from the noise schedules,
+which gives us an opportunity to design tailor-made samplers for DPMs. In fact, as shown in
+Sec. 3.2, the only approximation of the proposed DPM-Solver is about the Taylor expansion of the
+neural network ^ w.r.t. , and DPM-Solver analytically computes other coefficients (which are
+corresponding to the specific noise schedules). Intuitively, DPM-Solver keeps the known information
+as much as possible, and only approximates the intractable integral of the neural network, so it can
+generate comparable samples within much fewer steps.
+
+A.2 Choosing Time Steps for  is Invariant to the Noise Schedule
+
+As mentioned in Appendix A.1, the formulation of Proposition 3.1 decouples the sampling solution
+from the noise schedule. The solution depends on the starting point s and the ending point t, and
+is invariant to the intermediate noise schedule. Similarly, the updating equations of the algorithm
+of DPM-Solver are also invariant to the intermediate noise schedule. Therefore, if we have chosen
+the time steps {i}M i=0, then the solution of DPM-Solver is also determined and is invariant to the
+intermediate noise schedule.
+
+A simple way for choosing time steps for  is uniformly splitting [T ,  ], which is the setting in our
+experiments. However, we believe that there exists more precise ways for choosing the time steps,
+and we leave it for future work.
+
+A.3 Relationship with the Maximum Likelihood Training of Diffusion Models
+
+Interestingly, the maximum likelihood training of diffusion SDEs in continuous time also has such
+invariance property [10]. Below we briefly review the maximum likelihood training loss of diffusion
+SDEs, and then propose a new insight for understanding diffusion models.
+
+Denote the data distribution as q0(x0), the distribution of the forward process at each time t as qt(xt),
+the distribution of the reverse process at each time t as pt(xt) with pT = N (0, I). In [3], it is proved
+that the KL-divergence between q0 and p0 can be bounded by a weighted score matching loss:
+
+                                     1 T g2(t)                             (xt, t) -  2  dt + C,
+DKL(q0  p0)  DKL(qT       pT ) + 2 0                                                  2           (A.3)
+                                               t2 Eq0(x0)E N (0,I)
+
+where xt = tx0 + t and C is a constant independent of . As shown in Sec. 3.1, we have
+
+        g2(t)  =  dt2  -  2  d  log  t  t2  =  2t2      d log t - d log t  =  -2t2    dt  ,       (A.4)
+                   dt            dt                                                   dt
+                                                        dt       dt
+
+so by applying change-of-variable w.r.t. , we have
+
+                                            0
+
+DKL(q0  p0)  DKL(qT             pT ) +         Eq0(x0)E N (0,I)  (x^, ) -     2       d + C,      (A.5)
+                                                                              2
+
+                                        T
+
+which is equivalent to the importance sampling trick in [41, Sec. 5.1] and the continuous-time
+diffusion loss in [10, Eq. (22)]. Compared to Proposition 3.1, we can find that the sampling and the
+maximum likelihood training of diffusion models can both be converted to an integral w.r.t. , such
+that the formulation is invariant to the specific noise schedules, and we summarize it in Table 2. Such
+invariance property for both training and sampling brings a new insight for understanding diffusion
+models. For instance, we can directly define the noise prediction model  w.r.t. the (half-)logSNR
+ instead of the time t, then the training and sampling for diffusion models can be done without
+further choosing any ad-hoc noise schedules. Such finding may unify the different ways of the
+training and the inference of diffusion models, and we leave it for future study.
+
+B Proof of Theorem 3.2
+
+B.1 Assumptions
+
+Throughout this section, we denote xs as the solution of the diffusion ODE Eq. (2.7) starting from
+xT . For DPM-Solver-k we make the following assumptions:
+
+                                                    15
+Assumption B.1.         The total derivatives       dj ^ (x^,)    (as a function of ) exist and are continuous for
+                                                         dj
+0  j  k + 1.
+
+Assumption B.2. The function (x, s) is Lipschitz w.r.t. to its first parameter x.
+
+Assumption B.3. hmax = O(1/M ).
+
+We note that the first assumption is required by Taylor's theorem Eq. (3.6), and the second assumption
+is used to replace (x~s, s) with (xs, s) + O(xs - x~s) so that the Taylor expansion w.r.t. s is
+applicable. The last one is a technical assumption to exclude a significantly large step-size.
+
+B.2 General Expansion of the Exponentially Weighted Integral
+
+Firstly, we derive the Taylor expansion of the exponentially weighted integral. Let t < s and then
+
+t  >     s.  Denote     h  :=   t   - s,      and  the  k-th  order  total  derivative  ^(k)(x^, )       :=  . dk ^(x^,)  For
+
+                                                                                                                  dk
+
+n  0, the n-th order Taylor expansion of ^(x^, ) w.r.t.  is
+
+                                              n     (   - s)k
+                                                         k!
+                            ^(x^, ) =                           ^(k)(x^s    ,  s)  +  O(hn+1).                            (B.1)
+
+                                              k=0
+
+To expand the exponential integrator, we further define [31]:
+
+                                k(z) :=            1          k-1       d,     0(z) = ez                                  (B.2)
+
+                                                    e(1-)z    (k - 1)!
+
+                                              0
+
+and  it  satisfies  k (0)   =   1   and    a  recurrence  relation    k+1(z)   =   k    (z  )-k  (0)  .  By  taking  the  Taylor
+                                k!                                                           z
+expansion of ^(x^, ), the exponential integrator can be rewritten as
+
+                     t  e- ^(x^, )d           =     t     n                                                               (B.3)
+                    s                               t
+                                                            hk+1k+1(h)^(k)(x^s , s) + O(hn+2).
+
+                                                        k=0
+
+So the solution of xt in Eq. (3.4) can be expanded as
+
+                        xt  =   t   xs              n                                                                     (B.4)
+                                s
+                                         - t hk+1k+1(h)^(k)(x^s , s) + O(hn+2).
+
+                                                  k=0
+
+Finally, we list the closed-forms of k for k = 1, 2, 3:
+
+                                                          eh - 1
+                                              1(h) =               ,                                                      (B.5)
+                                                              h                                                           (B.6)
+                                                                                                                          (B.7)
+                                              2(h) =      eh - h - 1
+                                                              h2 ,
+
+                                              3(h) =      eh - h2/2 - h - 1    .
+
+                                                                      h3
+
+B.3 Proof of Theorem 3.2 when k = 1
+
+Proof. Taking n = 0, t = ti, s = ti-1 in Eq. (B.4), we obtain
+
+                           xti  =    ti       ti-1  - t(ehi   - 1)      (xti-1 , ti-1) + O(hi2).                          (B.8)
+                                     x ti-1
+
+By Assumption B.2 and Eq. (3.7), it holds that
+
+             x~ti   =       ti     x~ti-1  - ti (ehi    - 1)  (x~ti-1 , ti-1)
+                           ti-1
+
+                    =       ti     x~ti-1  - ti (ehi    - 1)  (xti-1 , ti-1) + O(x~ti-1 - xti-1 )
+                           ti-1
+
+                    =       ti      ti-1   - ti (ehi    - 1)  (xti-1 , ti-1) + O(x~ti-1          - xti-1 )
+                            x ti-1
+
+                    = xti + O(hm 2 ax) + O(x~ti-1 - xti-1 ).
+
+Repeat this argument, we find that
+
+                                   x~tM = xt0 + O(M hm 2 ax) = xt0 + O(hmax),
+
+and thus completes the proof.
+
+                                                              16
+B.4 Proof of Theorem 3.2 when k = 2
+We prove the discretization error of the general form of DPM-Solver-2 in Algorithm 4.
+
+Proof. First, we consider the following update for 0 < t < s < T, h := t - s.
+
+s1 = t (s + r1h) ,                                                                               (B.9a)
+                                                                                                 (B.9b)
+u¯   =  s1  xs  - s1        er1h - 1     (xs, s),                                                (B.9c)
+        s
+
+x¯t  =  t   xs  - t      eh - 1     (xs, s) -     t (eh - 1)(        (u¯, s1) -  (xs, s)).
+        s                                         2r1
+
+Note that the above update is the same as a single step of DPM-Solver-2 with s = ti-1 and
+
+t = ti, except that x~ti-1 is replaced with the exact solution xti-1 . Once we have proven that
+x¯t = xt + O(h3), we can show that x~ti = xti + O(h3max) + O(x~ti-1 - xti-1 ) by a similar
+argument as in Appendix B.3, and therefore completes the proof.
+
+In this remaining part we prove that x¯t = xt + O(h3).
+
+Taking n = 1 in Eq. (B.4), we obtain
+
+        xt  =   t  xs    -  th1(h)       (xs, s) - th22(h)^(1)(x^s , s) + O(h3).                 (B.10)
+                s
+
+From Eq. (B.1), we have
+
+x¯t     =   t  xs  -     t  eh - 1    (xs, s) -      t (eh - 1)(     (u¯, s1) -     (xs, s))
+            s                                        2r1
+
+        =   t  xs  -     t  eh - 1     (xs ,  s)  -  t       eh - 1  [ (u¯, s1) -   (xs1 , s1)]
+            s                                        2r1
+
+            - t eh - 1           (s1 - s)^(1)(x^s , s) + O(h2) .
+               2r1
+
+Note that by the Lipschitzness of  w.r.t. x (Assumption B.2),
+
+                    (u¯, s1) - (xs1 , s1) = O( u¯ - xs1 ) = O(h2),
+
+where the last equation follows from a similar argument in the proof of k = 1. Since eh - 1 = O(h),
+the second term of the above display is O(h3).
+
+As s1 - s = r1h, i(h) = (eh - 1)/h and 2(h) = (eh - h - 1)/h2, we find
+
+     xt - x¯t = t           h22(h)    -  (eh  -  1)  s1 -    s    ^(1)(x^s , s) + O(h3).
+                                                        2r1
+
+Then, the proof is completed by noticing that
+
+           h22(h) - (eh     - 1) s1 - s          =   (2eh  - h - 2 - heh)/2      =  O(h3).
+                                     2r1
+
+B.5 Proof of Theorem 3.2 when k = 3
+
+Proof. As in Appendix B.4, it suffices to show that the following update has error x¯t = xt + O(h4)
+for 0 < t < s < T and h = s - t.
+
+s1 = t (s + r1h) , s2 = t (s + r2h) ,                                                            (B.11a)
+                                                                                                 (B.11b)
+u¯1     =   s1  xs  - s1    er1h - 1     (xs, s),
+            s
+
+D1 = (u¯1, s1) - (xs, s),                                                                        (B.11c)
+
+u¯2     =   s2  xs  - s2    er2h - 1     (xs, s)      -    s2 r2     er2h - 1                    (B.11d)
+            s                                                r1         r2h - 1 D1,
+
+D2 = (u¯2, s2) - (xs, s),                                                                        (B.11e)
+
+x¯t     =   t  xs  -     t  eh - 1     (xs ,  s)  -  t     eh - 1                                (B.11f)
+            s                                        r2       h - 1 D2.
+
+                                                  17
+First, we prove that
+
+                                                u¯2 = xs2 + O(h3).                                               (B.12)
+
+Similar  to  the  proof  in  Appendix   B.4,    since  er2 h-1  -  1   =   O(h)  and     u¯1  =  xs1  +  O(h2),  then
+                                                         r2 h
+
+                  u¯2  =  s2    xs  - s2    er2h - 1        (xs, s)
+                          s
+
+                          -     s2  r2  er2h - 1                                 (xs, s)) + O(h3)
+                                    r1     r2h - 1 ( (xs1 , s1) -
+
+                       =  s2    xs  - s2    er2h - 1        (xs, s)
+                          s
+
+                          -     s2  r2  er2h - 1               (1)(xs, s)(s1 - s) + O(h3).
+                                    r1             -1
+
+                                           r2h
+
+Let h2 = r2h, then following the same line of arguments in the proof of Appendix B.4, it suffices to
+check that
+
+                           1(h2)h2 = eh2 - 1,
+
+                             2(h2)h22   =   r2    eh2 - 1              (s1 - s) + O(h3),
+                                            r1              -1
+
+                                                     h2
+
+which holds by applying Taylor expansion.
+
+Using  u¯2   =  xs2  +  O(h3)   and     s2  -  s  =    r2h  =   2  h,  we  find  that
+                                                                3
+
+x¯t  =   t   xs   - t    eh - 1                      1      eh - 1               (u¯2, s2) - (xs, s)
+         s                          (xs, s) - t r2                   -1
+
+                                                               h
+
+     =   t   xs   - t    eh - 1                      1      eh - 1               (xs2 , s2) - (xs, s) + O(h4)
+         s                          (xs, s) - t r2                   -1
+                                    (xs, s)
+                                                               h
+
+     =   t   xs   - t    eh - 1
+         s
+
+                 1 eh - 1               (1)  (xs  ,  s)r2h  +   1  (2)  (xs  ,  s)r22h2  + O(h4).
+         - t r2                 -1                              2  
+                          h
+
+Comparing with the Taylor expansion in Eq. (B.4) with n = 2:
+
+xt   =   t   xs   -  th1(h)         (xs, s) - th22(h)              (1)(xs, s) - th33(h)          (2)(xs, s) + O(h4),
+         s
+
+we need to check the following conditions:
+
+                                    h1(h) = eh - 1,
+
+                                    h22(h) =         eh - 1            h,
+                                                              -1       r2h2 + O(h4).
+
+                                                        h                2
+
+                                    h33(h) =         eh - 1
+                                                              -1
+
+                                                        h
+
+The first two conditions are clear. The last condition follows from
+
+                h33(h)       =  eh  -1-h-       h2   =  h3  + O(h4) =            eh - 1          r2h2 .
+                                                2       6                                 -1       2
+
+                                                                                    h
+
+Therefore, x¯t = xt + O(h4).
+
+B.6 Connections to Explicit Exponential Runge-Kutta (expRK) Methods
+
+Assume we have an ODE with the following form:
+
+                                               dxt   =  xt     +   N (xt, t),
+                                               dt
+
+                                                            18
+where   R and N (xt, t)  RD is a non-linear function of xt. Given an initial value xt at time t,
+for h > 0, the true solution at time t + h is
+
+                                                                    h
+
+                          xt+h = ehxt + eh e- N (xt+ , t +  )d.
+
+                                                                  0
+
+The exponential Runge-Kutta methods [25, 31] use some intermediate points to approximate the
+
+integral e- N (xt+ , t +  )d . Our proposed DPM-Solver is inspired by the same technique
+
+for approximating the same integral with  = 1 and N = ~. However, DPM-Solver is different
+                                                                ehxt                                               t+h
+from  the  expRK  methods,   because      their  linear  term            is   different   from  our  linear  term    t  xt  .
+
+In summary, DPM-Solver is inspired by the same technique of expRK for deriving high-order
+
+approximations of the exponentially weighted integral, but the formulation of DPM-Solver is different
+
+from expRK, and DPM-Solver is customized for the specific formulation of diffusion ODEs.
+
+C Algorithms of DPM-Solvers
+
+We firstly list the detailed DPM-Solver-1, 2, 3 in Algorithms 3, 4, 5. Note that DPM-Solver-2 is the
+general case with r1  (0, 1), and we usually set r1 = 0.5 for DPM-Solver-2, as in Sec. 3.
+
+Algorithm 3 DPM-Solver-1.
+
+Require: initial value xT , time steps {ti}M i=0, model 
+
+1: def dpm-solver-1(x~ti-1 , ti-1, ti):
+
+2: hi  ti - ti-1
+               x~ ti
+3:    x~ti            ti-1   - ti   ehi - 1      (x~ti-1 , ti-1)
+              ti-1
+
+4: return x~ti
+
+5: x~t0  xT
+
+6: for i  1 to M do
+
+7: x~ti  dpm-solver-1(x~ti-1 , ti-1, ti)
+8: end for
+
+9: return x~tM
+
+Algorithm 4 DPM-Solver-2 (general version).
+
+Require: initial value xT , time steps {ti}iM=0, model , r1 = 0.5
+ 1: def dpm-solver-2(x~ti-1 , ti-1, ti, r1):
+
+ 2: hi  ti - ti-1
+
+3: si  t ti-1 + r1hi
+               x~ si
+4:    ui              ti-1   - si   er1hi - 1    (x~ti-1 , ti-1)
+              ti-1
+               ti                                                        ti
+5:    x~ti    ti-1  x~ti-1   -  ti  (ehi  -  1)   (x~ ti-1  ,  ti-1)  -  2r1  (ehi  -  1)(  (ui, si) -  (x~ti-1 , ti-1))
+
+6: return x~ti
+
+7: x~t0  xT
+
+8: for i  1 to M do
+
+ 9: x~ti  dpm-solver-2(x~ti-1 , ti-1, ti, r1)
+10: end for
+
+11: return x~tM
+
+Then we list the adaptive step size algorithms, named as DPM-Solver-12 (combining 1 and 2;
+
+Algorithm 6) and DPM-Solver-23 (combining 2 and 3; Algorithm 7). We follow [20] to let the
+                             xmax -xmin
+absolute tolerance  atol  =      256      for  image  data,    which     is  0.0078  for  VP  type   DPMs.   We    can  tune
+
+the relative tolerance rtol to balance the accuracy and NFE, and we find that rtol = 0.05 is good
+
+enough and can converge quickly.
+
+In practice, the inputs of the adaptive step size solvers are batch data. We simply choose E2 and
+E3 as the maximum value of all the batch data. Besides, we implement the comparison s > by
+|s - | > 10-5 to avoid numerical issues.
+
+                                                            19
+Algorithm 5 DPM-Solver-3.
+
+Require: initial value xT , time steps {ti}iM=0, model       , r1  =   1  ,  r2  =   2
+                                                                       3             3
+1: def dpm-solver-3(x~ti-1 , ti-1, ti, r1, r2):
+
+2: hi  ti - ti-1
+
+3: s2i-1  t ti-1 + r1hi , s2i  t ti-1 + r2hi
+                 s2i-1
+                 ti-1                      er1hi - 1
+4:   u  x~ -  2i-1                  s2i-1              (x~ti-1 , ti-1)
+                          ti-1
+
+5: D2i-1  (u2i-1, s2i-1) - (x~ti-1 , ti-1)
+
+6:   u2i       x~ s2i  ti-1  - s2i  er2hi - 1    (x~ti-1 , ti-1)   -   s2i r2        - 1 er2hi -1  D2i-1
+                                                                          r1
+               ti-1                                                                    r2 hi
+
+7: D2i  (u2i, s2i) - (x~ti-1 , ti-1)
+
+8:   x~ti     x~ ti ti-1     - ti   ehi - 1  (x~ti-1 , ti-1)  -    ti        ehi -1  -  1  D2i
+                                                                   r2           h
+             ti-1
+
+9: return x~ti
+
+10: x~t0  xT
+
+11: for i  1 to M do
+
+12: x~ti  dpm-solver-3(x~ti-1 , ti-1, ti, r1, r2)
+13: end for
+
+14: return x~tM
+
+Algorithm 6 (DPM-Solver-12) Adaptive step size algorithm by combining DPM-Solver-1 and 2.
+
+Require: start time T , end time , initial value xT , model , data dimension D, hyperparameters
+
+     rtol = 0.05, atol = 0.0078, hinit = 0.05,  = 0.9
+
+Ensure: the approximated solution x at time
+
+1:   s  T , h  hinit, x  xT , xprev         xT , r1    1  ,  NFE       0
+                                                       2
+2: while s > do
+
+3: t  t(s + h)
+
+4: x1  dpm-solver-1(x, s, t)
+
+5: x2  dpm-solver-2(x, s, t, r1) (Share the same function value (x, s) with dpm-solver-1.)
+
+6:   max( atol, rtol max(|x1|, |xprev|))
+
+7:   E2        1    x1 -x2      2
+                 D      
+
+8: if E2  1 then
+
+9:         xprev  x1, x  x2, s  t
+
+10: end if                1
+                          2
+11:  h       min(hE2-        ,     - s)
+
+12: NFE  NFE + 2
+
+13: end while
+
+14: return x, NFE
+
+D Implementation Details of DPM-Solver
+
+D.1 End Time of Sampling
+
+Theoretically, we need to solve diffusion ODEs from time T to time 0 to generate samples. Practically,
+the training and evaluation for the noise prediction model (xt, t) usually start from time T to time
+
+  to avoid numerical issues for t near to 0, where > 0 is a hyperparameter [3].
+In contrast to the sampling methods based on diffusion SDEs [2, 3], We don't add the "denoising"
+trick at the final step at time (which is to set the noise variance to zero), and we just solve diffusion
+ODEs from T to by DPM-Solver, since we find it performs well enough.
+For discrete-time DPMs, we firstly convert the model to continuous time (see Appendix D.2), and
+then solver it from time T to time t.
+
+                                                          20
+Algorithm 7 (DPM-Solver-23) Adaptive step size algorithm by combining DPM-Solver-2 and 3.
+
+Require: start time T , end time , initial value xT , model , data dimension D, hyperparameters
+
+      rtol = 0.05, atol = 0.0078, hinit = 0.05,  = 0.9
+Ensure: the approximated solution x at time
+
+1:   s  T , h  hinit, x  xT , xprev                          xT , r1                1  ,  r2        2  ,  NFE          0
+                                                                                    3               3
+2: while s > do
+
+3: t  t(s + h)
+
+4: x2  dpm-solver-2(x, s, t, r1)
+
+5: x3  dpm-solver-3(x, s, t, r1, r2) (Share the same function values with dpm-solver-2.)
+
+6:   max( atol, rtol max(|x2|, |xprev|))
+
+7:        E3        1       x2 -x3         2
+                      D         
+
+8: if E3  1 then
+
+9:              xprev  x2, x  x3, s  t
+
+10: end if                           1
+                                     3
+11:       h      min(hE3-               ,      - s)
+
+12: NFE  NFE + 3
+
+13: end while
+
+14: return x, NFE
+
+D.2 Sampling from Discrete-Time DPMs
+
+In this section, we discuss the more general case for discrete-time DPMs, in which we consider the
+1000-step DPMs [2] and the 4000-step DPMs [16], and we also consider the end time for sampling.
+
+Discrete-time DPMs [2] train the noise prediction model at N fixed time steps {tn}nN=1. In practice,
+N = 1000 or N = 4000, and the implementation of the 4000-step DPMs [16] converts the time
+
+steps of 4000-step DPMs to the range of 1000-step DPMs. Specifically, the noise prediction model
+
+is  parameterized      by     ~ (xn ,      1000n     )  for     n  =   0, . . . , N       -  1,  where         each  xn   is  corresponding            to  the
+                                             N
+value at time tn+1. In practice, these discrete-time DPMs usually choose uniform time steps between
+
+[0, T ],  thus  tn  =  nT    ,  for    n   =   1, . . . , N .
+                       N
+
+However, the discrete-time noise prediction model cannot predict the noise at time less than the
+
+smallest time t1.         As the smallest time step t1                        =     T     and the corresponding discrete-time noise
+                                                                                    N
+                                                                                                                                                       T
+prediction     model   at   time     t1    is  ~ (x0 ,      0),  we    need   to    "scale"      the   discrete      time  steps  [t1,  tN ]  =     [  N   ,  T  ]
+
+to the continuous time range [ , T ]. We propose two types of scaling as following.
+
+Type-1.        Scale   the  discrete         time    steps       [t1,  tN ]  =   [  T  ,  T  ]  to  the   continuous       time  range  [  T    ,  T   ],  and
+                                                                                    N                                                      N
+                          T                          T
+let  (·, t) =        (·,  N   )  for    t      [  ,  N  ].  In   this  case,  we    can      define       the  continuous-time    noise       prediction
+
+model by
+
+                                           (x, t) = ~              x, 1000 · max                       T
+                                                                                                t- ,0                ,                                 (D.1)
+                                                                                                     N
+
+where     the  continuous       time    t      [  ,  T  ]   maps   to  the    discrete       input     0,  and    the   continuous  time     T     maps       to
+                                                     N
+
+the  discrete   input     1000(N     -1)   .
+                                 N
+
+Type-2.        Scale  the   discrete       time      steps   [t1,  tN  ]  =   [  T  ,  T  ]  to  the   continuous         time  range   [0,  T  ].  In     this
+                                                                                 N
+case, we can define the continuous-time noise prediction model by
+
+                                                                                          (N - 1)t
+                                                  (x, t) = ~ x, 1000 · N T                                     ,                                       (D.2)
+
+where the continuous time 0 maps to the discrete input 0, and the continuous time T maps to the
+
+discrete  input     1000(N    -1)   .
+                           N
+
+Note that the input time of ~ may not be integers, but we find that the noise prediction model
+can still work well, and we hypothesize that it is because of the smooth time embeddings (e.g.,
+
+position embeddings [2]). By such reparameterization, the noise prediction model can adopt the
+
+continuous-time steps as input, and thus we can also use DPM-Solver for fast sampling.
+
+In practice, we have T = 1, and the smallest discrete time t1 = 10-3. For fixed K number of
+function evaluations, we empirically find that for small K, the Type-1 with = 10-3 may have better
+
+                                                                             21
+sample quality, and for large K, the Type-2 with = 10-4 may have better sample quality. We refer
+to Appendix E for detailed results.
+
+D.3 DPM-Solver in 20 Function Evaluations
+
+Given a fixed budget K  20 of the number of function evaluations, we uniformly divide the interval
+[T ,  ] into M = ( K/3 + 1) segments, and take M steps to generate samples. The M steps are
+dependent on the remainder R of K mod 3 to make sure the total number of function evaluations is
+exactly K.
+
+       · If R = 0, we firstly take M -2 steps of DPM-Solver-3, and then take 1 step of DPM-Solver-2
+
+       and  1  step  of  DPM-Solver-1.  The  total  number   of    function     evaluations  is  3·(  K  -1)+2+1  =
+                                                                                                      3
+       K.
+
+       · If R = 1, we firstly take M -1 steps of DPM-Solver-3 and then take 1 step of DPM-Solver-1.
+
+       The  total  number  of  function  evaluations  is  3  ·  (  K -1  )  +  1  =    K.
+                                                                     3
+
+       · If R = 2, we firstly take M -1 steps of DPM-Solver-3 and then take 1 step of DPM-Solver-2.
+
+       The  total  number  of  function  evaluations  is  3  ·  (  K -2  )  +  2  =    K.
+                                                                     3
+
+We empirically find that this design of time steps can greatly improve the generation quality, and
+DPM-Solver can generate comparable samples in 10 steps and high-quality samples in 20 steps.
+
+D.4 Analytical Formulation of the function t(·) (the inverse function of (t))
+
+The costs of computing t(·) is negligible, because for the noise schedules of t and t used in
+previous DPMs ("linear" and "cosine") [2, 16], both (t) and its inverse function t(·) have analytic
+formulations. We mainly consider the variance preserving type here, since it is the most widely-used
+type. The functions of other types (variance exploding and sub-variance preserving type) can be
+similarly derived.
+
+Linear Noise Schedule [2]. We have
+
+                                log     t  =  - (1  -     0) t2    -  0     t,
+                                                    4                 2
+
+where 0 = 0.1 and 1 = 20, following [3]. As t = 1 - t2, we can compute t analytically.
+Moreover, the inverse function is
+
+                                  1        02 + 2(1 - 0) log (e-2 + 1) - 0 .
+                   t() = 1 - 0
+
+To reduce the influence of numerical issues, we can compute t by the following equivalent formula-
+
+tion:                                         2 log e-2 + 1
+
+                         t() =                                                     .
+                                     02 + 2(1 - 0) log (e-2 + 1) + 0
+
+And we solve diffusion ODEs between [ , T ], where T = 1.
+
+Cosine Noise Schedule [16]. Denote
+
+                   log t = log  cos       t+s                                   s
+                                           ·              - log cos ·                            ,
+                                         2 1+s                            2 1+s
+
+where s = 0.008, following [16]. As [16] clipped the derivatives to ensure the numerical stability,
+
+we also clip the maximum time T = 0.9946. As t = 1 - t2, we can compute t analytically.
+Moreover, given a fixed , let
+
+                                                 1        e-2 + 1           ,
+                                     f () = - log
+                                              2
+
+which computes the corresponding log  for . Then the inverse function is
+
+                                    2(1 + s)          ef  ()+log   cos(        s    )  - s.
+                         t() =  arccos                                      2(1+s)
+
+And we solve diffusion ODEs between [ , T ], where T = 0.9946.
+
+                                                    22
+D.5 Conditional Sampling by DPM-Solver
+
+DPM-Solver can also be used for conditional sampling, with a simple modification. The conditional
+generation needs to sample from the conditional diffusion ODE [3, 4] which includes the conditional
+noise prediction model. We follow the classifier guidance method [4] to define the conditional
+noise prediction model as (xt, t, y) := (xt, t) - s · tx log pt(y|xt; ), where pt(y|xt; )
+is a pre-trained classifier and s is the classifier guidance scale (default is 1.0). Thus, we can use
+DPM-Solver to solve this diffusion ODE for fast conditional sampling, as shown in Fig. 1.
+
+D.6 Numerical Stability
+
+As we need to compute ehi - 1 in the algorithm of DPM-Solver, we follow [10] to use expm1(hi)
+instead of exp(hi)-1 to improve numerical stability.
+
+E Experiment Details
+
+We test our method for sampling the most widely-used variance-preserving (VP) type DPMs [1, 2].
+In this case, we have t2 + t2 = 1 for all t  [0, T ] and ~ = 1. In spite of this, our method and
+theoretical results are general and independent of the choice of the noise schedule t and t.
+
+For all experiments, we evaluate DPM-Solver on NVIDIA A40 GPUs. However, the computation
+resource can be other types of GPU, such as NVIDIA GeForce RTX 2080Ti, because we can tune the
+batch size for sampling.
+
+E.1 Diffusion ODEs w.r.t. 
+
+Alternatively, the diffusion ODE can be reparameterized to the  domain. In this section, we propose
+the formulation of diffusion ODEs w.r.t.  for VP type, and other types can be similarly derived.
+
+For a given , denote ^  :=  t(), ^  :=  t().  As ^2 + ^2  =  1, we can prove that   d  =    , 1
+                                                                                   d^
+                                                                                          ^  ^2
+
+so  d log ^  =  ^2 .  Applying change-of-variable to Eq. (2.7), we have
+       d
+
+                        dx^  =  h^ (x^, )  := ^2x^  - ^ ^(x^, ).                          (E.1)
+                        d
+
+The ODE Eq. (E.1) can be also solved directly by RK methods, and we use such formulation for the
+experiments of RK2 () and RK3 () in Table 1.
+
+E.2 Code Implementation
+
+We implement our code with both JAX (for continuous-time DPMs) and PyTorch (for discrete-time
+DPMs), and our code is released at https://github.com/LuChengTHU/dpm-solver.
+
+E.3 Sample Quality Comparison with Continuous-Time Sampling Methods
+
+Table 3 shows the detailed FID results, which is corresponding to Fig. 2a. We use the official code
+and checkpoint in [3], the code license is Apache License 2.0. We use their released "checkpoint_8"
+of the "VP deep" type. We compare methods for = 10-3 and = 10-4. We find that the sampling
+methods based on diffusion SDEs can achieve better sample quality with = 10-3; and that the
+sampling methods based on diffusion ODEs can achieve better sample quality with = 10-4. For
+DPM-Solver, we find that DPM-Solver with less than 15 NFE can achieve better FID with = 10-3
+than = 10-4, while DPM-Solver with more than 15 NFE can achieve better FID with = 10-4
+than = 10-3.
+
+For the diffusion SDEs with Euler discretization, we use the PC sampler in [3] with "euler_maruyama"
+predictor and no corrector, which uses uniform time steps between T and . We add the "denoise"
+trick at the final step, which can greatly improve the FID score for = 10-3.
+
+For the diffusion SDEs with Improved Euler discretization [20], we follow the results in their original
+paper, which only includes the results with = 10-3. The corresponding relative tolerance rel are
+0.50, 0.10 and 0.05, respectively.
+
+                                              23
+Table 3: Sample quality measured by FID  on CIFAR-10 dataset with continuous-time methods, varying the
+number of function evaluations (NFE).
+
+Sampling method \ NFE                          10              12          15      20                50 200 1000
+
+CIFAR-10 (continuous-time model (VP deep) [3], linear noise schedule)
+
+SDE Euler (denoise) [3]      = 10-3 304.73 278.87 248.13 193.94 66.32 12.27                                           2.44
+                             = 10-4 444.63 427.54 395.95 300.41 101.66 22.98                                          5.01
+
+     Improved Euler [20] = 10-3                    82.42(NFE=48), 2.73(NFE=151), 2.44(NFE=180)
+
+ODE  RK45 Solver [28, 3]     = 10-3                  19.55(NFE=26), 17.81(NFE=38), 3.55(NFE=62)
+                             = 10-4        51.66(NFE=26), 21.54(NFE=38), 12.72(NFE=50), 2.61(NFE=62)
+     DPM-Solver
+        (ours)               = 10-3        4.70 3.75 3.24 3.99                                       3.84 (NFE = 42)
+                             = 10-4        6.96 4.93 3.35 2.87                                       2.59 (NFE = 51)
+
+For the diffusion ODEs with RK45 Solver, we use the code in [3], and tune the atol and rtol of
+the solver. For the NFE from small to large, we use the same atol = rtol = 0.1, 0.01, 0.001 for
+the results of = 10-3, and the same atol = rtol = 0.1, 0.05, 0.02, 0.01, 0.001 for the results of
+
+  = 10-4, respectively.
+
+For the diffusion ODEs with DPM-Solver, we use the method in Appendix D.3 for NFE  20, and
+the adaptive step size solver in Appendix C. For = 10-3, we use DPM-Solver-12 with relative
+tolerance rtol = 0.05. For = 10-4, we use DPM-Solver-23 with relative tolerance rtol = 0.05.
+
+E.4 Sample Quality Comparison with RK Methods
+
+Table 1 shows the different performance of RK methods and DPM-Solver-2 and 3. We list the detailed
+settings in this section.
+
+Assume we have an ODE with                 dxt
+                                           dt
+                                                   =  F (xt, t),
+
+Starting with x~ti-1 at time ti-1, we use RK2 to approximate the solution x~ti at time ti in the
+
+following formulation (which is known as the explicit midpoint method):
+
+                                hi = ti - ti-1,
+
+                                               1
+                                si = ti-1 + 2 hi,
+
+                                ui      =  x~ti-1  +  hi  F    (x~ti-1  ,  ti-1),
+                                                      2
+
+                                x~ti = x~ti-1 + hiF (ui, si).
+
+And we use the following RK3 to approximate the solution x~ti at time ti (which is known as "Heun's
+third-order method"), because it is very similar to our proposed DPM-Solver-3:
+
+                                                   =  1                    2
+                         hi = ti - ti-1,       r1      ,           r2   =   ,
+                                                      3                    3
+
+     s2i-1 = ti-1 + r1hi, s2i = ti-1 + r2hi,
+
+     u2i-1 = x~ti-1 + r1hiF (x~ti-1 , ti-1),
+
+                       u2i = x~ti-1 + r2hiF (u2i-1, s2i-1),
+
+                       x~ti  =  x~ti-1  +  hi  F   (x~ti-1  ,  ti-1  )  +  3hi  F  (u2i  ,  s2i  ).
+                                           4                                4
+
+We use F (xt, t) = h(xt, t) in Eq. (2.7) for the results with RK2 (t) and RK3 (t), and F (x^, ) =
+h^ (x^, ) in Eq. (E.1) for the results with RK2 () and RK3 (). For all experiments, we use the
+
+uniform step size w.r.t. t or .
+
+E.5 Sample Quality Comparison with Discrete-Time Sampling Methods
+
+We compare DPM-Solver with other discrete-time sampling methods for DPMs, as shown in Table 4
+and Table 5. We use the code in [19] for sampling with DDPM and DDIM, and the code license
+
+                                                      24
+Table 4: Sample quality measured by FID  on CIFAR-10, CelebA 64×64 and ImageNet 64×64 with discrete-
+time DPMs, varying the number of function evaluations (NFE). The method GGDM needs extra training, and
+some results are missing in their original papers, which are replaced by "\".
+
+Sampling method \ NFE                   10                 12     15    20 50 200 1000
+
+CIFAR-10 (discrete-time model [2], linear noise schedule)
+
+DDPM [2]                      Discrete 278.67 246.29 197.63 137.34 32.63 4.03 3.16
+Analytic-DDPM [21]
+Analytic-DDIM [21]            Discrete 35.03 27.69 20.82 15.35 7.34 4.11 3.84
+GGDM [18]
+DDIM [19]                     Discrete 14.74 11.68 9.16 7.20 4.28 3.60 3.86
+
+                              Discrete  8.23               \ 6.12 4.72          \       \           \
+
+                              Discrete 13.58 11.02 8.92 6.94 4.73 4.07 3.95
+
+DPM-Solver (Type-1 discrete)  = 10-3     6.37   4.65              3.78  4.28    3.90 (NFE = 44)
+                              = 10-4    11.32   7.31              4.75  3.80    3.57 (NFE = 46)
+
+DPM-Solver (Type-2 discrete)  = 10-3     6.42   4.86              4.39  5.52    5.22 (NFE = 42)
+                              = 10-4    10.16   6.26              4.17  3.72    3.48 (NFE = 44)
+
+CelebA 64×64 (discrete-time model [19], linear noise schedule)
+
+DDPM [2]                      Discrete 310.22 277.16 207.97 120.44 29.25 3.90 3.50
+Analytic-DDPM [21]            Discrete 28.99 25.27 21.80 18.14 11.23 6.51 5.21
+Analytic-DDIM [21]            Discrete 15.62 13.90 12.29 10.45 6.13 3.46 3.13
+DDIM [19]                     Discrete 10.85 9.99 7.78 6.64 5.23 4.78 4.88
+
+DPM-Solver (Type-1 discrete)  = 10-3    7.15 5.51 4.28 4.40                     4.23 (NFE = 36)
+                              = 10-4    6.92 4.20 3.05 2.82                     2.71 (NFE = 36)
+
+DPM-Solver (Type-2 discrete)  = 10-3    7.33    6.23              5.85  6.87    6.68 (NFE = 36)
+                              = 10-4    5.83    3.71              3.11  3.13    3.10 (NFE = 36)
+
+ImageNet 64×64 (discrete-time model [16], cosine noise schedule)
+
+DDPM [2]                      Discrete  305.43  287.66          256.69  209.73  83.86   28.39       17.58
+Analytic-DDPM [21]            Discrete   60.65   53.66           45.98   37.67  22.45   17.16       16.14
+Analytic-DDIM [21]            Discrete   70.62   54.88           41.56   30.88  19.23   17.49       17.57
+GGDM [18]                     Discrete   37.32        \          24.69   20.69
+DDIM [19]                     Discrete   67.07   52.69           40.49   30.67       \       \           \
+                                                                                20.10   17.84       17.73
+
+DPM-Solver (Type-1 discrete)  = 10-3    24.44 20.03 19.31 18.59                 17.50 (NFE = 48)
+                              = 10-4    27.74 23.66 20.09 19.06                 17.56 (NFE = 51)
+
+DPM-Solver (Type-2 discrete)  = 10-3    24.40 19.97 19.23 18.53                 17.47 (NFE = 57)
+                              = 10-4    27.72 23.75 20.02 19.08                 17.62 (NFE = 48)
+
+Table 5: Sample quality measured by FID  on ImageNet 128×128 with classifier guidance and on LSUN
+
+bedroom 256×256, varying the number of function evaluations (NFE). For DDIM and DDPM, we use uniform
+time steps for all the experiments, except that the experiment uses the fine-tuned time steps by [4]. For
+
+DPM-Solver, we use the uniform logSNR steps as described in Appendix D.3.
+
+Sampling method \ NFE                   10                 12     15    20 50 100 250
+
+ImageNet 128×128 (discrete-time model [4], linear noise schedule, classifier guidance scale: 1.25)
+
+DDPM [2]                      Discrete 199.56 172.09 146.42 119.13 49.38 23.27 2.97
+DDIM [19]                     Discrete 11.12 9.38 8.22 7.15 5.05 4.18 3.54
+
+DPM-Solver (Type-1 discrete)  = 10-3     7.32   4.08              3.60  3.89 3.63 3.62 3.63
+                              = 10-4    13.91   5.84              4.00  3.52 3.13 3.10 3.09
+
+LSUN bedroom 256×256 (discrete-time model [4], linear noise schedule)
+
+DDPM [2]                      Discrete 274.67 251.26 224.88 190.14 82.70 34.89 2.02
+DDIM [19]                     Discrete 10.05 7.51 5.90 4.98 2.92 2.30 2.02
+
+DPM-Solver (Type-1 discrete)  = 10-3    6.10    4.29              3.30  3.09 2.53 2.46 2.46
+                              = 10-4    8.04    4.21              2.94  2.60 2.01 1.95 1.94
+
+                                        25
+is MIT License. We use the code in [21] for sampling with Analytic-DDPM and Analytic-DDIM,
+whose license is unknown. We directly follow the best results in the original paper of GGDM [18].
+
+For the CIFAR-10 experiments, we use the pretrained checkpoint by [2], which is also provided in
+the released code in [19]. We use quadratic time steps for DDPM and DDIM, which empirically
+has better FID performance than the uniform time steps [19]. We use the uniform time steps for
+Analytic-DDPM and Analytic-DDIM. For DPM-Solver, we use both Type-1 discrete and Type-2
+discrete methods to convert the discrete-time model to the continuous-time model. We use the method
+in Appendix D.3 for NFE  20, and the adaptive step size solver in Appendix C for NFE > 20. For
+all the experiments, we use DPM-Solver-12 with relative tolerance rtol = 0.05.
+
+For the CelebA 64x64 experiments, we use the pretrained checkpoint by [19]. We use quadratic time
+steps for DDPM and DDIM, which empirically has better FID performance than the uniform time
+steps [19]. We use the uniform time steps for Analytic-DDPM and Analytic-DDIM. For DPM-Solver,
+we use both Type-1 discrete and Type-2 discrete methods to convert the discrete-time model to the
+continuous-time model. We use the method in Appendix D.3 for NFE  20, and the adaptive step
+size solver in Appendix C for NFE > 20. For all the experiments, we use DPM-Solver-12 with
+relative tolerance rtol = 0.05. Note that our best FID results on CelebA 64x64 is even better than the
+1000-step DDPM (and all the other methods).
+
+For the ImageNet 64x64 experiments, we use the pretrained checkpoint by [16], and the code license
+is MIT License. We use the uniform time steps for DDPM and DDIM, following [19]. We use the
+uniform time steps for Analytic-DDPM and Analytic-DDIM. For DPM-Solver, we use both Type-1
+discrete and Type-2 discrete methods to convert the discrete-time model to the continuous-time
+model. We use the method in Appendix D.3 for NFE  20, and the adaptive step size solver in
+Appendix C for NFE > 20. For all the experiments, we use DPM-Solver-23 with relative tolerance
+ rtol = 0.05. Note that the ImageNet dataset includes real human photos and it may have privacy
+issues, as discussed in [42].
+
+For the ImageNet 128x128 experiments, we use classifier guidance for sampling with the pretrained
+checkpoints (for both the diffusion model and the classifier model) by [4], and the code license is
+MIT License. We use the uniform time steps for DDPM and DDIM, following [19]. For DPM-Solver,
+we only use Type-1 discrete method to convert the discrete-time model to the continuous-time model.
+We use the method in Appendix D.3 for NFE  20, and the adaptive step size solver DPM-Solver-12
+with relative tolerance rtol = 0.05 (detailed in Appendix C) for NFE > 20. For all the experiments,
+we set the classifier guidance scale s = 1.25, which is the best setting for DDIM in [4] (we refer to
+their Table 14 for details).
+
+For the LSUN bedroom 256x256 experiments, we use the unconditional pretrained checkpoint
+by [4], and the code license is MIT License. We use the uniform time steps for DDPM and DDIM,
+following [19]. For DPM-Solver, we only use Type-1 discrete method to convert the discrete-time
+model to the continuous-time model. We use the method in Appendix D.3 for DPM-Solver.
+
+E.6 Comparing Different Orders of DPM-Solver
+
+We also compare the sample quality of the different orders of DPM-Solver, as shown in Table 6. We
+use DPM-Solver-1,2,3 with uniform time steps w.r.t. , and the fast version in Appendix D.3 for NFE
+less than 20, and we name it as DPM-Solver-fast. For the discrete-time models, we only compare the
+Type-2 discrete method, and the results of Type-1 are similar.
+
+As the actual NFE of DPM-Solver-2 is 2 × NFE/2 and the actual NFE of DPM-Solver-3 is
+3 × NFE/3 , which may be smaller than NFE, we use the notation  to note that the actual NFE is
+less than the given NFE. We find that for NFE less than 20, the proposed fast version (DPM-Solver-
+fast) is usually better than the single order method, and for larger NFE, DPM-Solver-3 is better
+than DPM-Solver-2, and DPM-Solver-2 is better than DPM-Solver-1, which matches our proposed
+convergence rate analysis.
+
+E.7 Runtime Comparison between DPM-Solver and DDIM
+
+Theoretically, for the same NFE, the runtime of DPM-Solver and DDIM are almost the same (linear
+to NFE) because the main computation costs are the serial evaluations of the large neural network 
+and the other coefficients are analytically computed with ignorable costs.
+
+                                                          26
+Table 6: Sample quality measured by FID  of different orders of DPM-Solver, varying the number
+of function evaluations (NFE). The results with  means the actual NFE is smaller than the given
+
+NFE because the given NFE cannot be divided by 2 or 3. For DPM-Solver-fast, we only evaluate it
+
+for NFE less than 20, because it is almost the same as DPM-Solver-3 for large NFE.
+
+Sampling method \ NFE      10 12              15      20      50 200                  1000
+
+CIFAR-10 (VP deep continuous-time model [3])
+
+        DPM-Solver-1       11.83 9.69 7.78 6.17 4.28 3.85                              3.83
+
+= 10-3 DPM-Solver-2          5.94 4.88 4.30 3.94 3.78 3.74                             3.74
+             DPM-Solver-3  18.37 5.53 4.08 4.04 3.81 3.78                             3.78
+
+        DPM-Solver-fast    4.70 3.75 3.24 3.99                            \  \             \
+
+        DPM-Solver-1       11.29 9.07 7.15 5.50 3.32 2.72                              2.64
+
+= 10-4 DPM-Solver-2          7.30 5.28 4.23 3.26 2.69 2.60                             2.59
+             DPM-Solver-3  54.56 6.03 3.55 2.90 2.65 2.62                             2.62
+
+        DPM-Solver-fast    6.96 4.93 3.35 2.87                            \  \             \
+
+CIFAR-10 (DDPM discrete-time model [2]), DPM-Solver with Type-2 discrete
+
+= 10-3  DPM-Solver-1        16.69   13.63     11.08    8.90    6.24           5.44     5.29
+        DPM-Solver-2                 6.15     5.53
+        DPM-Solver-3         7.90    8.20              5.24    5.23           5.25     5.25
+        DPM-Solver-fast    24.37     4.86      5.73   5.43    5.29           5.25     5.25
+                                               4.39    5.52
+                             6.42                                  \              \        \
+
+= 10-4  DPM-Solver-1        13.61   10.98      8.71    6.79    4.36           3.63     3.49
+        DPM-Solver-2                 6.31     5.23
+        DPM-Solver-3        11.80    9.45              3.95    3.50           3.46     3.46
+        DPM-Solver-fast    67.02     6.26      5.21   3.81    3.49           3.45     3.45
+                            10.16              4.17    3.72
+                                                                   \              \        \
+
+CelebA 64×64 (discrete-time model [19], linear noise schedule), DPM-Solver with Type-2 discrete
+
+= 10-3  DPM-Solver-1        18.66   16.30     13.92   11.84    8.85           7.24     6.93
+        DPM-Solver-2                 5.83     6.08
+        DPM-Solver-3         5.89    5.46              6.38    6.78           6.84     6.85
+        DPM-Solver-fast    11.45     6.23      6.18   6.51    6.87           6.84     6.85
+                                               5.85    6.87
+                             7.33                                  \              \        \
+
+= 10-4  DPM-Solver-1        13.24   11.13      9.08    7.24    4.50           3.48     3.25
+        DPM-Solver-2                 3.40     3.30
+        DPM-Solver-3         4.28    3.84              3.17    3.19           3.20     3.20
+        DPM-Solver-fast    49.48     3.71      3.09   3.15    3.20           3.20     3.20
+                                               3.11    3.13
+                             5.83                                  \              \        \
+
+ImageNet 64×64 (discrete-time model [16], cosine noise schedule), DPM-Solver with Type-2 discrete
+
+= 10-3  DPM-Solver-1        32.84   28.54      24.79   21.71   18.30         17.45    17.18
+        DPM-Solver-2                24.97     22.26                          17.29    17.27
+        DPM-Solver-3        29.20   24.62              19.94   17.79         17.26    17.27
+        DPM-Solver-fast    57.48    19.97      19.76  18.95   17.52
+                            24.40              19.23   18.53                      \        \
+                                                                    \
+
+= 10-4  DPM-Solver-1         32.31  28.44      25.15   22.38   19.14          17.95    17.44
+        DPM-Solver-2                27.28     24.26
+        DPM-Solver-3         33.16  27.28              20.58   18.04          17.46    17.41
+        DPM-Solver-fast    162.27   23.75      22.38  19.39   17.71          17.43    17.41
+                                               20.02   19.08
+                             27.72                                  \              \        \
+
+Table 7 shows the runtime of DPM-Solver and DDIM on a single NVIDIA A40, varying different
+datasets and NFE. We use torch.cuda.Event and torch.cuda.synchronize for accurately
+computing the runtime. We use the discrete-time pretrained diffusion models for each dataset. We
+evaluate the runtime for 8 batches and computes the mean and std of the runtime. We use 64 batch
+size for LSUN bedroom 256x256 due to the GPU memory limitation, and 128 batch size for other
+datasets.
+For DDIM, we use the official implementation3. We find that our implementation of DPM-Solver
+reduces some repetitive computation of the coefficients, so under the same NFE, DPM-Solver is
+slightly faster than DDIM of their implementation. Nevertheless, the runtime evaluation results show
+
+    3https://github.com/ermongroup/ddim
+
+                                                          27
+Table 7: Runtime of a single batch (second / batch, ±std) on a single NVIDIA A40 of DDIM and DPM-Solver
+for sampling by discrete-time diffusion models, varying the number of function evaluations (NFE).
+
+Sampling method \ NFE              10       20                 50             100
+
+CIFAR-10 32×32 (batch size = 128)
+
+DDIM                   0.956(±0.011) 1.924(±0.016)             4.838(±0.024)  9.668(±0.013)
+DPM-Solver             0.923(±0.006) 1.833(±0.004)             4.580(±0.005)  9.204(±0.011)
+
+CelebA 64×64 (batch size = 128)
+
+DDIM                   3.253(±0.015) 6.438(±0.029) 16.132(±0.050) 32.255(±0.044)
+DPM-Solver             3.126(±0.003) 6.272(±0.006) 15.676(±0.008) 31.269(±0.012)
+
+ImageNet 64×64 (batch size = 128)
+
+DDIM                   5.084(±0.018) 10.194(±0.022) 25.440(±0.044) 50.926(±0.042)
+DPM-Solver             4.992(±0.004) 9.991(±0.003) 24.948(±0.007) 49.835(±0.028)
+
+ImageNet 128×128 (batch size = 128, with classifier guidance)
+
+DDIM                   29.082(±0.015) 58.159(±0.012) 145.427(±0.011) 290.874(±0.134)
+DPM-Solver             28.865(±0.011) 57.645(±0.008) 144.124(±0.035) 288.157(±0.022)
+
+LSUN bedroom 256×256 (batch size = 64)
+
+DDIM                   37.700(±0.005) 75.316(±0.013) 188.275(±0.172) 378.790(±0.105)
+DPM-Solver             36.996(±0.039) 73.873(±0.023) 184.590(±0.010) 369.090(±0.076)
+
+that the runtime of DPM-Solver and DDIM are almost the same for the same NFE, and the runtime is
+approximately linear to the NFE. Therefore, the speedup for the NFE is almost the actual speedup of
+the runtime, so the proposed DPM-Solver can greatly speedup the sampling of DPMs.
+
+E.8 Conditional Sampling on ImageNet 256x256
+
+For the conditional sampling in Fig. 1, we use the pretrained checkpoint in [4] with classifier guidance
+(ADM-G), and the classifier scale is 1.0. The code license is MIT License. We use uniform time step
+for DDIM, and the fast version for DPM-Solver in Appendix D.3 (DPM-Solver-fast) with 10, 15, 20
+and 100 steps.
+Fig. 3 shows the conditional sample results by DDIM and DPM-Solver. We find that DPM-Solver
+with 15 NFE can generate comparable samples with DDIM with 100 NFE.
+
+E.9 Additional Samples
+
+Additional sampling results on CIFAR-10, CelebA 64x64, ImageNet 64x64, LSUN bedroom
+256x256 [40], ImageNet 256x256 are reported in Figs. 4-8.
+
+                                        28
+            NFE = 10  NFE = 15  NFE = 20  NFE = 100
+
+DDIM
+ [19]
+
+DPM-Solver
+    (ours)
+
+    DDIM
+     [19]
+
+DPM-Solver
+    (ours)
+
+Figure 3: Samples by DDIM [19] and DPM-Solver (ours) with 10, 15, 20, 100 number of function
+evaluations (NFE) with the same random seed, using the pre-trained DPMs on ImageNet 256×256
+with classifier guidance [4].
+
+            NFE = 10  NFE = 12  NFE = 15  NFE = 20
+
+DDIM
+ [19]
+
+   DPM-
+   Solver
+   (ours)
+
+Figure 4: Random samples by DDIM [19] (quadratic time steps) and DPM-Solver (ours) with 10,
+12, 15, 20 number of function evaluations (NFE) with the same random seed, using the pre-trained
+discrete-time DPMs [2] on CIFAR-10.
+
+                                                          29
+                NFE = 10  NFE = 12      NFE = 15  NFE = 20
+
+DDIM
+ [19]
+
+   DPM-
+   Solver
+   (ours)
+
+Figure 5: Random samples by DDIM [19] (quadratic time steps) and DPM-Solver (ours) with 10,
+12, 15, 20 number of function evaluations (NFE) with the same random seed, using the pre-trained
+discrete-time DPMs [19] on CelebA 64x64.
+
+       NFE = 10           NFE = 12      NFE = 15  NFE = 20
+
+DDIM
+ [19]
+
+   DPM-
+   Solver
+   (ours)
+
+Figure 6: Random samples by DDIM [19] (uniform time steps) and DPM-Solver (ours) with 10,
+12, 15, 20 number of function evaluations (NFE) with the same random seed, using the pre-trained
+discrete-time DPMs [16] on ImageNet 64x64.
+
+                                    30
+                NFE = 10  NFE = 12      NFE = 15  NFE = 20
+
+DDIM
+ [19]
+
+   DPM-
+   Solver
+   (ours)
+
+Figure 7: Random samples by DDIM [19] (uniform time steps) and DPM-Solver (ours) with 10,
+12, 15, 20 number of function evaluations (NFE) with the same random seed, using the pre-trained
+discrete-time DPMs [4] on LSUN bedroom 256x256.
+
+       NFE = 10           NFE = 12      NFE = 15  NFE = 20
+
+DDIM
+ [19]
+
+   DPM-
+   Solver
+   (ours)
+
+Figure 8: Random class-conditional samples (class: 90, lorikeet) by DDIM [19] (uniform time steps)
+and DPM-Solver (ours) with 10, 12, 15, 20 number of function evaluations (NFE) with the same
+random seed, using the pre-trained discrete-time DPMs [4] on ImageNet 256x256 with classifier
+guidance (classifier scale: 1.0).
+
+                                    31
+

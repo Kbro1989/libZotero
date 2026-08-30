@@ -1,0 +1,120 @@
+Modeling Relational Data with Graph Convolutional Networks
+
+Michael Schlichtkrull
+University of Amsterdam m.s.schlichtkrull@uva.nl
+
+Thomas N. Kipf
+University of Amsterdam t.n.kipf@uva.nl
+
+Peter Bloem
+VU Amsterdam p.bloem@vu.nl
+
+Rianne van den Berg
+University of Amsterdam r.vandenberg@uva.nl
+
+Ivan Titov
+University of Amsterdam titov@uva.nl
+
+Max Welling
+University of Amsterdam, CIFAR
+m.welling@uva.nl
+
+arXiv:1703.06103v4 [stat.ML] 26 Oct 2017
+
+Abstract
+Knowledge graphs enable a wide variety of applications, including question answering and information retrieval. Despite the great effort invested in their creation and maintenance, even the largest (e.g., Yago, DBPedia or Wikidata) remain incomplete. We introduce Relational Graph Convolutional Networks (R-GCNs) and apply them to two standard knowledge base completion tasks: Link prediction (recovery of missing facts, i.e. subject-predicate-object triples) and entity classification (recovery of missing entity attributes). RGCNs are related to a recent class of neural networks operating on graphs, and are developed specifically to deal with the highly multi-relational data characteristic of realistic knowledge bases. We demonstrate the effectiveness of R-GCNs as a stand-alone model for entity classification. We further show that factorization models for link prediction such as DistMult can be significantly improved by enriching them with an encoder model to accumulate evidence over multiple inference steps in the relational graph, demonstrating a large improvement of 29.8% on FB15k-237 over a decoder-only baseline.
+1 Introduction
+Knowledge bases organize and store factual knowledge, enabling a multitude of applications including question answering (Yao and Van Durme 2014; Bao et al. 2014; Seyler, Yahya, and Berberich 2015; Hixon, Clark, and Hajishirzi 2015; Bordes et al. 2015; Dong et al. 2015) and information retrieval (Kotov and Zhai 2012; Dalton, Dietz, and Allan 2014; Xiong and Callan 2015b; 2015a). Even the largest knowledge bases (e.g. DBPedia, Wikidata or Yago), despite enormous effort invested in their maintenance, are incomplete, and the lack of coverage harms downstream applications. Predicting missing information in knowledge bases is the main focus of statistical relational learning (SRL).
+Following previous work on SRL, we assume that knowledge bases store collections of triples of the form (subject, predicate, object). Consider, for example, the triple (Mikhail Baryshnikov, educated at, Vaganova Academy), where we will refer to Baryshnikov and Vaganova Academy as entities and to educated at as a relation. Additionally, we assume that entities are labeled with types (e.g., Vaganova
+Equal contribution. Canadian Institute for Advanced Research
+
+:country
+
+U.S.A.
+citizen_of educated_at
+Mikhail Baryshnikov
+
+:university Vaganova Academy
+
+:ballet_dancer
+
+awarded
+
+:award Vilcek prize
+
+Figure 1: A knowledge base fragment: The nodes are entities, the edges are relations labeled with their types, the nodes are labeled with entity types (e.g., university). The edge and the node label shown in red are the missing information to be inferred.
+
+Academy is marked as a university). It is convenient to represent knowledge bases as directed labeled multigraphs with entities corresponding to nodes and triples encoded by labeled edges (see Figure 1).
+We consider two fundamental SRL tasks: link prediction (recovery of missing triples) and entity classification (assigning types or categorical properties to entities). In both cases, many missing pieces of information can be expected to reside within the graph encoded through the neighborhood structure ­ i.e. knowing that Mikhail Baryshnikov was educated at the Vaganova Academy implies both that Mikhail Baryshnikov should have the label person, and that the triple (Mikhail Baryshnikov, lived in, Russia) must belong to the knowledge graph. Following this intuition, we develop an encoder model for entities in the relational graph and apply it to both tasks.
+Our entity classification model, similarly to Kipf and Welling (2017), uses softmax classifiers at each node in the graph. The classifiers take node representations supplied by a relational graph convolutional network (R-GCN) and predict the labels. The model, including R-GCN parameters, is learned by optimizing the cross-entropy loss.
+Our link prediction model can be regarded as an autoencoder consisting of (1) an encoder: an R-GCN producing latent feature representations of entities, and (2) a decoder: a tensor factorization model exploiting these representations
+
+to predict labeled edges. Though in principle the decoder can rely on any type of factorization (or generally any scoring function), we use one of the simplest and most effective factorization methods: DistMult (Yang et al. 2014). We observe that our method achieves competitive results on standard benchmarks, outperforming, among other baselines, direct optimization of the factorization (i.e. vanilla DistMult). This improvement is especially large when we consider the more challenging FB15k-237 dataset (Toutanova and Chen 2015). This result demonstrates that explicit modeling of neighborhoods in R-GCNs is beneficial for recovering missing facts in knowledge bases.
+Our main contributions are as follows. To the best of our knowledge, we are the first to show that the GCN framework can be applied to modeling relational data, specifically to link prediction and entity classification tasks. Secondly, we introduce techniques for parameter sharing and to enforce sparsity constraints, and use them to apply R-GCNs to multigraphs with large numbers of relations. Lastly, we show that the performance of factorization models, at the example of DistMult, can be significantly improved by enriching them with an encoder model that performs multiple steps of information propagation in the relational graph.
+
+2 Neural relational modeling
+We introduce the following notation: we denote directed and labeled multi-graphs as G = (V, E, R) with nodes (entities) vi  V and labeled edges (relations) (vi, r, vj)  E, where r  R is a relation type.1
+2.1 Relational graph convolutional networks
+Our model is primarily motivated as an extension of GCNs that operate on local graph neighborhoods (Duvenaud et al. 2015; Kipf and Welling 2017) to large-scale relational data. These and related methods such as graph neural networks (Scarselli et al. 2009) can be understood as special cases of a simple differentiable message-passing framework (Gilmer et al. 2017):
+
+hi(l+1) = 
+
+gm(hi(l), hj(l)) ,
+
+(1)
+
+mMi
+
+where h(il)  Rd(l) is the hidden state of node vi in the l-th layer of the neural network, with d(l) being the di-
+mensionality of this layer's representations. Incoming mes-
+sages of the form gm(·, ·) are accumulated and passed through an element-wise activation function (·), such as the ReLU(·) = max(0, ·).2 Mi denotes the set of incoming messages for node vi and is often chosen to be identical to the set of incoming edges. gm(·, ·) is typically chosen to be a (message-specific) neural network-like function or simply
+a linear transformation gm(hi, hj) = W hj with a weight matrix W such as in Kipf and Welling (2017).
+
+1R contains relations both in canonical direction (e.g. born in) and in inverse direction (e.g. born in inv).
+2Note that this represents a simplification of the message passing neural network proposed in (Gilmer et al. 2017) that suffices to include the aforementioned models as special cases.
+
+This type of transformation has been shown to be very effective at accumulating and encoding features from local, structured neighborhoods, and has led to significant improvements in areas such as graph classification (Duvenaud et al. 2015) and graph-based semi-supervised learning (Kipf and Welling 2017).
+Motivated by these architectures, we define the following simple propagation model for calculating the forward-pass update of an entity or node denoted by vi in a relational (directed and labeled) multi-graph:
+
+
+
+
+
+h(il+1)
+
+=
+
+
+rR jNir
+
+1 ci,r
+
+Wr(l)h(jl)
+
++
+
+W0(l)hi(l) ,
+
+(2)
+
+where Nir denotes the set of neighbor indices of node i under relation r  R. ci,r is a problem-specific normalization constant that can either be learned or chosen in advance (such as ci,r = |Nir|).
+Intuitively, (2) accumulates transformed feature vectors of neighboring nodes through a normalized sum. Different from regular GCNs, we introduce relation-specific transformations, i.e. depending on the type and direction of an edge. To ensure that the representation of a node at layer l + 1 can also be informed by the corresponding representation at layer l, we add a single self-connection of a special relation type to each node in the data. Note that instead of simple linear message transformations, one could choose more flexible functions such as multi-layer neural networks (at the expense of computational efficiency). We leave this for future work.
+A neural network layer update consists of evaluating (2) in parallel for every node in the graph. In practice, (2) can be implemented efficiently using sparse matrix multiplications to avoid explicit summation over neighborhoods. Multiple layers can be stacked to allow for dependencies across several relational steps. We refer to this graph encoder model as a relational graph convolutional network (R-GCN). The computation graph for a single node update in the R-GCN model is depicted in Figure 2.
+
+2.2 Regularization
+A central issue with applying (2) to highly multi-relational data is the rapid growth in number of parameters with the number of relations in the graph. In practice this can easily lead to overfitting on rare relations and to models of very large size.
+To address this issue, we introduce two separate methods for regularizing the weights of R-GCN-layers: basisand block-diagonal-decomposition. With the basis decomposition, each Wr(l) is defined as follows:
+
+B
+
+Wr(l) =
+
+ar(lb)Vb(l),
+
+(3)
+
+b=1
+
+i.e. as a linear combination of basis transformations Vb(l)  Rd(l+1)×d(l) with coefficients a(rlb) such that only the coefficients depend on r. In the block-diagonal decomposition, we
+
+

@@ -1,0 +1,59 @@
+arXiv:2308.06259v3 [cs.CL] 12 Mar 2024
+
+Published as a conference paper at ICLR 2024
+SELF-ALIGNMENT WITH INSTRUCTION BACKTRANS-
+LATION
+Xian Li, Ping Yu, Chunting Zhou, Timo Schick, Omer Levy, Luke Zettlemoyer Jason Weston & Mike Lewis Meta {xianl,jase,mikelewis}@meta.com
+ABSTRACT
+We present a scalable method to build a high quality instruction following language model by automatically labelling human-written text with corresponding instructions. Our approach, named instruction backtranslation, starts with a language model finetuned on a small amount of seed data, and a given web corpus. The seed model is used to construct training examples by generating instruction prompts for web documents (self-augmentation), and then selecting high quality examples from among these candidates (self-curation). This data is then used to finetune a stronger model. Finetuning LLaMa on two iterations of our approach yields a model that outperforms all other LLaMa-based models on the Alpaca leaderboard not relying on distillation data, demonstrating highly effective self-alignment.
+1 INTRODUCTION
+Aligning large language models (LLMs) to perform instruction following typically requires finetuning on large amounts of human-annotated instructions or preferences (Ouyang et al., 2022; Touvron et al., 2023a; Bai et al., 2022a) or distilling outputs from more powerful models (Wang et al., 2022a; Honovich et al., 2022; Taori et al., 2023; Chiang et al., 2023; Peng et al., 2023; Xu et al., 2023). Recent work highlights the importance of human-annotation data quality (Zhou et al., 2023; Köpf et al., 2023). However, annotating instruction following datasets with such quality is hard to scale. In this work, we instead leverage large amounts of unlabelled data to create a high quality instruction tuning dataset by developing an iterative self-training algorithm. The method uses the model itself to both augment and curate high quality training examples to improve its own performance. Our approach, named instruction backtranslation, is inspired by the classic backtranslation method from machine translation, in which human-written target sentences are automatically annotated with model-generated source sentences in another language (Sennrich et al., 2015). Our method starts with a seed instruction following model and a web corpus. The model is first used to self-augment its training set: for each web document, it creates an instruction following training example by predicting a prompt (instruction) that would be correctly answered by (a portion of) that document. Directly training on such data (similarly to Köksal et al. (2023)) gives poor results in our experiments, both because of the mixed quality of human written web text, and noise in the generated instructions. To remedy this, we show that the same seed model can be used to self-curate the set of newly created augmentation data by predicting their quality, and can then be self-trained on only the highest quality (instruction, output) pairs. The procedure is then iterated, using the improved model to better curate the instruction data, and re-training to produce a better model. Our resulting model, Humpback, outperforms all other existing non-distilled models on the Alpaca leaderboard (Li et al., 2023). Overall, instruction backtranslation is a scalable method for enabling language models to improve their own ability to follow instructions.
+2 METHOD
+Our self-training approach assumes access to a base language model, a small amount of seed data, and a collection of unlabelled examples, e.g. a web corpus. The unlabelled data is a large, diverse set
+1
+
+Published as a conference paper at ICLR 2024
+
+Step 0. Initialization
+
+Step 1. Self-Augmentation.
+
+Train a backward model
+
+to
+
+generate instructions for unlabelled
+
+data to create candidate training data
+
+Step 2. Self-Curation. Iteratively select high-quality
+augmented data for next iteration self training
+
+Unlabelled Data
+
+Augmented Data
+
+Iteration 1
+
+Iteration 2
+
+LLaMA
+
+Augmented Data
+
+Augmented Data
+
+Seed Data
+Figure 1: An overview of our instruction backtranslation method. We start from a base language model, e.g. LLaMa, a small amount of seed examples of (instruction, output) pairs, and a collection of unlabelled documents which are considered candidate outputs for unknown instructions. Selfaugmentation: the base model is finetuned with (output, instruction) pairs from the seed examples as an instruction prediction model Myx, which is used to generate candidate instructions for outputs from the unlabelled data. Self-curation: starting from an intermediate instruction-following model M0 finetuned from seed examples only, it selects high-quality (instruction, output) pairs Ak(1) from the candidates from the previous step, and uses them as finetuning data for the next intermediate model M1, which is in turn used to select training data for obtaining M2.
+
+of human-written documents which includes writing about all manner of topics humans are interested in ­ but crucially is not paired with instructions. A first key assumption is that there exists some subset of this very large human-written text that would be suitable as gold generations for some user instructions. A second key assumption is that we can predict instructions for these candidate gold answers that can be used as high quality example pairs to train an instruction following model.
+Our overall process, which we call instruction backtranslation, thus performs two core steps:
+1. Self-augment: Generate instructions for unlabelled data, i.e. the web corpus, to produce candidate training data of (instruction, output) pairs for instruction tuning.
+2. Self-curate: Self-select high quality demonstration examples as training data to finetune the base model to follow instructions. This approach is done iteratively where a better intermediate instruction-following model can improve on selecting data for finetuning in the next iteration.
+We describe these steps in more details below. An overview of the approach is illustrated in Figure 1.
+2.1 INITIALIZATION
+Seed data. We start with a seed set of human-annotated (instruction, output) examples that will be used to fine-tune language models to give initial predictions in both directions: predicting an output given an instruction, and an instruction given an output.
+Unlabelled data. We use a web corpus as a source of unlabelled data. For each document, we perform preprocessing to extract self-contained segments {yi}, which are portions of text following an HTML header. We further run deduplication, length filtering, and remove potential low quality segments with several heuristics such as the proportion of capitalized letters in the header.
+2
+
+

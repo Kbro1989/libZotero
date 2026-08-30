@@ -1,0 +1,1340 @@
+                                            Reasoning Matters: Mitigate Hallucination in Multimodal Large
+                                        Reasoning Models via Reasoning-Conditioned Preference Optimization
+
+                                                        Jiawei Kong1* Hao Fang1* Shunxiang Liao2 Jinyu Li2
+                                                           Bin Chen2 Hao Wu1 Shu-Tao Xia2 Min Zhang2
+
+                                                  1 Tsinghua Shenzhen International Graduate School, Tsinghua University
+                                                                    2 Harbin Institute of Technology, Shenzhen
+
+                                                   kjw25@mails.tsinghua.edu.cn, fangh25@mails.tsinghua.edu.cn
+
+                                        Abstract
+
+arXiv:2605.27906v1 [cs.AI] 27 May 2026       Multimodal Large Reasoning Models intro-                         Is there a dining
+                                             duce the reasoning paradigm, demonstrating                       table in the image?
+                                             strong capabilities on complex vision-language
+                                             tasks. However, they still suffer from severe                      <think> The image shows a vintage truck with color-
+                                             hallucinations. Existing training-based meth-                      ful and religious artwork on it, parked in a desert-
+                                             ods typically mitigate hallucinations through           like setting. There is a structure in the background that
+                                             response-level direct preference optimization           appears to be a small building or shed, and there is a table
+                                             (DPO), where the Chain-of-Thought (CoT) and             visible in the foreground to the right of the truck. The
+                                             the final answer are treated as a monolithic            table is round and has a blue top, which is typical for a
+                                             output and optimized jointly. We reveal that            dining table. However, the context and the setting suggest
+                                             this formulation performs similarly to answer-          that this might be a display or a part of an art installation
+                                             only optimization, suggesting that it primarily         rather than a functional dining area. Nonetheless, the pre-
+                                             learns answer-level preference, while leaving           sence of the table is clear in the image. </think>
+                                             CoT-level supervision insufficiently exploited.
+                                             To address this issue, we explicitly formu-                          <answer> Final answer: yes </answer>
+                                             late a CoT-oriented preference term and derive
+                                             Reasoning-Conditioned Direct Preference Op-          Figure 1: A visual question answering example gener-
+                                             timization (RC-DPO), which models the CoT            ated by MM-Eureka-7B (Meng et al., 2025), where the
+                                             as a condition for answer generation and con-        hallucinated content is highlighted in red.
+                                             trasts the preference for the same preferred an-
+                                             swer under different CoT conditions, promot-         Multimodal Large Reasoning Models (MLRMs)
+                                             ing answer-supportive reasoning chain align-         (Meng et al., 2025; Yang et al., 2025a; Leng et al.,
+                                             ment. To further improve optimization, we in-        2025; Wang et al., 2026) extend such reasoning
+                                             troduce a reasoning-enhanced preference data         capabilities to vision-language scenarios. Further
+                                             generation strategy that employs Monte Carlo         enhanced by post-training techniques such as re-
+                                             Tree Search to discover visually grounded and        inforcement learning, these models have achieved
+                                             logically consistent CoTs as positive samples,       substantial gains on challenging multimodal tasks,
+                                             and attention-guided CoT token pruning to con-       including visual mathematics (Lu et al., 2024), sci-
+                                             struct negative ones. Extensive experiments          entific question answering (Lu et al., 2022), and
+                                             across various models and benchmarks show            chart understanding (Masry et al., 2022).
+                                             that RC-DPO effectively mitigates hallucina-
+                                             tions and improves the reliability of the multi-        Despite their strong performance, recent studies
+                                             modal reasoning process.                             (Xu et al., 2026; Fang et al., 2026a) have shown
+                                                                                                  that MLRMs remain prone to hallucinations, gen-
+                                        1 Introduction                                            erating content that appears plausible yet is incon-
+                                                                                                  sistent with the visual input. Unlike conventional
+                                        Large Reasoning Models (LRMs), such as Ope-               Multimodal Large Language Models (MLLMs),
+                                        nAI o3 and DeepSeek-R1 (Guo et al., 2025), have           hallucinations in MLRMs can arise not only in the
+                                        recently achieved remarkable progress on various          final answer but also within the intermediate Chain-
+                                        tasks by explicitly generating intermediate reason-       of-Thought (CoT), as illustrated in Figure 1. This
+                                        ing steps before producing final responses (Cobbe         poses a unique challenge for hallucination mitiga-
+                                        et al., 2021; Chen et al., 2021). Building upon this,     tion: unsupported visual evidence, such as nonex-
+
+                                            *Equal contribution.
+                                            Corresponding author.
+
+                                                                                               1
+istent objects or relations, may first emerge in the      level preference optimization with reasoning-
+CoT and then propagate to the final answer through        conditioned preference learning, RC-DPO explic-
+subsequent reasoning steps. Therefore, mitigating         itly aligns intermediate reasoning chains with the
+hallucinations in MLRMs requires moving beyond            answers they support, enabling more faithful multi-
+answer-level correction toward the explicit align-        modal reasoning.
+ment of intermediate reasoning chains.
+                                                             In summary, our contributions are as follows:
+   Recent studies have explored post-alignment
+methods for mitigating hallucinations in MLRMs,              · We revisit existing DPO-based hallucination
+with Direct Preference Optimization (DPO) com-                  mitigation methods for MLRMs and reveal
+monly employed to align model outputs with cu-                  that their coarse-grained supervision may
+rated preference pairs (Yu et al., 2025; Yang et al.,           leave CoT insufficiently optimized.
+2025b). However, these methods typically con-
+struct preference pairs over complete responses,             · We propose RC-DPO, a fine-grained prefer-
+where the CoT and final answer are concatenated                 ence optimization framework that aligns rea-
+and jointly optimized under a single response-level             soning chains by contrasting the same pre-
+preference signal. While such coarse-grained su-                ferred answer under different CoT conditions.
+pervision can reduce hallucinations to some extent,
+it does not explicitly distinguish CoT-level align-          · We further introduce a reasoning-conditioned
+ment from answer-level alignment. As a result, the              preference data generation pipeline with
+optimization may be biased toward answer-level                  MCTS-based positive sampling and attention-
+shortcuts, leaving the reasoning chain insufficiently           guided negative construction.
+optimized and limiting the overall effectiveness of
+hallucination mitigation. This raises a natural ques-        · Experimental results on four MLRMs across
+tion: How can we move beyond response-level pref-               nine benchmarks demonstrate the effective-
+erence optimization and explicitly align reasoning              ness of RC-DPO in mitigating hallucinations
+chains with the correct answer?                                 and improving multimodal reasoning ability.
+
+   To address this, we propose Reasoning-                 2 Observation and Motivation
+Conditioned Direct Preference Optimization (RC-
+DPO), a fine-grained preference optimization              In this section, we present the motivation behind
+framework that explicitly models the relationship         our RC-DPO for mitigating hallucinations in ML-
+between reasoning chains and final answers. In-           RMs. We first provide evidence of insufficient CoT
+stead of only comparing complete responses, RC-           optimization from two complementary perspec-
+DPO treats the CoT as a condition for answer gen-         tives, i.e., training dynamics and inference-time
+eration and contrasts the likelihood of the same          hallucination decomposition. We further highlight
+preferred answer under different CoT conditions.          the necessity of CoT-level hallucination mitigation
+Specifically, given a multimodal input and a pre-         by analyzing the conditional dependency between
+ferred answer, RC-DPO encourages the model to             CoT and answer hallucinations.
+assign higher preference to the answer when condi-
+tioned on a visually grounded and logically valid         2.1 Answer Bias in Response-level DPO
+CoT than on a hallucinated or corrupted CoT. By
+isolating the effect of the reasoning chain, this         Observation. We analyze the training dynamics
+controlled comparison enables the model to bet-           of OPA-DPO (Yang et al., 2025b) by decompos-
+ter distinguish quality differences between reason-       ing each response into CoT and answer spans and
+ing chains and provides a direct signal for learning      tracking their loss ratios during training. As shown
+answer-supportive CoT preferences.                        in Figure 2 (a), the policy-reference preference gap
+                                                          grows faster on the answer segment than on CoT,
+   To support this objective, we further construct        indicating that answer-level signals are optimized
+reasoning-conditioned preference data by search-          more rapidly during response-level DPO.
+ing for high-quality positive reasoning chains with
+Monte Carlo Tree Search (MCTS), and generat-                 To further examine this bias, we implement an
+ing negative reasoning chains through an attention-       answer-only variant, (cw, aw)  (cw, al), where
+guided CoT token pruning strategy that removes vi-        the same CoT is shared and only the final answer
+sually salient CoT tokens. By combining response-         differs. This removes CoT-level preference from
+                                                          the comparison and provides only answer-level su-
+                                                          pervision. As shown in Figure 2 (b), its CHAIRS
+                                                          score is close to that of OPA-DPO.
+
+                                                       2
+(a)                                                     (b)  (c)
+
+Figure 2: Motivating observations for RC-DPO. (a) Loss-ratio curves of CoT and answer segments during OPA-
+DPO training. (b) Segment-level CHAIRS scores of the original model, OPA-DPO, and the answer-only variant
+OPA-DPOAns. (c) Conditional distribution between CoT CHAIRi scores and answer CHAIRi scores.
+
+   Insights. These results suggest that response-          Insights. This conditional dependence suggests
+level DPO may be biased toward answer-level             that answer hallucination is closely associated with
+optimization, with much of its gain arising from        hallucinations in the reasoning chain. Unsupported
+answer-level preference learning, while CoT pref-       visual claims introduced during reasoning may
+erence remains insufficiently captured. This moti-      propagate to the final answer, making answer-level
+vates a more fine-grained objective that explicitly     correction alone insufficient. Therefore, effective
+separates CoT alignment from answer-level align-        hallucination mitigation should explicitly align rea-
+ment to reduce reliance on shortcut learning.           soning chains, ensuring that CoTs provide reliable
+                                                        support for the preferred answer.
+2.2 CoT as the Hallucination Bottleneck
+                                                        3 Methodology
+Observation. We evaluate CHAIRS on OPA-DPO
+outputs, including the complete response and its        3.1 Preliminaries
+decomposed CoT and answer segments. As shown
+in Figure 2 (b), although OPA-DPO reduces hallu-        Before delving into the proposed reasoning-
+cinations compared with the original model, CoT         conditioned algorithm, i.e., RC-DPO, we first re-
+hallucination remains consistently higher than an-      visit the generation paradigm of MLRMs and the
+swer hallucination, with the full-response score        formulation of standard DPO, which provide the
+staying closer to the CoT score.                        foundation for our subsequent derivations.
+
+   Insights. This indicates that residual full-         Multimodal Reasoning with CoT. Given a mul-
+response hallucinations are largely dominated by        timodal input x = (v, q), where v denotes the im-
+hallucinated reasoning chains, making CoT the key       age and q denotes the user prompt, an MLRM 
+bottleneck. Therefore, improving the final answer       generates a response y consisting of an intermedi-
+alone is insufficient, and effective hallucination      ate reasoning chain c and a final answer a. Under
+mitigation requires explicit CoT-level alignment.       the standard autoregressive formulation, the likeli-
+                                                        hood of the response can be factorized as
+2.3 CoT-Conditioned Answer Hallucination
+                                                          (y|x) = (c, a|x) = (c|x)(a|x, c). (1)
+Observation. We further analyze the condi-
+tional probability of answer hallucination given        This decomposition shows that response generation
+CoT hallucination based on segment-level CHAIRi         involves two related but distinct components, i.e.,
+scores. As shown in Figure 2 (c), answers remain        generating the reasoning chain and producing the
+hallucination-free when no hallucinated content         final answer conditioned on that chain.
+appears in the CoT, as indicated by the first col-
+umn. In contrast, answer hallucinations become          Response-level DPO. Standard DPO optimizes a
+more frequent once hallucinations appear in the         policy model with preference pairs. Given an input
+CoT, revealing a conditional dependency between         x, a preferred response yw, and a rejected response
+CoT hallucination and answer hallucination.
+
+                                                     3
+CoT Format Alignment                              Positive Sample Construction                                   Preference Optimization
+
+                        Q: Which                       MCTS Sampling                                   Positive
+                       teddy bear                                                                   CoT+Answer
+                      is for girls?                                                                              (,          ,)
+                                                          ...                  Select Expand
+                                                                                                                         >
+
+<think>          Structured CoT                                   ...                                            (,          ,)
+                   Generation
+
+### Step 1: The image shows                       Path 1  Path 2       Path N    Back-    Simulate
+two teddy bears in plastic ...                                                 propagate
+                                     (Score 0.42) (Score 0.65) (Score 0.78)
+
+<END>                                             Negative Sample Construction
+
+### Step 2: ...                                           CoT-to-image Visual-relevant                Negative   Policy          Reference
+                                                                                                    CoT+Answer
+<END>                                Image Query          Attention            Tokens Pruning                    (,          ,, )
+
+### Step 3: ...
+
+<END></think><answer>
+
+The teddy bear on the left is        CoT                                                                                 >
+dressed in ..., making it more
+likely to be for girls.                                                                   ...
+
+</answer>                                         Image Query     CoT                                            ( , ,, )
+
+Figure 3: Overview of RC-DPO. We first construct SFT data to align the CoT format. Then, we construct positive
+and negative reasoning samples through MCTS sampling and attention-guided token pruning, respectively. Finally,
+we optimize the policy model with both response-level and reasoning-conditioned preference objectives.
+
+yl, the DPO objective is formulated as                                                 training, but also adapts the model to generate
+                                                                                       well-structured reasoning trajectories suitable for
+LDPO = - log      log (yw|x) - log (yl|x)                                      ,       MCTS-based positive sample construction. Specif-
+                       ref (yw|x)                              ref (yl|x)              ically, given an input x = (v, q)  D, we prompt
+                                                                                       the model with few-shot demonstrations, as illus-
+                                                                               (2)     trated in Appendix F, to generate a step-wise CoT c
+                                                                                       followed by a final answer a. The resulting triples
+where ref indicates a fixed reference model and                                        form the SFT dataset DSF T , on which the model
+controls the strength of regularization.                                               is trained with the standard supervised objective:
+
+For MLRMs, existing methods typically con-
+
+struct preference pairs over complete responses,
+
+i.e., yw = (cw, aw) and yl = (cl, al). Therefore,
+the response-level DPO can be formulated as
+
+LDPO = - log                         log (cw, aw|x)                                       LSFT = -E(x,c,a)DSFT [log (c, a|x)] . (4)
+                                         ref (cw, aw|x)
+                                                                                       After this warm-up stage, the model SFT can pro-
+                                                                               (3)     duce structured CoT trajectories, enabling subse-
+                                                                                       quent MCTS to operate over explicit reasoning
+                       - log (cl, al|x) .                                              paths rather than unstructured free-form responses.
+                              ref (cl, al|x)
+                                                                                       Reasoning-conditioned Preference Optimiza-
+As revealed in Section 2, such response-level pref-                                    tion. As revealed in Section 2, response-level
+erence signals remain coarse-grained, as they do                                       DPO behaves similarly to answer-only optimiza-
+not explicitly distinguish CoT-level alignment from                                    tion, suggesting that reasoning chains may be
+answer-level alignment, leading to answer short-                                       under-emphasized when the CoT and final answer
+cuts and insufficient CoT optimization.                                                are jointly optimized as a complete response. To ad-
+                                                                                       dress this issue, we first formulate a CoT-oriented
+3.2 The Proposed RC-DPO                                                                preference term that keeps the preferred answer
+                                                                                       fixed and compares different reasoning chains un-
+Motivated by the above analysis, we propose RC-                                        der the same multimodal input:
+DPO to explicitly align reasoning chains by model-
+ing the CoT as a condition for answer generation.                                                   (cw, aw)|x  (cl, aw)|x,                 (5)
+The overall pipeline is illustrated in Figure 3.
+                                                                                       where x = (v, q), cw denotes a visually grounded
+CoT Format Alignment. We first perform super-                                          and logically valid CoT, and cl denotes a halluci-
+vised fine-tuning (SFT) to align the model with                                        nated or corrupted CoT.
+a structured CoT format. This stage not only
+serves as a warm-up phase for subsequent DPO
+
+                                                                                    4
+   By the chain rule, the likelihood ratio of this        where  controls the trade-off between the two ob-
+preference can be decomposed as                           jectives. The response-level objective maintains
+                                                          the general preference alignment over complete re-
+log (cw, aw|x) = log (cw|x)                               sponses, while the reasoning-conditioned objective
+(cl, aw|x)       (cl |x)                                  provides explicit supervision for CoT-level align-
+                                     (6)                  ment by contrasting the conditional support for the
+                + log (aw|x, cw) .                        preferred answer. This joint optimization enables
+                (aw|x, cl)                                RC-DPO to mitigate hallucinations in both inter-
+                                                          mediate reasoning chains and final answers.
+The first term compares the likelihood of gener-
+ating a high-quality CoT against a corrupted one,         3.3 Preference Data Construction
+while the second term quantifies the conditional
+support that each CoT provides for generating the         To support the above objective, RC-DPO re-
+same preferred answer. Notably, the first term is es-     quires reasoning-conditioned preference samples
+sentially covered by standard response-level DPO          (x, cw, aw, cl, al). Unlike previous methods that
+over complete responses, whose likelihood ratio           rely on ground-truth annotations or response cor-
+can be decomposed as                                      rection from stronger external models such as GPT
+                                                          (Yang et al., 2025b), we introduce a preference data
+log (cw, aw|x) = log (cw|x)                               generation pipeline based on the model's own out-
+(cl, al|x)       (cl |x)                                  puts. Below, we detail the construction of positive
+                                     (7)                  and negative reasoning samples, respectively.
+
+                + log (aw|x, cw) .                        Positive Sample Construction. For each multi-
+                        (al|x, cl)                        modal input x = (v, q), we use the SFT-warmed
+                                                          model SFT to perform reasoning search with
+   Hence, RC-DPO retains response-level DPO for           Monte Carlo Tree Search (MCTS). Starting from
+general response preference learning and adds a           the root node, MCTS incrementally expands candi-
+reasoning-conditioned objective to explicitly opti-       date reasoning steps and performs rollouts to com-
+mize the answer-support term. Following the DPO           plete CoT-answer trajectories. During the search,
+formulation, we define the reasoning-conditioned          a verifier is employed to evaluate candidate trajec-
+preference objective as                                   tories based on visual consistency, logical validity,
+                                                          and answer correctness. The resulting scores are
+LRC = - log     log (aw|x, cw)                            back-propagated along the search tree to guide sub-
+                    ref (aw|x, cw)                        sequent exploration. After the search, we select the
+                                                          highest-scoring trajectory as the positive sample:
+                                     (8)
+                                                                (cw, aw) = arg max S(c, a; x), (10)
+              - log (aw|x, cl) ,
+                     ref (aw|x, cl)                                                          (c,a)T (x)
+
+where ref denotes the fixed reference model, in-          where T (x) denotes the set of candidate trajecto-
+stantiated as the SFT-warmed model SFT. By                ries explored during the search, and S(·) repre-
+keeping the target answer fixed and varying only          sents the verifier score. By selecting the highest-
+the CoT condition, this objective isolates the ef-        scoring trajectory, this process promotes positive
+fect of the reasoning chain on answer generation.         CoTs with stronger visual grounding and logical
+With the reference model as a baseline, the margin        consistency. Additional details of the search algo-
+measures how much the policy model improves               rithm are provided in Appendix C.
+the conditional support for aw under different CoT
+conditions. Maximizing this margin encourages             Negative Sample Construction. To construct
+the model to assign higher preference to the answer       challenging negative CoTs, we introduce an image-
+under a high-quality CoT than under a corrupted           attention-based CoT corruption strategy. Given a
+one, thereby providing a direct training signal for       response (c, a) obtained by standard sampling from
+answer-supportive CoT alignment.                          SFT, we compute the attention from each CoT to-
+                                                          ken to image tokens. Specifically, for each CoT
+Training Objective. The final RC-DPO ob-
+jective combines response-level and reasoning-
+conditioned preference learning:
+
+L = LDPO + LRC,                      (9)
+
+                                                       5
+Table 1: Performance comparison of RC-DPO with baseline methods on the Object HalBench. CS and CI denote
+CHAIRS and CHAIRI respectively, where lower values indicate fewer hallucinations.
+
+Method          R1-Onevision          MM-Eureka             ThinkLite-VL  OpenVLThinker
+                CS  CI                CS  CI                CS  CI        CS  CI 
+Vanilla
+VCD             36.7 7.6              34.0 7.5              30.7 7.5      31.7 7.3
+SID             42.3 9.4              28.7 8.2              35.0 8.2      27.0 8.1
+RLAIF-V         43.7 9.2              35.3 8.3              34.7 8.4      35.7 8.9
+OPA-DPO         38.0 7.9              33.3 7.3              33.0 7.8      27.3 6.8
+RC-DPO          40.0 8.6              29.0 5.4              30.3 7.6      27.0 7.1
+                21.7 6.2              21.3 5.4              18.7 4.9      24.3 6.4
+
+token ct, its image-attention score is computed as          2023), and AMBER (Wang et al., 2023), cov-
+                                                            ering object hallucination, response faithfulness,
+             1            A(t,lk,h),  (11)                  and hallucination-oriented multimodal reliability.
+s(ct) = |L||H|                                              For general-purpose evaluation, we use MME (Fu
+                lL hH kI                                    et al., 2026), MMBench (Liu et al., 2024c), VM-
+                                                            CBench (Zhang et al., 2025), and MMVP (Tong
+where L and H denote the sets of selected attention         et al., 2024) to assess multimodal perception, rea-
+layers and heads, respectively. I denotes image-            soning, and visual-language understanding abilities.
+token positions, and A(t,lk,h) represents the attention     Detailed descriptions of these evaluation bench-
+weight from CoT token ct to image token vk.                 marks are provided in Appendix D.2.
+
+   Intuitively, a higher image-attention score indi-        Baseline algorithms. We compare RC-DPO with
+                                                            both decoding-based and training-based meth-
+cates that the token carries more visual information.       ods. For decoding-based baselines, we adopt
+We rank CoT tokens according to their scores s and          VCD (Leng et al., 2024) and SID (Huo et al.,
+                                                            2025), which adjust token probability distributions
+remove the top-ranked visually salient tokens:              through contrastive decoding. For training-based
+                                                            baselines, we adapt two state-of-the-art MLLM
+cl = Prune(c; s, r),                  (12)                  alignment methods, namely RLAIF-V (Yu et al.,
+                                                            2025) and OPA-DPO (Yang et al., 2025b).
+where r denotes the pruning ratio. Since the pruned
+tokens are highly associated with visual evidence,          Implementation Details. In the warm-up stage,
+the resulting CoT cl disrupts the visual grounding          we perform SFT with Low-Rank Adaptation
+of the reasoning chain, thereby serving as a chal-          (LoRA), using a rank of 8 and training for 1 epoch
+lenging negative reasoning condition for RC-DPO.            with a learning rate of 5e-5. For positive sample
+                                                            construction, we employ MCTS with a maximum
+4 Experiments                                               of 3 children per node and 30 search iterations to
+                                                            discover high-quality responses. For negative sam-
+4.1 Experimental Setup                                      ple construction, we use all attention layers and
+                                                            heads to compute image-attention scores, and set
+Models and Datasets. We evaluate RC-DPO                     the pruning ratio r to 20%. In the preference learn-
+on four representative MLRMs: R1-Onevision-                 ing stage, we train the model for 1 epoch with a
+7B (Yang et al., 2025a), MM-Eureka-7B (Meng                 learning rate of 1e-6 and a batch size of 32. The
+et al., 2025), ThinkLite-VL-7B (Wang et al., 2026),         KL penalty coefficient is set to  = 0.1, and the
+and OpenVLThinker-7B (Deng et al., 2026). For               reasoning-conditioned loss weight is set to  = 0.1.
+training data construction, we adopt the RLAIF-V            More details are provided in Appendix D.3.
+dataset (Yu et al., 2025), using 10K samples for
+SFT and 5K samples for DPO.                                 4.2 Performance Evaluation
+
+Evaluation Metrics. We comprehensively eval-                Due to space limitations, we report the results on
+uate the performance across a wide range of                 Object HalBench, POPE, and GPT-4 assisted eval-
+benchmarks. For hallucination evaluation, we
+adopt Object HalBench (Rohrbach et al., 2018),
+POPE (Li et al., 2023), MMHal-Bench (Sun et al.,
+2024), GPT-4 assisted evaluation (Zhao et al.,
+
+                                                         6
+       Table 2: Comparison of RC-DPO with baseline methods on the POPE benchmark.
+
+Model         Method       Random                            Popular           Adversarial
+
+                       Accuracy F1 Score Accuracy F1 Score Accuracy F1 Score
+
+MM-Eureka     Vanilla  86.43%  84.55%                  85.30%  83.48%  85.03%      83.23%
+              VCD      87.73%  86.15%                  86.43%  84.91%  85.67%      84.21%
+              SID      87.50%  85.88%                  85.93%  84.35%  85.40%      83.85%
+              RLAIF-V  86.30%  84.28%                  84.87%  82.92%  84.50%      82.57%
+              OPA-DPO  87.33%  85.63%                  86.13%  84.49%  85.30%      83.71%
+              RC-DPO   89.17%  87.95%                  86.80%  85.69%  86.07%      85.02%
+
+R1-Onevision  Vanilla  76.83%  76.46%                  75.93%  75.76%  76.47%      76.16%
+              VCD      76.57%  76.90%                  76.27%  76.38%  76.80%      76.97%
+              SID      76.77%  76.82%                  77.63%  77.63%  77.03%      77.24%
+              RLAIF-V  79.73%  78.86%                  79.07%  78.36%  78.60%      77.98%
+              OPA-DPO  85.53%  83.58%                  83.60%  81.83%  83.20%      81.47%
+              RC-DPO   87.27%  85.56%                  85.50%  83.88%  84.80%      83.24%
+
+Vanilla               VCD                           RLAIF-V           OPA-DPO      RC-DPO
+
+Figure 4: Radar chart of the GPT-4 assisted evaluation results. We report the Sentence-level Hallucination Ratio
+(SHR), Word-level Hallucination Ratio (WHR), 1&2-gram scores, and Words Per Image (WPI). A larger radar area
+indicates better overall performance.
+
+uation in this section. More comprehensive results     baselines yield limited and inconsistent improve-
+are provided in Appendix E.                            ments. These results indicate that RC-DPO more
+                                                       effectively mitigates object hallucinations in ML-
+Object HalBench Evaluation. Following previ-           RMs by explicitly aligning reasoning chains.
+ous works (Yu et al., 2025; Yang et al., 2025b),
+we prompt MLRMs to generate captions for 300           POPE Evaluation. The POPE benchmark evalu-
+images from the MSCOCO validation set (Lin             ates object hallucinations with prompts in the for-
+et al., 2014) and compute CHAIR metrics based on       mat "Is there a <object> in the image?".
+the generated outputs and object annotations. As       The resulting yes/no responses are compared with
+shown in Table 1, RC-DPO consistently achieves         ground-truth labels to compute accuracy, preci-
+the lowest CHAIRS and CHAIRI scores across all         sion, recall, and F1 score. Due to space limita-
+evaluated MLRMs, demonstrating its effectiveness       tions, Table 2 reports results on MM-Eureka and
+in reducing object-level hallucinations. Specifi-      R1-Onevision, while results on the other two mod-
+cally, compared with the vanilla models, RC-DPO        els are provided in Appendix E.1. RC-DPO con-
+substantially reduces CHAIRS from 36.7 to 21.7         sistently achieves the best performance across all
+on R1-Onevision and from 34.0 to 21.3 on MM-           settings on both MM-Eureka and R1-Onevision.
+Eureka. In contrast, decoding-based methods ex-        Compared with the strongest training-based base-
+hibit unstable performance and even increase hal-      line OPA-DPO, RC-DPO improves the F1 score
+lucination in several cases, while training-based      by 2.32%, 1.20%, and 1.31% on MM-Eureka un-
+
+                                                    7
+(a)                                                         (b)  (c)
+
+Figure 5: Ablation studies of RC-DPO. (a) Effects of different components on CHAIRS. (b) Sensitivity analysis of
+the reasoning-conditioned loss weight . (c) Sensitivity analysis of the pruning rate for negative CoT construction.
+
+der the three settings, respectively. These results         search and negative CoT corruption provide com-
+demonstrate that RC-DPO effectively improves ob-            plementary benefits for hallucination mitigation.
+ject existence recognition and reduces hallucinated
+responses across diverse evaluation settings.               Hyperparameter ablation. We further study the
+                                                            sensitivity of RC-DPO to the loss weight  and
+GPT-4 Assisted Evaluation. While POPE and                   pruning rate r. As shown in Figure 5 (b), increas-
+CHAIR are reliable metrics widely adopted in pre-           ing  initially improves performance, with the best
+vious studies, they mainly focus on object hal-             result achieved at  = 0.1. However, larger val-
+lucination and may overlook other hallucination             ues lead to performance degradation, suggesting
+types. For a more comprehensive evaluation, we              that excessive RC supervision may hinder general
+employ the GPT-4 assisted evaluation benchmark              preference learning. Figure 5 (c) shows that a prun-
+to assess both hallucination and descriptive quality        ing rate of 20% achieves the lowest CHAIRS. A
+in open-ended image captioning. Specifically, we            smaller pruning rate may produce weak negative
+report Sentence-level Hallucination Ratio (SHR),            CoTs, while a larger rate may overly disrupt the
+Word-level Hallucination Ratio (WHR), 1&2-gram              reasoning structure. Therefore, we set  = 0.1 and
+scores, and Words Per Image (WPI) in Figure 4.              r = 20% in our main experiments.
+RC-DPO achieves consistently strong performance
+across four MLRMs. Compared with vanilla mod-               5 Conclusion
+els and baseline methods, RC-DPO generally cov-
+ers a larger radar area, indicating better overall per-     In this paper, we investigate hallucination mitiga-
+formance. The improvements on SHR and WHR                   tion in MLRMs from the perspective of reasoning-
+demonstrate its effectiveness in reducing halluci-          chain alignment. Motivated by our observation
+nated descriptions, while the high 1&2-gram scores          that response-level DPO primarily captures answer-
+indicate that RC-DPO generates adequate and flu-            level preference while leaving reasoning chains
+ent responses. These results further verify that            insufficiently optimized, we propose RC-DPO,
+reasoning-chain alignment improves response faith-          a reasoning-conditioned preference optimization
+fulness without sacrificing descriptive quality.            framework that explicitly treats the CoT as a con-
+                                                            dition for answer generation and aligns reasoning
+4.3 Ablation Study                                          chains by comparing their support for the preferred
+                                                            answer. To enable this objective, we further intro-
+Module ablation. We evaluate the contribution               duce a preference data construction pipeline that
+of each component in RC-DPO. As shown in Fig-               combines MCTS-based positive reasoning search
+ure 5 (a), removing the reasoning-conditioned loss          with image-attention-guided CoT corruption for
+LRC, MCTS-based sampling, or attention-guided               negative sample construction. Extensive experi-
+pruning consistently increases CHAIRS. Among                ments across multiple MLRMs and benchmarks
+them, removing LRC causes the most significant              demonstrate that RC-DPO effectively reduces hal-
+performance drop, highlighting the importance of            lucinations while improving general multimodal
+explicitly optimizing answer-supportive CoT align-          reasoning ability. These results highlight the im-
+ment. The full RC-DPO achieves the best per-                portance of explicitly aligning reasoning chains for
+formance, demonstrating that positive reasoning             building more faithful and reliable MLRMs.
+
+                                                         8
+Ethical Statement                                          Zechen Bai, Pichao Wang, Tianjun Xiao, Tong He,
+                                                              Zongbo Han, Zheng Zhang, and Mike Zheng Shou.
+This work aims to improve the faithfulness and reli-          2024. Hallucination of multimodal large language
+ability of Multimodal Large Reasoning Models by               models: A survey. arXiv preprint arXiv:2404.18930.
+mitigating hallucinations in both reasoning chains
+and final answers. We conduct experiments on pub-          Hyeong Soo Chang, Michael C Fu, Jiaqiao Hu, and
+licly available datasets and benchmarks, and do not           Steven I Marcus. 2005. An adaptive sampling algo-
+collect or annotate any private user data. We adhere          rithm for solving markov decision processes. Opera-
+to strict ethical standards throughout our study. All         tions research, 53(1):126­139.
+code, models, and datasets used in this study are
+employed in accordance with their intended use             Mark Chen, Jerry Tworek, Heewoo Jun, Qiming Yuan,
+and corresponding licenses. Since our method is               Henrique Ponde De Oliveira Pinto, Jared Kaplan,
+designed to reduce hallucinated content rather than           Harri Edwards, Yuri Burda, Nicholas Joseph, Greg
+generate harmful or sensitive outputs, we do not              Brockman, and 1 others. 2021. Evaluating large
+intentionally introduce unsafe data or malicious in-          language models trained on code. arXiv preprint
+structions during training. We also report results            arXiv:2107.03374.
+across diverse benchmarks to avoid over-claiming
+effectiveness on a single evaluation setting.              Karl Cobbe, Vineet Kosaraju, Mohammad Bavarian,
+                                                              Mark Chen, Heewoo Jun, Lukasz Kaiser, Matthias
+Limitation                                                    Plappert, Jerry Tworek, Jacob Hilton, Reiichiro
+                                                              Nakano, and 1 others. 2021. Training verifiers
+Although RC-DPO demonstrates strong effective-                to solve math word problems. arXiv preprint
+ness in mitigating hallucinations in MLRMs, there             arXiv:2110.14168.
+remain several directions for future improvement.
+                                                           Yihe Deng, Hritik Bansal, Fan Yin, Nanyun Peng, Wei
+   · Our work makes an initial step toward                    Wang, and Kai-Wei Chang. 2026. Openvlthinker:
+      reasoning-chain alignment for hallucination             Complex vision-language reasoning via iterative sft-
+      mitigation in MLRMs at the trajectory level,            rl cycles. Advances in Neural Information Process-
+      where each CoT is treated as a complete rea-            ing Systems, 38:123817­123846.
+      soning condition for answer generation. Fu-
+      ture work could explore more fine-grained            Bowen Dong, Minheng Ni, Zitong Huang, Guanglei
+      reasoning-chain alignment, such as step-level           Yang, Wangmeng Zuo, and Lei Zhang. 2026. Mi-
+      preference modeling or token-level process              rage: Assessing hallucination in multimodal reason-
+      supervision, to better understand which inter-          ing chains of mllm. Advances in Neural Information
+      mediate reasoning steps contribute most to              Processing Systems, 38:122910­122955.
+      faithful answer generation.
+                                                           Hao Fang, Jinyu Li, Jiawei Kong, Tianqu Zhuang,
+   · Our current negative sample construction fo-             Kuofeng Gao, Bin Chen, Shu-Tao Xia, and Yaowei
+      cuses on corrupting CoTs by pruning visually            Wang. 2026a. Seeing through the chain: Mitigate
+      salient tokens based on image attention. Fu-            hallucination in multimodal reasoning models via cot
+      ture work could further enrich the preference           compression and contrastive preference optimization.
+      signal by incorporating more diverse reason-            arXiv preprint arXiv:2602.03380.
+      ing conditions, such as subtle logical inconsis-
+      tencies, commonsense conflicts, or multi-step        Hao Fang, Changle Zhou, Jiawei Kong, Kuofeng Gao,
+      reasoning failures, enabling more comprehen-            Bin Chen, Tao Liang, Guojun Ma, and Shu-Tao Xia.
+      sive reasoning-chain alignment.                         2026b. Grounding language with vision: A condi-
+                                                              tional mutual information calibrated decoding strat-
+References                                                    egy for reducing hallucinations in lvlms. Advances in
+                                                              Neural Information Processing Systems, 38:105233­
+Shuai Bai, Yuxuan Cai, Ruizhe Chen, Keqin Chen,               105258.
+   Xionghui Chen, Zesen Cheng, Lianghao Deng, Wei
+   Ding, Chang Gao, Chunjiang Ge, and 1 others.            Chaoyou Fu, Peixian Chen, Yunhang Shen, Yulei Qin,
+   2025. Qwen3-vl technical report. arXiv preprint            Mengdan Zhang, Xu Lin, Jinrui Yang, Xiawu Zheng,
+   arXiv:2511.21631.                                          Ke Li, Xing Sun, and 1 others. 2026. Mme: A
+                                                              comprehensive evaluation benchmark for multimodal
+                                                              large language models. Advances in Neural Informa-
+                                                              tion Processing Systems, 38.
+
+                                                           Daya Guo, Dejian Yang, Haowei Zhang, Junxiao
+                                                              Song, Peiyi Wang, Qihao Zhu, Runxin Xu, Ruoyu
+                                                              Zhang, Shirong Ma, Xiao Bi, and 1 others. 2025.
+                                                              Deepseek-r1: Incentivizing reasoning capability in
+                                                              llms via reinforcement learning. arXiv preprint
+                                                              arXiv:2501.12948.
+
+                                                        9
+Fushuo Huo, Wenchao Xu, Zhong Zhang, Haozhao                    Pan Lu, Hritik Bansal, Tony Xia, Jiacheng Liu, Chun-
+   Wang, Zhicheng Chen, and Peilin Zhao. 2025. Self-               yuan Li, Hannaneh Hajishirzi, Hao Cheng, Kai-
+   introspective decoding: Alleviating hallucinations              Wei Chang, Michel Galley, and Jianfeng Gao. 2024.
+   for large vision-language models. In International              Mathvista: Evaluating mathematical reasoning of
+   Conference on Learning Representations, volume                  foundation models in visual contexts. In Interna-
+   2025, pages 24272­24295.                                        tional Conference on Learning Representations, vol-
+                                                                   ume 2024, pages 23439­23554.
+Ranjay Krishna, Yuke Zhu, Oliver Groth, Justin John-
+   son, Kenji Hata, Joshua Kravitz, Stephanie Chen,             Pan Lu, Swaroop Mishra, Tanglin Xia, Liang Qiu, Kai-
+   Yannis Kalantidis, Li-Jia Li, David A Shamma, and 1             Wei Chang, Song-Chun Zhu, Oyvind Tafjord, Peter
+   others. 2017. Visual genome: Connecting language                Clark, and Ashwin Kalyan. 2022. Learn to explain:
+   and vision using crowdsourced dense image anno-                 Multimodal reasoning via thought chains for science
+   tations. International journal of computer vision,              question answering. Advances in neural information
+   123(1):32­73.                                                   processing systems, 35:2507­2521.
+
+Sicong Leng, Jing Wang, Jiaxi Li, Hao Zhang, Zhiqiang           Yan Ma, Linge Du, Xuyang Shen, Shaoxiang Chen,
+   Hu, Boqiang Zhang, Yuming Jiang, Hang Zhang,                    Pengfei Li, Qibing Ren, Lizhuang Ma, Yuchao Dai,
+   Xin Li, Lidong Bing, and 1 others. 2025. Mmr1:                  Pengfei Liu, and Junjie Yan. 2025. One rl to see
+   Enhancing multimodal reasoning with variance-                   them all: Visual triple unified reinforcement learning.
+   aware sampling and open resources. arXiv preprint               arXiv preprint arXiv:2505.18129.
+   arXiv:2509.21268.
+                                                                Ahmed Masry, Xuan Long Do, Jia Qing Tan, Shafiq Joty,
+Sicong Leng, Hang Zhang, Guanzheng Chen, Xin                       and Enamul Hoque. 2022. Chartqa: A benchmark
+   Li, Shijian Lu, Chunyan Miao, and Lidong Bing.                  for question answering about charts with visual and
+   2024. Mitigating object hallucinations in large vision-         logical reasoning. In Findings of the association for
+   language models through visual contrastive decod-               computational linguistics: ACL 2022, pages 2263­
+   ing. In Proceedings of the IEEE/CVF Conference                  2279.
+   on Computer Vision and Pattern Recognition, pages
+   13872­13882.                                                 Fanqing Meng, Lingxiao Du, Zongkai Liu, Zhixiang
+                                                                   Zhou, Quanfeng Lu, Daocheng Fu, Tiancheng Han,
+Yifan Li, Yifan Du, Kun Zhou, Jinpeng Wang, Xin                    Botian Shi, Wenhai Wang, Junjun He, and 1 oth-
+   Zhao, and Ji-Rong Wen. 2023. Evaluating object                  ers. 2025. Mm-eureka: Exploring the frontiers of
+   hallucination in large vision-language models. In               multimodal reasoning with rule-based reinforcement
+   Proceedings of the 2023 conference on empirical                 learning. arXiv preprint arXiv:2503.07365.
+   methods in natural language processing, pages 292­
+   305.                                                         Anna Rohrbach, Lisa Anne Hendricks, Kaylee Burns,
+                                                                   Trevor Darrell, and Kate Saenko. 2018. Object hallu-
+Tsung-Yi Lin, Michael Maire, Serge Belongie, James                 cination in image captioning. In Proceedings of the
+   Hays, Pietro Perona, Deva Ramanan, Piotr Dollár,                2018 Conference on Empirical Methods in Natural
+   and C Lawrence Zitnick. 2014. Microsoft coco:                   Language Processing, pages 4035­4045.
+   Common objects in context. In European confer-
+   ence on computer vision, pages 740­755. Springer.            Zhiqing Sun, Sheng Shen, Shengcao Cao, Haotian Liu,
+                                                                   Chunyuan Li, Yikang Shen, Chuang Gan, Liangyan
+Fuxiao Liu, Kevin Lin, Linjie Li, Jianfeng Wang, Yaser             Gui, Yu-Xiong Wang, Yiming Yang, and 1 others.
+   Yacoob, and Lijuan Wang. 2024a. Mitigating halluci-             2024. Aligning large multimodal models with factu-
+   nation in large multi-modal models via robust instruc-          ally augmented rlhf. In Findings of the Association
+   tion tuning. In International Conference on Learning            for Computational Linguistics: ACL 2024, pages
+   Representations, volume 2024, pages 57689­57733.                13088­13110.
+
+Hanchao Liu, Wenyuan Xue, Yifei Chen, Dapeng Chen,              Shengbang Tong, Zhuang Liu, Yuexiang Zhai, Yi Ma,
+   Xiutian Zhao, Ke Wang, Liping Hou, Rongjun Li,                  Yann LeCun, and Saining Xie. 2024. Eyes wide
+   and Wei Peng. 2024b. A survey on hallucination                  shut? exploring the visual shortcomings of multi-
+   in large vision-language models. arXiv preprint                 modal llms. In Proceedings of the IEEE/CVF con-
+   arXiv:2402.00253.                                               ference on computer vision and pattern recognition,
+                                                                   pages 9568­9578.
+Sheng Liu, Haotian Ye, and James Y Zou. 2025. Reduc-
+   ing hallucinations in large vision-language models           Tom Vodopivec, Spyridon Samothrakis, and Branko
+   via latent space steering. In International Conference          Ster. 2017. On monte carlo tree search and rein-
+   on Learning Representations, volume 2025, pages                 forcement learning. Journal of Artificial Intelligence
+   72402­72419.                                                    Research, 60:881­936.
+
+Yuan Liu, Haodong Duan, Yuanhan Zhang, Bo Li,                   Junyang Wang, Yuhang Wang, Guohai Xu, Jing Zhang,
+   Songyang Zhang, Wangbo Zhao, Yike Yuan, Jiaqi                   Yukai Gu, Haitao Jia, Jiaqi Wang, Haiyang Xu, Ming
+   Wang, Conghui He, Ziwei Liu, and 1 others. 2024c.               Yan, Ji Zhang, and 1 others. 2023. Amber: An llm-
+   Mmbench: Is your multi-modal model an all-around                free multi-dimensional benchmark for mllms halluci-
+   player? In European conference on computer vision,              nation evaluation. arXiv preprint arXiv:2311.07397.
+   pages 216­233. Springer.
+
+                                                            10
+Xintong Wang, Jingheng Pan, Liang Ding, and Chris                 vision-language models via vision-guided reinforce-
+   Biemann. 2024. Mitigating hallucinations in large              ment learning. arXiv preprint arXiv:2503.18013.
+   vision-language models with instruction contrastive
+   decoding. In Findings of the Association for Compu-         Yuhui Zhang, Yuchang Su, Yiming Liu, Xiaohan Wang,
+   tational Linguistics: ACL 2024, pages 15840­15853.             James Burgess, Elaine Sui, Chenyu Wang, Josiah
+                                                                  Aklilu, Alejandro Lozano, Anjiang Wei, and 1 others.
+Xiyao Wang, Zhengyuan Yang, Chao Feng, Hongjin                    2025. Automated generation of challenging multiple-
+   Lu, Linjie Li, Chung-Ching Lin, Kevin Lin, Furong              choice questions for vision language model evalua-
+   Huang, and Lijuan Wang. 2026. Sota with less: Mcts-            tion. In Proceedings of the Computer Vision and Pat-
+   guided sample selection for data-efficient visual rea-         tern Recognition Conference, pages 29580­29590.
+   soning self-improvement. Advances in Neural Infor-
+   mation Processing Systems, 38:118818­118850.                Zhuosheng Zhang, Aston Zhang, Mu Li, Hai Zhao,
+                                                                  George Karypis, and Alex Smola. 2023. Multi-
+Xuezhi Wang, Jason Wei, Dale Schuurmans, Quoc Le,                 modal chain-of-thought reasoning in language mod-
+   Ed Chi, Sharan Narang, Aakanksha Chowdhery, and                els. arXiv preprint arXiv:2302.00923.
+   Denny Zhou. 2022. Self-consistency improves chain
+   of thought reasoning in language models. arXiv              Zhiyuan Zhao, Bin Wang, Linke Ouyang, Xiaoyi Dong,
+   preprint arXiv:2203.11171.                                     Jiaqi Wang, and Conghui He. 2023. Beyond hallu-
+                                                                  cinations: Enhancing lvlms through hallucination-
+Zhongxing Xu, Chengzhi Liu, Qingyue Wei, Juncheng                 aware direct preference optimization. arXiv preprint
+   Wu, James Zou, Xin Wang, Yuyin Zhou, and Sheng                 arXiv:2311.16839.
+   Liu. 2026. More thinking, less seeing? assessing am-
+   plified hallucination in multimodal reasoning models.       Xianwei Zhuang, Zhihong Zhu, Yuxin Xie, Liming
+   Advances in Neural Information Processing Systems,             Liang, and Yuexian Zou. 2025. Vasparse: Towards
+   38:82878­82905.                                                efficient visual hallucination mitigation via visual-
+                                                                  aware token sparsification. In Proceedings of the
+Xiaochen Yang, Hao Fang, Jiawei Kong, Yaoxin Mao,                 Computer Vision and Pattern Recognition Confer-
+   Bin Chen, and Shu-Tao Xia. 2026. Looking back and              ence, pages 4189­4199.
+   forth: Cross-image attention calibration and atten-
+   tive preference learning for multi-image hallucination
+   mitigation. arXiv preprint arXiv:2603.07048.
+
+Yi Yang, Xiaoxuan He, Hongkun Pan, Xiyan Jiang,
+   Yan Deng, Xingtao Yang, Haoyu Lu, Dacheng Yin,
+   Fengyun Rao, Minfeng Zhu, and 1 others. 2025a.
+   R1-onevision: Advancing generalized multimodal
+   reasoning through cross-modal formalization. In Pro-
+   ceedings of the IEEE/CVF International Conference
+   on Computer Vision, pages 2376­2385.
+
+Zhihe Yang, Xufang Luo, Dongqi Han, Yunjian Xu,
+   and Dongsheng Li. 2025b. Mitigating hallucinations
+   in large vision-language models via dpo: On-policy
+   data hold the key. In Proceedings of the IEEE/CVF
+   Conference on Computer Vision and Pattern Recog-
+   nition, pages 10610­10620.
+
+Tianyu Yu, Yuan Yao, Haoye Zhang, Taiwen He, Yifeng
+   Han, Ganqu Cui, Jinyi Hu, Zhiyuan Liu, Hai-Tao
+   Zheng, Maosong Sun, and 1 others. 2024. Rlhf-v:
+   Towards trustworthy mllms via behavior alignment
+   from fine-grained correctional human feedback. In
+   Proceedings of the IEEE/CVF Conference on Com-
+   puter Vision and Pattern Recognition, pages 13807­
+   13816.
+
+Tianyu Yu, Haoye Zhang, Qiming Li, Qixin Xu, Yuan
+   Yao, Da Chen, Xiaoman Lu, Ganqu Cui, Yunkai
+   Dang, Taiwen He, and 1 others. 2025. Rlaif-v: Open-
+   source ai feedback leads to super gpt-4v trustworthi-
+   ness. In Proceedings of the Computer Vision and Pat-
+   tern Recognition Conference, pages 19985­19995.
+
+Yufei Zhan, Yousong Zhu, Shurong Zheng, Hongyin
+   Zhao, Fan Yang, Ming Tang, and Jinqiao Wang. 2025.
+   Vision-r1: Evolving human-free alignment in large
+
+                                                           11
+A Pseudocode                                                2025; Zhan et al., 2025). Early multimodal rea-
+                                                            soning works construct step-by-step rationales for
+The pseudocode of our RC-DPO is provided in                 visual question answering and science reasoning
+Alg. 1, with the definitions of the associated loss         (Lu et al., 2022; Zhang et al., 2023), while more
+functions detailed in the main text.                        advanced MLRMs enhance long-chain visual rea-
+                                                            soning through supervised fine-tuning (SFT) (Yang
+Algorithm 1 Pseudocode of RC-DPO                            et al., 2025a) and reinforcement learning (RL) (Ma
+                                                            et al., 2025). Various techniques, including data
+Require: 0: the base MLRM; D: the image-                    construction (Meng et al., 2025), sample selection
+     question dataset; S(·): the verifier model; r:         (Wang et al., 2026), and self-improvement (Deng
+     the pruning ratio; Nsft: the number of SFT it-         et al., 2026) have also been explored to further elicit
+     erations; Ndpo: the number of DPO iterations;          and strengthen multimodal reasoning abilities.
+
+Ensure: optimized policy model ;                            B.2 Multimodal Hallucination
+ 1: Initialize   0, DSFT  , Dpref  ;
+ 2: // CoT Format Alignment                                 Extensive studies have demonstrated that multi-
+ 3: for each input x = (v, q)  D do                         modal models are prone to hallucination, i.e., gen-
+ 4: Prompt  to generate step-wise c and a;                  erating fluent and plausible responses that are in-
+ 5: Add (x, c, a) to DSFT;                                  consistent with the visual content (Liu et al., 2024b;
+ 6: end for                                                 Bai et al., 2024; Yang et al., 2026). Existing hal-
+ 7: for i  1 to Nsft do                                     lucination mitigation methods for MLLMs can
+ 8: Update  on DSFT using LSFT in Eq. 4;                    be broadly categorized into training-based and
+ 9: end for                                                 training-free approaches. Training-based methods
+10: Set the SFT-warmed model SFT  ;                         mainly improve cross-modal alignment through
+11: // Preference Data Construction                         high-quality instruction data or advanced alignment
+12: for each input x = (v, q)  D do                         algorithms (Liu et al., 2024a; Yu et al., 2024). In
+13: Conduct MCTS with SFT and S(·);                         contrast, training-free methods intervene during in-
+14: Select (cw, aw) using Eq. 10;                           ference stage, including contrastive decoding (Leng
+15: Sample (c, a)  SFT(·|x);                                et al., 2024; Wang et al., 2024), token pruning (Huo
+16: Compute s(ct) for each CoT token ct;                    et al., 2025; Zhuang et al., 2025), latent steer-
+17: cl  Prune(c; s, r) by Eq. 12;                           ing (Liu et al., 2025), and mutual-information-
+18: Add (x, cw, aw, cl, a) to Dpref ;                       based calibration (Fang et al., 2026b).
+19: end for
+20: // RC-DPO Training                                         In MLRMs, hallucination becomes more sub-
+21: Initialize reference model ref  SFT;                    tle and challenging, since extended reasoning may
+22: for i  1 to Ndpo do                                     amplify reliance on language priors and reduce at-
+23: Sample a mini-batch from Dpref ;                        tention to visual evidence (Xu et al., 2026; Fang
+24: Compute response-level loss LDPO;                       et al., 2026a). Recent work has investigated the
+25: Compute reasoning-conditioned loss LRC;                 relationship between reasoning ability and hallu-
+26: Update  using L = LDPO + LRC;                           cination severity (Xu et al., 2026), while another
+27: end for                                                 line analyzes hallucinations within multimodal rea-
+28: return optimized policy model ;                         soning chains and introduces benchmarks tailored
+                                                            to reasoning hallucination evaluation (Dong et al.,
+B Related Work                                              2026). To mitigate hallucinations in MLRMs, re-
+                                                            cent studies have explored post-alignment with
+B.1 Multimodal Large Reasoning Models                       curated comparison pairs, including AI-feedback-
+                                                            based alignment (Yu et al., 2025), on-policy opti-
+Large Reasoning Models have recently shown                  mization (Yang et al., 2025b), and CoT compres-
+strong capabilities on complex tasks by explicitly          sion (Fang et al., 2026a). However, these methods
+generating intermediate inference steps before pro-         typically rely on coarse-grained supervision, leav-
+ducing final responses (Wang et al., 2022; Guo              ing reasoning chains insufficiently optimized.
+et al., 2025). Inspired by their success, recent stud-
+ies have extended this reasoning-oriented paradigm
+to vision-language scenarios, giving rise to Mul-
+timodal Large Reasoning Models (Leng et al.,
+
+                                                        12
+C MCTS for Positive Data Construction                            Each sampled step is appended to the current tra-
+                                                                 jectory to form a new child node. To control the
+To construct high-quality positive reasoning sam-                search cost, we restrict the maximum number of
+ples, we employ Monte Carlo Tree Search (MCTS)                   children for each node. In this way, MCTS ex-
+over structured CoT trajectories. For each multi-                plores multiple possible reasoning directions while
+modal input x = (v, q), the SFT-warmed model                     maintaining a manageable search space.
+SFT serves as the policy model for expanding
+reasoning paths, while a verifier S(·) evaluates the             C.3 Simulation.
+quality of completed CoT-answer trajectories. Each
+node in the search tree corresponds to a partial rea-            For each newly expanded node, MCTS performs a
+soning trajectory, and each edge represents a newly              rollout to estimate the quality of the corresponding
+generated reasoning step. The goal of MCTS is                    reasoning path. Starting from the partial trajectory
+to explore diverse reasoning paths and identify a                c1:t+1, we use SFT to complete the remaining
+trajectory that is visually grounded, logically con-             reasoning process and generate a full CoT-answer
+sistent, and leads to a correct final answer. Specifi-           trajectory (c, a). The completed trajectory is then
+cally, MCTS iteratively performs four steps: selec-              evaluated by the verifier S(·):
+tion, expansion, simulation, and backpropagation.
+                                                                 R = S(c, a; x),                       (15)
+C.1 Selection
+                                                                 where R denotes the reward assigned to the rollout
+Starting from the root node corresponding to the                 trajectory. The verifier considers the visual consis-
+input x = (v, q), MCTS selects a promising path                  tency of the CoT with the input image, the logical
+from the current search tree. Following the stan-                coherence of the reasoning process, and the correct-
+dard MCTS procedure (Vodopivec et al., 2017), we                 ness of the final answer. Therefore, trajectories that
+use UCB1 algorithm (Chang et al., 2005) to select                are visually grounded, logically valid, and answer-
+the child node s at each intermediate node s:                    correct receive higher rewards, which are later used
+                                                                 to guide the tree search.
+
+s = arg max Q(s) +        log N (s)                              C.4 Backpropagation.
+                          N (s) +  ,
+               sChild(s)                                         After obtaining the verifier reward R, MCTS back-
+                                                                 propagates it along the selected path from the ex-
+                                                       (13)      panded node to the root. For each visited node s,
+where Q(s) denotes the estimated value of child                  we update its visit count and value estimate:
+node s, N (s) and N (s) are the visit counts of the
+
+parent and child nodes, respectively,  controls the              N (s)  N (s) + 1,                     (16)
+
+exploration strength, and  is a small constant for
+
+numerical stability. The first term encourages ex-               Q(s)  Q(s) +  R - Q(s)  .             (17)
+
+ploitation of high-value reasoning paths, while the                            N (s)
+
+second term promotes exploration of less-visited                 Here, N (s) records how many times node s has
+                                                                 been visited, and Q(s) denotes the average reward
+nodes, thereby balancing trajectory quality and                  of trajectories passing through s. This update al-
+                                                                 lows high-quality reasoning paths to receive larger
+diversity. This selection process continues until                value estimates, making them more likely to be
+                                                                 selected in subsequent iterations.
+reaching a leaf node that has not been expanded.
+                                                                    By repeatedly performing selection, expansion,
+C.2 Expansion.                                                   simulation, and backpropagation, MCTS gradually
+                                                                 concentrates the search on promising reasoning
+After the selection stage reaches an expandable leaf             trajectories. After the search terminates, we select
+node s, MCTS expands the search tree by generat-                 the trajectory with the highest verifier score as the
+ing new child nodes from s. In our setting, each                 positive CoT-answer sample:
+node represents a partial reasoning trajectory, and
+each child node corresponds to extending the cur-                (cw, aw) = arg max S(c, a; x),
+rent trajectory with a newly generated reasoning
+step. Specifically, we use the SFT-warmed model                                            (c,a)T (x)
+SFT to sample candidate next steps conditioned
+on the input x and the current partial CoT c1:t:
+
+ct+1  SFT(·|x, c1:t).     (14)                                   where T (x) denotes the set of completed trajecto-
+                                                                 ries explored during MCTS. The selected trajectory
+
+                                                             13
+is then used as the positive CoT-answer pair for sub-      settings: random, popular, and adversarial, where
+sequent preference optimization.                           absent objects are sampled randomly, from frequent
+                                                           object categories, or from objects that frequently
+D Experimental Details                                     co-occur with present objects. We report accuracy
+                                                           and F1 score, where higher values indicate stronger
+D.1 Evaluated Models                                       object grounding ability.
+
+As mentioned in the main text, we adopt R1-                MMHal-Bench. MMHal-Bench (Sun et al.,
+Onevision-7B (Yang et al., 2025a), MM-Eureka-              2024) is designed to evaluate hallucinations in
+7B (Meng et al., 2025), ThinkLite-VL-7B (Wang              open-ended multimodal responses. It contains chal-
+et al., 2026), and OpenVLThinker-7B (Deng et al.,          lenging image-question pairs that require models to
+2026). These models are selected because they fol-         generate visually grounded answers rather than re-
+low the reason-before-answer paradigm and gen-             lying on language priors. The benchmark evaluates
+erate explicit CoT-style reasoning before final an-        both response quality and hallucination severity,
+swers, making them suitable for evaluating CoT-            making it suitable for assessing whether a model
+level hallucination mitigation. Specifically, R1-          can produce helpful yet faithful answers. We use
+Onevision is designed for general multimodal rea-          MMHal-Bench to examine whether RC-DPO re-
+soning, while MM-Eureka and ThinkLite-VL fo-               duces hallucinations in more natural open-ended
+cus on long-chain visual reasoning and multimodal          vision-language interactions.
+problem solving. OpenVLThinker further enhances
+complex vision-language reasoning through itera-           GPT-4 Assisted Evaluation. To quantify hallu-
+tive training. Their diverse training recipes and          cinations in detailed image descriptions, we adopt
+reasoning behaviors allow us to assess the general-        GPT-4 assisted evaluation following established
+izability of RC-DPO across different MLRMs.                protocols. Specifically, models are prompted to
+                                                           generate detailed captions for images from the Vi-
+D.2 Evaluation Benchmarks                                  sual Genome dataset (Krishna et al., 2017), and
+                                                           GPT-4 is used to identify hallucinated or contra-
+Object HalBench. Caption Hallucina-                        dictory statements by comparing the generated de-
+tion Assessment with Image Relevance                       scriptions with the ground-truth annotations. This
+(CHAIR) (Rohrbach et al., 2018) is a widely                evaluation complements object-centric metrics by
+used metric for evaluating object hallucination in         capturing broader hallucination types, such as at-
+image captioning. It measures whether generated            tribute, position, and relation errors. Following
+captions mention objects that are not present in           the judge-based protocol, GPT-4 is instructed to
+the ground-truth object annotations. Following             mark statements that are inconsistent with the vi-
+prior work, we report both CHAIRS and CHAIRI ,             sual annotations and to summarize the degree of
+defined as:                                                hallucination in the generated response.
+
+      CI     |hallucinated objects|                        AMBER. AMBER (Wang et al., 2023) is an
+          =                            ,                   LLM-free multi-dimensional benchmark for eval-
+             |all  mentioned  objects|                     uating hallucinations in MLLMs. It covers both
+                                                           generative and discriminative evaluation settings
+CS =  |captions with hallucinated objects|                 and considers multiple hallucination types, includ-
+                                                .          ing existence, attribute, and relation hallucinations.
+                   |all captions|                          Instead of relying on an external LLM judge, AM-
+                                                           BER provides fine-grained annotations and auto-
+Here, CS measures the proportion of captions con-          matic evaluation protocols, enabling scalable and
+taining at least one hallucinated object, while CI         reproducible hallucination assessment.
+measures the proportion of hallucinated object in-
+stances among all mentioned objects. Lower values          MME. MME (Fu et al., 2026) is a comprehensive
+indicate fewer object hallucinations.                      benchmark for evaluating multimodal perception
+                                                           and cognition abilities. It contains fine-grained
+POPE. Polling-based Object Probing Evaluation              image-grounded questions across multiple cate-
+(POPE) (Li et al., 2023) evaluates object halluci-         gories, including object recognition, OCR, count-
+nation through binary object-existence questions.          ing, commonsense reasoning, and other visual un-
+Given an image, POPE asks questions in the for-
+mat of "Is there a <object> in the image?"
+and compares the model's yes/no responses with
+ground-truth labels. It includes three evaluation
+
+                                                       14
+Table 3: Comparison of RC-DPO with baseline methods on the POPE benchmark.
+
+Model          Method   Random                            Popular         Adversarial
+
+                        Accuracy F1 Score Accuracy F1 Score Accuracy F1 Score
+
+ThinkLite-VL   Vanilla  88.37%  86.98%                    86.73%  85.41%  85.73%  84.48%
+               VCD      88.57%  87.23%                    86.97%  85.74%  86.07%  84.87%
+               SID      88.87%  87.66%                    86.97%  85.80%  86.10%  85.06%
+               RLAIF-V  87.90%  86.34%                    86.73%  85.22%  85.40%  83.97%
+               OPA-DPO  89.23%  88.09%                    87.40%  86.33%  86.13%  85.16%
+               RC-DPO   90.73%  90.07%                    88.03%  87.55%  86.00%  85.73%
+
+OpenVLThinker  Vanilla  85.77%  83.52%                    84.73%  82.52%  84.20%  82.02%
+               VCD      86.40%  84.38%                    85.47%  83.51%  84.37%  82.41%
+               SID      86.77%  84.86%                    85.73%  83.90%  84.53%  82.63%
+               RLAIF-V  84.53%  81.78%                    83.63%  80.86%  82.93%  80.20%
+               OPA-DPO  87.27%  85.53%                    85.87%  84.19%  85.20%  83.57%
+               RC-DPO   87.63%  86.20%                    86.00%  84.46%  84.87%  83.41%
+
+derstanding tasks. The benchmark uses a unified           MMVP. MMVP (Tong et al., 2024) is designed
+question-answering format to assess whether mod-          to diagnose the visual shortcomings of multimodal
+els can produce accurate and image-grounded re-           models. It highlights failure cases where mod-
+sponses. It reports separate scores for perception        els tend to rely on language priors or insufficient
+and cognition, enabling a more detailed analysis          visual representations, particularly when images
+of model capabilities. We use MME to examine              contain subtle but semantically critical visual dif-
+whether RC-DPO preserves general multimodal               ferences. The benchmark consists of challenging
+understanding while mitigating hallucinations.            visual patterns that require careful perception and
+                                                          fine-grained discrimination. We use MMVP to as-
+MMBench. MMBench (Liu et al., 2024c) is a                 sess whether fine-grained visual grounding ability
+large-scale multimodal benchmark designed to              is preserved after optimization.
+evaluate diverse vision-language abilities. It con-
+tains carefully curated multiple-choice questions         D.3 Implementation Details
+covering fine-grained perception, attribute recogni-
+tion, spatial understanding, logical reasoning, and       SFT Format Alignment. We conduct the SFT
+commonsense reasoning. MMBench also adopts                warm-up with LoRA for parameter-efficient fine-
+robust evaluation strategies to reduce answer-            tuning. For all models, LoRA is applied to the
+position bias and improve evaluation reliability.         language-model components, while the vision en-
+                                                          coder remains frozen. The LoRA rank is set to 8,
+VMCBench. VMCBench (Zhang et al., 2025) is                and the scaling factor is set to 16. We train each
+a multiple-choice vision-language benchmark con-          model for 1 epoch with a learning rate of 5e-5, us-
+structed by converting diverse VQA datasets into          ing AdamW as the optimizer and a linear warmup-
+a unified evaluation format. It covers a wide range       decay scheduler. The maximum sequence length is
+of visual and linguistic contexts, including percep-      set to 2048, and the global batch size is set to 64.
+tion, recognition, reasoning, and commonsense un-         Training is performed with bfloat16 precision and
+derstanding, and is designed to provide scalable,         takes about 1.5 hours on four L20 GPUs.
+consistent, and reproducible evaluation of VLMs.
+By using multiple-choice questions, VMCBench              Positive Sample Construction. For MCTS-
+reduces ambiguity in open-ended evaluation while          based positive sample construction, we adopt the
+preserving the difficulty of visual understanding         UCB1 algorithm for node selection to balance tra-
+tasks. Its diverse data sources and unified format        jectory quality and diversity. To control the search
+make it suitable for assessing whether a method           cost, we set the maximum number of children per
+generalizes beyond a specific task or dataset. We         node to 3, the maximum depth to 10, and the maxi-
+use VMCBench to evaluate the generalization abil-         mum number of search iterations to 30. During the
+ity across diverse multimodal reasoning scenarios.        simulation stage, Qwen3-VL (Bai et al., 2025) is
+
+                                                      15
+         Table 4: Comparison of RC-DPO with baseline methods on the MMHal-Bench.
+
+Method   MM-Eureka                     R1-Onevision            ThinkLite-VL                                           OpenVLThinker
+
+         Avg Score Hal Rate Avg Score Hal Rate Avg Score Hal Rate Avg Score Hal Rate
+
+Vanilla  3.33              54.17%      2.66       65.62%       2.56                                        68.75%     2.91          63.54%
+
+VCD      3.24              54.17%      2.57       68.75%       3.29                                        55.21%     2.98          61.46%
+
+SID      2.99              61.46%      2.68       66.67%       3.27                                        55.21%     2.91          63.54%
+
+RLAIF-V  3.10              57.29%      2.97       59.38%       3.01                                        60.42%     2.83          61.46%
+
+OPA-DPO 3.27               54.17%      2.86       62.50%       3.35                                        55.21%     2.79          66.67%
+
+RC-DPO   4.01              40.62%      3.29       55.21%       3.75                                        43.75%     3.34          52.08%
+
+                                   Full Response          CoT                                              Answer
+
+             R1-Onevision                       MM-Eureka                                                         30  ThinkLite-VL
+                                                                                                                  25
+40                                 35                                                                             20
+35
+30                                 30
+25
+CHAIR S                            25
+                                                  CHAIR S
+                                                                                                    CHAIR S
+
+                                   20
+
+20                                 15                                                                        15
+
+      Vanilla OPA-DPO RC-DPO             Vanilla OPA-DPO RC-DPO                                                    Vanilla OPA-DPO RC-DPO
+
+Figure 6: Segment-level CHAIRS results on Object HalBench. We compare Vanilla, OPA-DPO, and RC-DPO
+across three MLRMs, and report CHAIRS scores for the full response, CoT, and final answer separately.
+
+used as the verifier to score each trajectory based       E More Experimental Results
+on the prompt shown in Figure 10.
+                                                          E.1 POPE Evaluation
+Negative Sample Construction. For negative
+sample construction, we compute image-to-CoT              Table 3 provides additional POPE results on
+attention scores to quantify the visual relevance of      ThinkLite-VL and OpenVLThinker, complement-
+CoT tokens, and prune the top-ranked important            ing the main results reported in Table 2. Despite the
+tokens to construct corrupted CoTs. We use all            stronger vanilla performance of these models, RC-
+attention layers and heads to calculate the scores        DPO consistently improves over the vanilla base-
+and set the pruning ratio to r = 20%. Since one           lines across all three POPE settings and achieves
+word may correspond to multiple subword tokens,           the best results in most metrics. On average across
+we apply max pooling over subword-level scores to         the random, popular, and adversarial settings, RC-
+obtain word-level importance scores and determine         DPO improves the F1 score by 2.16% on ThinkLite-
+the words to be removed.                                  VL and 2.00% on OpenVLThinker. Moreover, RC-
+                                                          DPO outperforms other baselines in most settings,
+Preference learning. In the preference learning           especially on ThinkLite-VL, where it achieves the
+stage, we optimize the policy model with the com-         best F1 score under all three settings. These results
+bined RC-DPO objective. The SFT-warmed model              further demonstrate the robustness and generaliz-
+SFT is used as the fixed reference model ref . We         ability of RC-DPO on stronger MLRM backbones.
+train the model for 1 epoch with a learning rate
+of 1e-6 and a batch size of 32. The maximum se-           E.2 Object HalBench Evaluation
+quence length is set to 2048, and Adam is used as
+the optimizer. This training stage takes around 4         To provide a more fine-grained analysis, we de-
+hours on four L20 GPUs.                                   compose each generated response into CoT and
+                                                          final-answer segments, and compute CHAIRS for
+                                                          the full response, CoT, and answer separately. As
+                                                          shown in Figure 6, the vanilla models exhibit sub-
+                                                          stantially higher hallucination scores in the CoT
+                                                          than in the final answer, which largely contributes
+
+                                                      16
+       Table 5: Comparison of RC-DPO with baseline methods on the AMBER benchmark.
+
+Model         Method               Generative                         Discriminative
+
+                       CHAIR Cover HalRate Cog Accuracy Precision Recall F1 Score
+
+              Vanilla  4.0         59.3    21.2 1.2 85.99 87.30 91.65 89.41
+
+              VCD      4.8         61.5    24.3 1.4 86.22 87.60 91.63 89.57
+
+MM-Eureka     SID      4.6         60.7    23.7 1.1 86.02 87.61 91.13 89.33
+              RLAIF-V  4.1         56.0
+                                           18.0            1.1 85.62  86.44 92.21 89.22
+
+              OPA-DPO 5.1          57.5    21.5 1.6 86.23 87.28 92.11 89.63
+
+              RC-DPO   3.9         56.2    16.2            1.0 86.34  87.62 91.83 89.67
+
+              Vanilla  6.6         63.7    35.6 2.1 70.23 85.28 65.16 73.87
+
+              VCD      7.8         63.9    40.4 2.0 70.69 86.03 65.21 74.18
+
+R1-Onevision  SID      7.9         64.7    39.1 2.1 70.39 85.46 65.26 74.00
+              RLAIF-V  6.8         64.4    36.8 2.4 72.40 86.09 68.32 76.18
+
+              OPA-DPO 6.6          62.9    32.8 1.8 77.36 86.76 76.64 81.38
+
+              RC-DPO   4.4         59.5    20.8 1.2 85.28 87.52 90.05 88.76
+
+              Vanilla  4.0         58.3    18.3 1.0 86.38 88.97 90.09 89.52
+
+              VCD      4.6         58.1    20.2            1.0 86.46  89.60 89.41 89.50
+
+ThinkLite-VL  SID      4.4         57.8    19.8 1.0 85.78 89.40 88.49 88.94
+              RLAIF-V  4.4         57.9    21.6 1.5 86.42 89.13 89.95 89.53
+
+              OPA-DPO 4.6          61.5    25.2            1.8 86.73  89.10 90.54 89.81
+
+              RC-DPO   3.8         56.8    15.2            1.0 86.80  89.56 90.07 89.81
+
+84
+                                                               76
+
+Score
+                                                    Accuracy (%)
+82
+
+                                                               74
+80
+
+78                                                                72
+
+76 Vanilla VCD SID RLAIF-V OPA-DPO RC-DPO                         70 Vanilla VCD SID RLAIF-V OPA-DPO RC-DPO
+
+Figure 7: Overall MMBench scores of RC-DPO and Figure 8: MMVP accuracy of RC-DPO and baseline
+
+baseline methods on MM-Eureka-7B.                          methods on MM-Eureka-7B.
+
+to the high hallucination rate of the full response.       for mitigating hallucinations in MLRMs.
+OPA-DPO, based on response-level preference op-
+timization, alleviates hallucinations to some extent       E.3 MMHal-Bench Evaluation
+on several models. However, due to the answer-
+shortcut phenomenon discussed in Section 2, CoT            MMHal-Bench evaluates hallucinations in open-
+hallucination remains significantly higher than an-        ended multimodal responses. Following the stan-
+swer hallucination, indicating that reasoning chains       dard evaluation protocol, we prompt each model
+are still insufficiently aligned. In contrast, RC-DPO      to generate answers for the image-question pairs
+strengthens CoT-level alignment by explicitly opti-        in MMHal-Bench, and then use GPT-4 to judge
+mizing the reasoning-conditioned preference signal.        the response quality and hallucination severity. We
+As a result, it reduces hallucinations not only in         report the average response score and hallucination
+the final answer but also in the CoT segment, lead-        rate, where a higher average score indicates bet-
+ing to a more consistent reduction in full-response        ter answer quality and a lower hallucination rate
+hallucination. These results further demonstrate           indicates fewer hallucinated contents.
+that explicit reasoning-chain alignment is crucial
+                                                              As shown in Table 4, RC-DPO consistently
+                                                           achieves the best performance across all four ML-
+                                                           RMs. Specifically, RC-DPO obtains the highest
+
+                                                       17
+Table 6: Performance comparison of RC-DPO and baseline methods on the MME benchmark with MM-Eureka.
+
+Method                    Perception                                                    Cognition
+                  Position Color Scene OCR                Total Commonsense Calculation Translation Code
+         Total
+
+Vanilla  1595.77  141.67  180.00  145.00  170.00      706.79  144.29         192.50  185.00  185.00
+VCD      1596.14  131.67  165.00  148.00  162.50      715.36  152.86         200.00  177.50  185.00
+SID      1596.38  135.00  175.00  146.50  175.00      705.00  150.00         192.50  177.50  185.00
+RLAIF-V  1539.52  151.67  185.00  139.75  170.00      708.93  161.43         200.00  170.00  177.50
+OPA-DPO  1557.08  141.67  180.00  147.50  147.50      702.86  147.86         185.00  192.50  177.50
+RC-DPO   1613.03  153.33  185.00  150.50  192.50      718.93  156.43         200.00  185.00  177.50
+
+Table 7: Performance comparison of RC-DPO and baseline methods on VMCBench with MM-Eureka
+
+Method Overall MMMU MathVista AI2D VQAv2 SEEDBench General TextVQA MMStar DocVQA A-OKVQA
+
+Vanilla  80.88    57.93   73.27   79.04  90.05        76.05   83.52   96.63  63.66   91.76   88.47
+VCD      80.95    57.93   74.63   79.73  89.81        78.52   84.25   96.4   65.08   90.87   89.18
+SID      80.72    58.89   74.22   78.59  89.58        79.26   83.99   95.51  61.76   91.09   88.71
+RLAIF-V  80.85    57.45   69.31   80.87  90.51        79.26   84.21   96.4   65.8    95.32   88.71
+OPA-DPO  81.39    58.89   73.76   77.9   90.51        80.74   84.09   96.85  64.61   98.44   89.65
+RC-DPO   81.55    59.62   74.26   80.41  91.44        80.25   84.73   97.53  65.08   98.44   90.12
+
+average score and the lowest hallucination rate on        the MME benchmark, as shown in Table 6. RC-
+four MLRMs. The improvement is particularly               DPO achieves the best overall performance in both
+clear on MM-Eureka, where RC-DPO increases the            perception and cognition categories. In the percep-
+average score from 3.33 to 4.01 and reduces the hal-      tion subset, RC-DPO consistently improves fine-
+lucination rate from 54.17% to 40.62% compared            grained visual understanding, obtaining the highest
+with the vanilla model. Similar trends are observed       scores on position, color, scene, and OCR. No-
+on the other models, demonstrating that RC-DPO            tably, the OCR score increases from 170.00 to
+effectively improves open-ended response faithful-        192.50 compared with the vanilla model, indicat-
+ness while maintaining answer quality.                    ing stronger visual-text grounding after reasoning-
+                                                          chain alignment. In the cognition subset, RC-DPO
+E.4 AMBER Evaluation                                      also achieves the highest total score and performs
+                                                          competitively across multiple subtasks. These re-
+We also report the results on the AMBER bench-            sults show that RC-DPO does not sacrifice general
+mark in Table 5, which includes both generative           multimodal capabilities while mitigating halluci-
+and discriminative hallucination evaluations. RC-         nations. Instead, it further improves the model's
+DPO achieves consistently strong performance              perception and reasoning performance.
+across the three evaluated MLRMs. In the gener-
+ative setting, RC-DPO obtains the lowest CHAIR,           E.6 MMBench Evaluation
+HalRate, and Cog scores on all models, indicat-
+ing that it effectively reduces hallucinated content      MMBench is a general-purpose multimodal bench-
+while improving response faithfulness. Specifically,      mark designed to evaluate the comprehensive
+the improvements are particularly significant on R1-      vision-language understanding ability of MLLMs.
+Onevision, where RC-DPO reduces HalRate from              Following the official evaluation protocol, we
+35.6 to 20.8 compared with the vanilla model. In          prompt each model to answer multiple-choice ques-
+the discriminative setting, RC-DPO also achieves          tions and report the overall score. This benchmark
+the best overall performance in most metrics, espe-       allows us to examine whether hallucination mitiga-
+cially improving the F1 score from 73.87 to 88.76         tion affects general multimodal capability beyond
+on R1-Onevision. These results further demon-             hallucination-oriented evaluation.
+strate that RC-DPO generalizes well to both open-
+ended generation and discriminative evaluations.             As shown in Figure 7, RC-DPO achieves the
+                                                          highest overall score among all compared meth-
+E.5 MME Evaluation                                        ods. Compared with the vanilla model and existing
+                                                          baselines, RC-DPO brings consistent improvement,
+To assess the impact of RC-DPO on general mul-            indicating that reasoning-chain alignment does not
+timodal performance, we evaluate MM-Eureka on             compromise general multimodal understanding. In-
+
+                                                      18
+stead, by encouraging more faithful intermediate            G Visualization Results
+reasoning, RC-DPO further improves the overall
+performance on broad vision-language tasks.                 To visually demonstrate the effectiveness of our ap-
+                                                            proach, we present qualitative captioning examples
+E.7 MMVP Evaluation                                         on Object HalBench in Figure 11. The results show
+                                                            that RC-DPO generates more visually grounded
+MMVP focuses on evaluating fine-grained visual              descriptions and effectively reduces hallucinations
+perception and is designed to expose visual short-          compared with baseline methods.
+comings of multimodal models, especially cases
+where models rely on language priors instead of
+carefully grounding their answers in the image.
+Following the official protocol, we evaluate each
+method on MMVP and report the accuracy.
+
+   As shown in Figure 8, RC-DPO achieves the
+best accuracy among all compared methods. The
+improvement over the vanilla model and baseline
+approaches suggests that RC-DPO preserves and
+enhances fine-grained visual grounding ability dur-
+ing hallucination mitigation. These results fur-
+ther demonstrate that explicitly aligning reason-
+ing chains can improve visual faithfulness without
+sacrificing perception-oriented capabilities.
+
+E.8 VMCBench Evaluation
+
+VMCBench offers a comprehensive evaluation of
+multimodal capability by covering diverse subtasks,
+including mathematical reasoning, diagram under-
+standing, general VQA, text-rich image understand-
+ing, document comprehension, and knowledge-
+based VQA. Therefore, it provides a broader test
+of whether hallucination mitigation preserves gen-
+eral reasoning and perception abilities. As shown
+in Table 7, RC-DPO achieves the highest overall
+score on MM-Eureka, improving the vanilla model
+from 80.88 to 81.55 and outperforming all base-
+line methods. This gain is not driven by a single
+subtask; RC-DPO achieves the best results on mul-
+tiple subtasks, including MMMU, VQAv2, and
+DocVQA, covering both perception-oriented and
+reasoning-oriented evaluations. These results in-
+dicate that RC-DPO improves overall multimodal
+performance while maintaining strong capabilities
+across diverse tasks.
+
+F Prompt
+
+In this section, we present the prompts used in our
+experiments. Specifically, Figure 9 shows the few-
+shot prompt used to generate well-structured rea-
+soning trajectories for MCTS-based positive sam-
+ple construction, while Figure 10 illustrates the ver-
+ifier prompt used for trajectory evaluation during
+the simulation stage of MCTS.
+
+                                                        19
+    Prompt
+
+   You are a multimodal reasoning assistant.
+   You are given an image and a question about the image. Your task is to answer the question
+    accurately by reasoning step by step STRICTLY based on what is visible in the image.
+   You MUST strictly follow the format below.
+
+    ===================== OUTPUT FORMAT =====================
+   You MUST produce TWO sections in the following order:
+   <think> REASONING CONTENT </think>
+   <answer> FINAL ANSWER CONTENT </answer>
+
+    ============= REASONING FORMAT (INSIDE <think>) =============
+   1. Think step by step using explicit reasoning.
+    2. Each reasoning step MUST:
+   - Describe exactly ONE logical step
+   - Be directly grounded in clearly observable visual evidence
+   - Avoid unsupported assumptions or speculation
+   - End with the special token <END>
+
+    =========== FINAL ANSWER FORMAT (INSIDE <answer>) ===========
+   After completing all reasoning steps, provide the final answer.
+   The final answer MUST:
+   - Be written as a coherent and natural paragraph
+   - Directly and fully answer the question
+   - Be fluent and precise in expression
+   - NOT include <END>
+
+    ===================== IMPORTANT RULES =====================
+   - Do NOT repeat the question.
+   - Do NOT add extra explanations outside the specified format.
+   - Do NOT introduce information that is not supported by the image.
+   - Do NOT guess or infer details that cannot be visually verified.
+   - Do NOT produce any content outside <think> and <answer>.
+
+    ===================== EXAMPLE 1 =====================
+    Image: A photo shows several crafting tools on a table, including scissors, a hole punch, and
+    cutting tools.
+    Question: Who is more likely to use these tools, a leather crafter or a paper crafter?
+   Answer: <think> ### Step 1: The image shows tools such as scissors, a hole punch, and cutting
+    implements placed together. <END> ### Step 2 ... </think> <answer> ... </answer>
+
+    ===================== EXAMPLE 2 =====================
+    Image: A woman stands on a red carpet holding a microphone, with cameras pointed toward her
+    and brand logos visible in the background.
+    Question: What are the main elements in this image?
+   Answer: <think> ### Step 1: The image clearly shows a woman ... <END> ### Step 2 ...
+   </think> <answer> ... </answer>
+
+    ===================== NOW ANSWER THE QUESTION =====================
+
+Figure 9: Few-shot prompt used to generate well-structured reasoning trajectories for MCTS-based positive
+sample construction. Parts of the demonstrations are omitted due to space limitations.
+
+                                                            20
+Prompt
+
+You are a strict hallucination inspector for multimodal question answering.
+
+You will be given:
+- An image
+- A question
+- A model-generated answer
+
+Important rules:
+- The image is the ONLY ground truth.
+- You must rely ONLY on what is clearly visible in the image.
+- Do NOT assume, infer, or guess any information that is not visually evident.
+- If something cannot be confirmed from the image, treat it as NOT SUPPORTED.
+- Ignore fluency, style, and completeness.
+- Focus ONLY on hallucinations.
+
+Step 1: Decompose the model-generated answer into individual factual statements (atomic
+claims). Each statement should describe a single object, attribute, action, or relationship.
+
+Step 2: For each statement, judge whether it is:
+- SUPPORTED by the image (clearly visible)
+- NOT SUPPORTED by the image (not visible or cannot be confirmed)
+- CONTRADICTED by the image (clearly inconsistent with the image)
+
+Hallucination includes:
+- Mentioning objects not visible in the image
+- Inventing attributes, actions, or relationships not supported by the image
+- Making claims that contradict the image content
+- Making assumptions beyond what is directly observable (e.g., intent, identity, causality)
+- Adding unnecessary or irrelevant statements that are not required to answer the question
+
+Step 3: Briefly summarize:
+- The number of hallucinated statements
+- Their types (NOT SUPPORTED or CONTRADICTED)
+
+Step 4: Assign a final score based STRICTLY on hallucination severity:
+- **2**: No hallucination. All statements are directly supported by the image and relevant to the
+question.
+- **1**: Minor issues. One or two statements are not fully supported or slightly irrelevant.
+- **0**: Major hallucination. Multiple unsupported statements or any clear contradiction.
+
+Output format (STRICT):
+Reason: <one or two sentences explaining hallucination judgment>
+Score: <0|1|2>
+Do NOT output anything else.
+
+===================== INPUT =====================
+[Question]: {}
+[Model-Generated Answer]: {}
+
+===================== OUTPUT =====================
+
+     Figure 10: Prompt used to verify the quality of CoT-answer trajectories during MCTS sampling.
+
+                                                        21
+                                               Instruction
+
+                                                              (max new tokens=1024)
+
+                                       Provide a thorough description
+                                                of the given image.
+
+  Vanilla:"<think>\nThe image shows a kitchen counter with various objects. In the foreground, there is a butternut squash placed
+  on top of two bananas. The squash is light orange and has a long, narrow shape with a slightly curved neck. The bananas are
+  yellow with some brown spots, indicating they are ripe. To the right of the squash and bananas, there is a small, round, metallic
+  object that appears to be a kitchen scale. The scale has a reflective surface on top and a digital display. In the background, there is
+  a red decorative bowl and a plastic container. There is also a box of what looks like a food product and a bottle of milk. The over
+  all setting suggests a domestic kitchen environment.\n</think>\n<answer>\nThe image shows a kitchen counter with a butter
+  nut squash placed on top of two bananas. The squash is light orange and has a long, narrow shape with a slightly curved neck.
+  The bananas are yellow with some brown spots. To the right of the squash and bananas, there is a small, round, metallic object
+  that appears to be a kitchen scale. In the background, there is a red decorative bowl and a plastic container. There is also a box of
+  what looks like a food product and a bottle of milk. The overall setting suggests a domestic kitchen environment.</answer>"
+
+  RLAIF-V:"<think>\nThe image shows a kitchen countertop with various items on it. In the foreground, there is a butternut
+  squash placed on top of two bananas. The squash is light orange and has a long, narrow shape with a slightly curved neck. The
+  bananas are yellow with some brown spots, indicating they are ripe. To the right of the squash and bananas, there is a small,
+  round, metallic object that appears to be a kitchen scale. The scale has a reflective surface on its top. In the background, there is
+  a red decorative bowl, a plastic container, and a bottle of what looks like a condiment or sauce. The lighting in the image is
+  warm, suggesting it might be taken in the evening or in a dimly lit room. The overall scene gives a casual, homey feel.\n
+  </think>\n <answer>\nThe image shows a kitchen countertop with a butternut squash placed on top of two bananas. The squash
+  is light orange and has a long, narrow shape with a slightly curved neck. The bananas are yellow with some brown spots,
+  indicating they are ripe. To the right of the squash and bananas, there is a small, round, metallic object that appears to be a
+  kitchen scale. The scale has a reflective surface on its top. In the background, there is a red decorative bowl, a plastic container,
+  and a bottle of what looks like a condiment or sauce. The lighting in the image is warm, suggesting it might be taken in the
+  evening or in a dimly lit room. The overall scene gives a casual, homey feel.\n</answer>"
+
+  OPA-DPO:"<think>The image shows a kitchen counter with various objects. In the foreground, there is a butternut squash
+  placed on top of two bananas. The squash is light orange in color and has a long, narrow shape with a slightly curved neck. The
+  bananas are yellow with some brown spots, indicating they are ripe. To the right of the squash and bananas, there is a small,
+  round, metallic object that appears to be a kitchen tool or utensil. In the background, there is a red decorative bowl and a plastic
+  container. The countertop is a light color, and there are some items in the background, including a box and a bottle. The overall
+  setting suggests a kitchen environment.</think><answer>The image shows a butternut squash placed on top of two bananas,
+  creating an amusing visual effect. The squash is positioned in such a way that it resembles a human figure, with the neck of the
+  squash forming the head and the bananas serving as legs. This playful arrangement is likely intended to be humorous or
+  whimsical, as it creates an unexpected and entertaining image. The presence of other kitchen items in the background, such as a
+  red decorative bowl and a plastic container, suggests that this scene takes place in a kitchen setting. The combination of the
+  squash and bananas, along with the other objects, creates a casual and homey atmosphere.</answer>"
+
+   RC-DPO:"<think>\n### Step 1: The image shows a kitchen counter with various objects placed on it. <END>\n### Step 2: In
+   the foreground, there is a butternut squash positioned upright, with its stem pointing upwards. <END>\n### Step 3: Below the
+   squash, there are three bananas arranged in a row. <END>\n### Step 4: To the right of the squash and bananas, there is a digital
+   scale with a metallic surface. <END>\n### Step 5: In the background, there is a red decorative bowl and a plastic container,
+   possibly for food storage. <END>\n### Step 6: The lighting in the image is warm, suggesting it might be taken in a home
+   kitchen environment. <END>\n</think>\n<answer>\nThe image depicts a kitchen counter with a butternut squash standing
+   upright and three bananas placed below it. To the right, there is a digital scale, and in the background, there is a red decorative
+   bowl and a plastic container. The setting appears to be a home kitchen, illuminated by warm lighting.\n</answer>"
+
+Figure 11: Visualization results comparing our RC-DPO and other methods on MM-Eureka-7B. Hallucinations are
+marked in red.
+
+                                                             22
+

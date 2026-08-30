@@ -1,0 +1,160 @@
+Token-weighted Direct Preference Optimization with Attention
+Chengyu Huang1 Zhuohang Li2 Sheng-Yen Chou1 Claire Cardie1 1Cornell University 2Vanderbilt University
+{ch2263,sc3379,ctc9}@cornell.edu, zhuohang.li@vanderbilt.edu
+
+arXiv:2605.21883v2 [cs.CL] 26 May 2026
+
+Abstract
+Direct Preference Optimization (DPO) aligns Large Language Models with human preferences without the need for a separate reward model. However, DPO treats all tokens in responses equally, neglecting the differing importance of individual tokens. Existing token-level PO methods compute the token weights using either token-position-based heuristic functions or probability estimates given by a separately trained model, which lacks robustness and incurs extra training cost. In contrast, we propose Token-weighted DPO (TwDPO)--a novel training objective grounded on tokenweighted RL--and AttentionPO--an instantiation of TwDPO that uses attention from the LLM itself to estimate token weights. AttentionPO prompts the LLM to serve as a pairwise judge and check where the model attends when comparing the responses. This design makes AttentionPO content-aware, adjusting weights based on response content, and efficient, incurring only two extra forward passes per example. Experiment results show that AttentionPO significantly improves performance on AlpacaEval, MT-Bench, and ArenaHard, surpassing existing Preference Optimization methods. GitHub: https://github.com/ HCY123902/AttentionPO
+1 Introduction
+The alignment of Large Language Models (LLMs) with human preferences and values is critical for ensuring the quality and safety of generated outputs. Early efforts in this domain utilized policygradient reinforcement learning (RL) algorithms like Proximal Policy Optimization (PPO) (Schulman et al., 2017; Ouyang et al., 2022). However, these traditional RL methods require training a separate reward model on annotated preference pairs to provide feedback during training (Ouyang et al., 2022). To address this complexity, Preference Optimization (PO) methods such as Direct Preference
+
+(; )
+
+= - ,, ~
+
+
+
+
+
+(|) (|)
+
+-
+
+
+
+ ( | )  ( | )
+
+(; )
+
+= - ,, ~ 
+
+||
+
+||
+
+=1
+
+
+
+( |) ( |)
+
+-
+
+| |
+
+||
+
+=1
+
+
+
+(|)  ( | )
+
+Results with  =LLaMA-3-8B-Instruct
+
+Figure 1: AttentionPO weighs each token by attention, surpassing DPO and various other baselines.
+Optimization (DPO) (Rafailov et al., 2023) have emerged. DPO's training objective is derived from the policy gradient, but it learns the reward landscape directly from preference pairs, avoiding the need for an external reward model.
+Despite the advancements introduced by DPO and its variants--including IPO (Azar et al., 2024), KTO (Ethayarajh et al., 2024), and SimPO (Meng et al., 2024)--these methods generally treat every token within a response as equally important (Meng et al., 2024). This uniform weighting neglects the fact that different tokens contribute variably to the overall quality of a response (Meng et al., 2024). Consequently, traditional PO methods fail to provide the fine-grained credit assignment necessary to account for the specific importance of individual tokens to human preference.
+Recent research has attempted to enable tokenlevel credit assignment through various estimation techniques. Grounded in token-level policy gradient methods, TDPO adds sequence KL terms to the DPO objective (Zeng et al., 2024). Other approaches, such as TIS-DPO (Liu et al., 2025), SePO (Yang et al., 2025), and cDPO (Lin et al., 2024), estimate token importance by contrasting probabilities between different policies or models.
+
+1
+
+Alternatively, TI-DPO utilizes gradient norms and Gaussian priors (Yang et al., 2026), while D2PO employs heuristic temporal decay functions that prioritize earlier tokens (Shao et al., 2025). However, many of these methods either require the training of additional models to estimate weights (Yang et al., 2025; Liu et al., 2025; Lin et al., 2024) or rely on heuristic functions based on token positions rather than the specific semantic content of the tokens (Yang et al., 2026; Shao et al., 2025).
+In this work, we propose Token-weighted DPO (TwDPO), a training objective that is theoreticallygrounded on token-weighted RL, and AttentionPO, an instantiation of TwDPO that utilizes the attentions from the LLM itself to estimate token weights. By obtaining attention weights for response tokens from a pairwise judge prompt, AttentionPO provides a content-aware importance metric. These weights are then normalized and applied during the credit assignment process to better align the model with human preferences.
+Experimental results demonstrate the effectiveness of our proposed approach. AttentionPO achieves significant performance improvements across several models and standard benchmarks. On LLaMA-3-8B-Base-SFT (Grattafiori et al., 2024; Meng et al., 2024), AttentionPO improves performance by 12% (win rate against GPT4-1106-preview (Hurst et al., 2023)) on AlpacaEval (Li et al., 2023; Dubois et al., 2024), 1.05 (LLMjudged score) on MT-Bench (Zheng et al., 2023), and 40% (win rate against GPT-4-0314) on ArenaHard (Li et al., 2024, 2025). On LLaMA-3-8BInsturct, AttentionPO improves performance by 27% on AlpacaEval, 1.41 on MT-Bench, and 14% on ArenaHard. AttentionPO also surpasses strong baselines such as SimPO (up to 4% on AlpacaEval; 0.20 on MT-Bench). AttentionPO highlights the value of using intrinsic model attentions for precise, token-level preference optimization.
+2 Methodology
+We first introduce the notations (§ 2.1) and preliminaries (§ 2.2), then present our TwDPO objective (§ 2.3) and its math derivations (§ 2.4). Finally, we discuss an instantiation of the TwDPO, AttentionPO, which uses attentions as weights. AttentionPO takes three steps: (1) First, we prompt the initial LLM to act as a pairwise judge to extract the attention weights (§ 2.5); (2) We post-process the attention weights to obtain a weight distribution
+
+(§ 2.6); (3) We apply TwDPO using the attention weight distribution. See Figure 2 for visualization.
+2.1 Notations We initialize our main policy  with a reference model ref . We train  on a preference dataset D = {x(i), yw(i), yl(i)}Ni=1, where each example contains a prompt x(i), a preferred response yw(i) and a dispreferred response yl(i). Each response y consists of tokens {y1, · · · , y|y|}.
+2.2 Preliminaries
+Direct Preference Optimization is an offline variant of traditional policy gradient methods to align LLMs with human preferences. It avoids the need for a separate reward model. Instead, it trains LLMs as reward models themselves, on the annotated preference pairs. In particular, DPO maximizes the model's predicted probability of yw being preferred over yl. Formally, given the preference dataset D, DPO trains  using the following objective:
+
+L = -E(x,yw,yl)D log p(yw  yl|x) . (1)
+
+where p(yw  yl|x) is the model's predicted preference probability. Following the Bradley-Terry model (Bradley and Terry, 1952),
+
+p (yw
+
+
+
+yl|x)
+
+=
+
+exp(r(x, yw)) exp(r(x, yw)) + exp(r(x, yl))
+
+(2)
+
+= (r(x, yw) - r(x, yl)).
+
+where r(x, yw) is model's predicted reward and  is the sigmoid function. Further, DPO derives
+
+the model's predicted reward to be r(x, y) =
+
+
+
+log
+
+ (y|x) ref (y|x)
+
++
+
+ log (Z (x)),
+
+where
+
+Z (x)
+
+is
+
+a
+
+par-
+
+tition function depending only on x. Thus, the final
+
+DPO objective is to minimize
+
+L = -E(x,yw,yl)D
+
+log
+
+log (yw|x) - ref (yw|x)
+
+(3)
+
+log (yl|x) .
+
+ref (yl|x)
+
+Equation 3 can be rewritten into the token-level form:
+
+L = -E(x,yw,yl)D log
+
+
+
+|yw |
+log
+t=1
+
+(ywt |x, yw<t) ref (ywt |x, yw<t)
+
+-
+
+
+
+|yl | t=1
+
+log
+
+(ylt|x, yl<t) ref (ylt|x, yl<t)
+
+.
+
+(4)
+
+2
+
+

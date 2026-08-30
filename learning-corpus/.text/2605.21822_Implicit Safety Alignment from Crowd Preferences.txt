@@ -1,0 +1,2245 @@
+                                        Implicit Safety Alignment from Crowd Preferences
+
+                                        Qian Lin 1 Daniel S. Brown 1
+
+arXiv:2605.21822v1 [cs.AI] 20 May 2026                          Abstract                                     on task completion while inadvertently omitting additional
+                                                                                                             objectives that are ambiguous, implicit, or hard to formal-
+                                              Reinforcement Learning from Human Feedback                     ize--particularly safety-related considerations. For instance,
+                                              (RLHF) can reveal implicit objectives such as                  in driving-related tasks, one can assign a sparse reward for
+                                              safety considerations that go beyond task com-                 simply reaching the destination, yet real-world driving also
+                                              pletion. In this work, we focus on the com-                    involves implicit safety considerations--such as maintain-
+                                              mon safety criteria embedded in crowd preference               ing safety margins and discouraging aggressive or risky
+                                              datasets, where different users may express dis-               behaviors--that are difficult to encode accurately through
+                                              tinct preferences or objectives, yet follow similar            manual reward design. Optimizing such incomplete rewards
+                                              safety principles. Our aim is to discover shared               can therefore lead to hazardous behavior, highlighting the
+                                              safety criteria from crowd preferences and then                limitations of purely hand-specified reward functions.
+                                              transfer them to downstream RL tasks to regular-
+                                              ize agent behavior and enforce safety. We first                Reinforcement Learning from Human Feedback (RLHF)
+                                              show that direct reward combination--optimizing                has been developed to overcome the limitations of human-
+                                              a preference-learned reward model together with                designed rewards and has been widely applied in large lan-
+                                              downstream task rewards--has inherent limita-                  guage models (LLMs) (Ouyang et al., 2022; Bai et al., 2022),
+                                              tions. Motivated by this, we propose Safe Crowd                robotics (Hejna III & Sadigh, 2023; Liu et al., 2023a), and
+                                              Preference-based RL, a hierarchical framework                  games (Christiano et al., 2017; Brown et al., 2019). It en-
+                                              that extracts safety-aligned skills from crowd pref-           ables the incorporation of implicit objective information into
+                                              erences and composes them via a high-level policy              decision-making by learning new reward functions from
+                                              to safely solve downstream tasks. Experiments                  scratch (Christiano et al., 2017), discovering additional ob-
+                                              across safe RL environments and a preliminary                  jectives (Dai et al., 2024), and directly modeling expected
+                                              LLM-style task with diverse user goals and shared              behaviors (An et al., 2023; Hejna et al., 2024) to align poli-
+                                              safety constraints demonstrate that our approach               cies with human preferences. In practice, preference data
+                                              substantially lowers safety costs without access to            are often collected from a crowd of users. While individual
+                                              explicit safety rewards, while achieving task per-             users may vary in their task objectives, preferences, or be-
+                                              formance comparable to oracle methods trained                  havioral patterns, they often share implicit criteria--such
+                                              with ground-truth safety signals.                              as avoiding unsafe states and actions. This shared structure
+                                                                                                             suggests the possibility of isolating latent behavioral criteria
+                                        1. Introduction                                                      that are consistent across crowd preferences and reusing
+                                                                                                             them across downstream tasks, thereby reducing the need
+                                        Reinforcement learning (RL) (Sutton et al., 1998) with well-         for additional human demonstrations or preference labels.
+                                        designed rewards that encode task-specific information en-
+                                        ables agents to accomplish their goals. However, speci-              Accordingly, we focus on safety-critical scenarios under
+                                        fying reward functions that fully capture desired behavior           crowd preference learning, where safety-agnostic task re-
+                                        is notoriously difficult, even for seemingly simple tasks,           wards inadvertently promote unsafe behaviors, while crowd
+                                        and imperfect or misspecified rewards are common in prac-            preferences--collected across users with diverse goals yet
+                                        tice (Booth et al., 2023; Malik et al., 2021). In complex            shared safety criteria--provide a complementary safety sig-
+                                        decision-making scenarios, reward designers often focus              nal to compensate for such deficiencies. Our goal is to
+                                                                                                             discover such reusable, implicit safety-related criteria em-
+                                            1Kahlert School of Computing, University of Utah. Correspon-     bedded in crowd-user, cross-task preferences and transfer
+                                        dence to: Qian Lin <qian.lin@utah.edu>.                              them to downstream tasks, where only safety-agnostic task
+                                                                                                             rewards are available, to learn safe policies. A natural ap-
+                                        Proceedings of the 43 rd International Conference on Machine         proach is to learn a reward model from crowd preferences
+                                        Learning, Seoul, South Korea. PMLR 306, 2026. Copyright 2026         via standard RLHF and then optimize a combination of
+                                        by the author(s).                                                    this preference-learned reward and the downstream task
+
+                                                                                                          1
+Implicit Safety Alignment from Crowd Preferences
+
+reward. However, our theoretical and empirical analyses            der the BTL model without an explicit reward learning
+reveal two limitations of this reward combination approach:        stage, thereby avoiding optimization challenges inherent
+(1) the learned reward model may capture not only the in-          in RL. Both reward-based and direct preference learning
+tended shared criteria but also user-specific components           approaches are compatible with our framework, and we
+from crowd preferences, which can degrade downstream               evaluate both with online and offline RL in our experiments.
+performance--especially when the dataset is imbalanced
+across users; and (2) the performance is sensitive to the          2.2. Crowd Preference-based RL
+weighting between the preference-learned and task rewards,
+making the method difficult to tune.                               Most existing RLHF methods assume that all comparisons
+                                                                   are generated by users who share the same set of values
+To overcome these limitations, we propose Safe Crowd               and goals. However, in practice, human feedback often re-
+Preference-based Reinforcement Learning, a hierarchical            flects diverse trade-offs among multiple objectives or even
+framework that composes policies rather than rewards.              different decision goals, referred to as crowd preference
+Specifically, we first model diverse user-preferred behaviors      data. Several studies on crowd preference learning have
+as low-level skills, learned from crowd preference data via a      been proposed to promote fair aggregation of feedback from
+VAE-based latent skill model and existing RLHF techniques.         diverse sources (Chhan et al., 2024; Chakraborty et al.,
+For a new task, we then train a high-level policy to compose       2024), improve the robustness of reward models against
+these skills by maximizing only the downstream task reward.        user noise or jailbreaks (Siththaranjan et al., 2024; Boldi
+Since all skills are aligned with crowd preferences and thus       et al., 2024), and enable personalized decision-making for
+inherently encode shared safety criteria, composing them           individual users (Jang et al., 2023; Poddar et al., 2024).
+to solve new tasks naturally yields safe behaviors without         Among them, Poddar et al. (2024) is most closely related
+requiring explicit safety signals. We evaluate our approach        to our work, as it also uses a VAE-based architecture to
+on a suite of safe RL environments and a proof-of-concept          model behavioral diversity implied by crowd preferences.
+LLM-style task with diverse task goals but shared safety           However, it focuses on identifying existing preferences to
+constraints. Empirically, directly optimizing task rewards         enhance decision diversity, while our work emphasizes be-
+leads to severe constraint violations, whereas our method          havioral generalization--combining diverse behaviors to
+significantly reduces safety costs without requiring explicit      solve new tasks. Furthermore, to our knowledge, we are
+safety rewards and achieves task performance comparable            the first to study shared objectives in crowd preferences and
+to oracle baselines trained with ground-truth safety signals.      to explore how shared safety objectives can be learned and
+We further find that reward combination (i.e., directly op-        then used to guide safe downstream policy learning.
+timizing a weighted sum of the preference-learned reward
+and the new task reward) is highly sensitive to preference         2.3. Constraint Learning from Human Feedback
+imbalance: performance drops sharply when one annotator
+contributes the majority of the data, while our method is          In the field of constraint learning, many studies have ex-
+significantly more robust to such imbalance.                       plored improving policy behavior through human feedback,
+                                                                   since optimizing task rewards alone can lead to safety risks,
+2. Related Work                                                    necessitating the additional learning of constraint or penalty
+                                                                   rewards. One research direction is inferring constraints from
+2.1. Reinforcement Learning from Human Feedback                    demonstrations, known as Inverse Constraint Reinforcement
+     (RLHF)                                                        Learning (ICRL) (Malik et al., 2021; Papadimitriou et al.,
+                                                                   2022; Kim et al., 2023). A related approach (Papadim-
+Reinforcement Learning from Human Feedback (RLHF)                  itriou & Brown, 2024) extends this idea by using Bayesian
+aims to improve decision making by aligning agents                 inference to infer constraints from preferences over demon-
+with various forms of human feedback, including pref-              strations, rather than from demonstrations directly. Another
+erences (Wirth et al., 2017), demonstrations (Ng et al.,           line of work, Safe RLHF (Dai et al., 2024; Chittepu et al.,
+2000), trajectory rankings (Brown et al., 2019; 2020), cor-        2025), proposes jointly learning both reward and constraint
+rections (Bajcsy et al., 2017), and terminations (Hadfield-        functions from preference data. However, both ICRL and
+Menell et al., 2017). This work is most closely related to         Safe RLHF require an explicit decomposition between task
+Preference-based RL (PbRL), where binary comparisons               and safety objectives, either by assuming access to the task
+over trajectories are used to guide policy learning. Classical     reward used to generate demonstrations or by representing
+PbRL methods (Lee et al., 2021; Christiano et al., 2017) typ-      different objectives with distinct types of preference labels.
+ically learn a reward model using the Bradley­Terry­Luce           In contrast, we adopt a more realistic setting in which pref-
+(BTL) model (Bradley & Terry, 1952), and then perform              erences reflect an unknown mixture of multiple underlying
+online RL or offline RL (Shin et al.) based on the learned         objectives, without prior knowledge of these objectives.
+reward. Recently, several works (An et al., 2023; Hejna
+et al., 2024) have proposed directly learning a policy un-
+
+                                                                2
+                                       Implicit Safety Alignment from Crowd Preferences
+
+2.4. Skill Discovery                                                  likelihood estimate, where the likelihood is given by
+
+Skill discovery has been widely studied as a means to                          P (y  =  1| 1,  2)   =             exp u^( 1)                          (2)
+address long-horizon challenges (Pertsch et al., 2021; Li-                                                 exp u^( 1) + exp u^( 2) ,
+outikov et al., 2017), improve exploration and data effi-
+ciency (Nachum et al., 2018; 2019; Eysenbach et al., 2018),           where u^( i) =      L    r(sit       ,  ait).  A  policy,  ,        is  then  ob-
+and facilitate offline RL (Ajay et al., 2020). Most existing ap-                          t=1
+proaches are unsupervised, extracting skills from demonstra-
+tions or replay buffers using encoder­decoder architectures           tained by optimizing the learned reward using RL.
+(e.g., VAEs) (Shankar & Gupta, 2020; Ajay et al., 2020) or
+information-theoretic objectives (Eysenbach et al., 2018).            Regret-based model. This model uses the advantage func-
+The resulting skills are applied to downstream tasks via hier-
+archical policy learning (Bacon et al., 2017; Nachum et al.,          tion of the optimal policy  under the true reward r, i.e.,
+2018) or as behavioral priors constraining policy optimiza-
+tion (Singh et al., 2020). Our work departs from this line            u( i) =        L    A (sti ,  ati )  =         L    Q(sti, ait)     -   V   (sti ),
+of research in two key aspects. First, rather than modeling                          t=1                             t=1
+behavioral diversity from demonstrations, we consider both
+preference diversity and commonality and learn skills from            as the utility to generate the preference labels. To recover
+crowd preference data. Second, beyond improving down-
+stream task performance, we also aim to preserve the shared           , one can adopt the solution induced by the partial-return
+criteria encoded in crowd preferences. A closely related
+work is skill preference learning (Wang et al., 2022), which          preference model: although the learned reward effectively
+incorporates preferences to specify downstream objectives
+but still relies on demonstration-based skill extraction.             approximates the optimal advantage function rather than
+
+                                                                      the true reward, maximizing it still induces an equivalent
+
+                                                                      optimal policy (Knox et al., 2024; Tien & Brown, 2023). In
+
+                                                                      this work, we consider an alternative, Contrastive Prefer-
+
+                                                                      ence Learning (CPL), since it enables a purely supervised
+
+                                                                      learning approach that avoids the challenges of RL opti-
+
+                                                                      mization (Hejna et al., 2024). Specifically, CPL leverages
+
+                                                                      the relationship between the optimal advantage function
+                                                                      A and the optimal policy  to derive an instantiation of
+
+                                                                      the Bradley­Terry model that only depends on the policy.
+
+                                                                      Instead of learning a reward, CPL directly learns a policy
+
+                                                                       by maximizing the likelihood of human preferences:
+
+3. Preliminaries                                                      P (y  =  1| 1,  2)  =  exp(log         exp(log      ( 1))                 (  2  ))  ,
+                                                                                                           ( 1)) +        exp( log
+General reinforcement learning from human feedback
+(RLHF) can be formulated as a reward-free Markov decision                                                                                             (3)
+process (MDP) M/r = (S, A, P, ), where S is the state
+space, A is the action space, P(st+1 | st, at) is the transi-         where log ( i) =              L      t  log         (sit,  ait  ),  and      is  a
+tion dynamics, and  is the discount factor. The true reward                                         t=1
+r(s, a) is unobservable but implicitly reflected in the pref-
+erence dataset Dpref = {( 1,  2, y)i}Ni=1, where each tra-            temperature parameter, and  is a bias regularizer in CPL.
+jectory segment  = (s1, a1, s2, a2, . . . , sL, aL) has length
+L. The probability of a preference label y is given by the            4. Limitations of Vanilla RLHF in Crowd
+Bradley­Terry model:                                                     Preference Learning
+
+P (y = 1| 1,  2) =1 - P (y = 0| 1,  2)                                In this section we discuss crowd-RLHF, introduce our novel
+                                                                      safety transfer problem under a shared-structure assumption
+                             exp  · u( 1)                (1)          on crowd preferences, and analyze the limitations of Vanilla
+                = exp  · u( 1) + exp  · u( 2) ,                       RLHF as a solution.
+
+where y = 1 indicates that  1 is preferred over  2 and y = 0          4.1. Problem Setting
+otherwise, u is the trajectory utility, and  models human
+rationality. In this work, we consider two mainstream pref-           Similar to Siththaranjan et al. (2024) and Poddar et al.
+erence models: the partial-return model (Christiano et al.,           (2024), we study the problem of crowd preference learn-
+2017) and the regret-based model (Knox et al., 2022; Hejna            ing, where the collected preference data are generated not
+et al., 2024). These two models correspond to different               from a single utility u(s, a), but from multiple utilities
+utilities, u, and lead to distinct solution formulations.             u(s, a, z) determined by a hidden context z. Therefore, the
+                                                                      crowd preference dataset can be denoted as Dpref = {Sz =
+Partial-return model. This model adopts the cumulative                {( 1,  2, yz)i}iS=1 | z  p(z)}, where each Sz represents a
+                                                                      set of preference pairs provided by a user with hidden con-
+reward u( i) =  L    r(sit,  ait)  as  the  utility  to  generate     text z, and p(z) denotes the (unobserved) distribution over
+                t=1                                                   contexts. All preference labels yz within the same set Sz
+                                                                      are assumed to be generated using the same utility u(·, z).
+the preference labels. In this case, a typical solution is            In practice, however, the true context z associated with each
+                                                                      Sz and its corresponding utility u(·, z) are not observed.
+to first learn a reward function r(s, a) using a maximum
+
+                                                                   3
+                           Implicit Safety Alignment from Crowd Preferences
+
+In contrast to prior work, we consider the fact that, while         Otherwise, the pair is called inconsistent.
+different users may evaluate trajectories with diverse human
+values, they will likely still share common decision criteria,      That is, all users agree on the relative preference ordering
+such as avoiding unsafe behaviors. Formally, we assume              between  1 and  2. Denote safe trajectories as those satisfy-
+that the rewards underlying the different crowd members'            ing (s, a)   safe, (s, a) / Xunsafe, and unsafe trajectories
+utilities can be decomposed as r(s, a, z) = ruser(s, a, z) +        otherwise. We then have the following result:
+rshare(s, a). Here, ruser(s, a, z) captures crowd variations,
+modeling differences in task objectives or goals across users,      Theorem 4.2. Let the true utility be u(, z) =
+while rshare(s, a) represents criteria that are shared among           t ruser(st, at, z) + rshare(st, at), where the shared com-
+all users. Although the decomposition into task-specific and
+shared components is not unique, in this work we focus              ponent rshare represents a safety penalty:
+on safety as the shared criterion. Specifically, users are
+assumed to share state­action safety constraints, which are         rshare(s, a) =       -K,  (s, a)  Xunsafe,
+modeled via a shared reward component:                                                   0,   otherwise.
+
+rshare(s, a) =        -K,  if (s, a)  Xunsafe,            (4)       If the penalty K > 2L maxs,a,z |ruser(s, a, z)|, then all
+                      0,   otherwise,                               pairs ( safe,  unsafe) consisting of one safe and one unsafe
+
+                                                                    trajectory are consistent. Consequently, the single reward
+
+                                                                    model u^ learned from infinite crowd preference data satisfies
+
+where K > 0 is a large constant (ideally K   to com-                                     u^( safe) > u^( unsafe),
+                                                                    for any  safe and any  unsafe.
+pletely prohibit unsafe state­action pairs), and Xunsafe de-
+notes the set of unsafe state­action pairs. 1
+
+Our goal is not only to discover such shared safety criteria        See proof in Appendix A.1. This is an intuitive conclusion:
+from crowd preference data, but also to transfer them to new        if all users consistently prefer safe trajectories over unsafe
+tasks. Concretely, we consider a downstream task with a             ones, the learned reward model will also prefer safe ones.
+safety-agnostic reward rnew(s, a), which is imperfect in that
+it encourages task completion but may induce unsafe behav-          Although we have shown that a single reward model can
+iors. Such imperfect or misspecified rewards are common             capture the safety consensus, this approach suffers from
+in practice, as reward design is inherently difficult and often     two critical issues: 1) It requires carefully fine-tuning the
+fails to capture implicit objectives (Krakovna et al., 2020;        trade-off weight  between rnew(s, a) and r^(s, a), espe-
+Booth et al., 2023; Tien & Brown, 2023). Thus, the ideal            cially when their numerical scales differ significantly; 2)
+downstream policy should optimize                                   The learned model r^(s, a) may encode not only the shared
+                                                                    safety preference but also user-specific components, which
+ = arg max E             rnew(st, at) + rshare(st, at) .            can mismatch with rnew(s, a) in downstream training. The
+                                                                    following theorem formalizes this situation, showing that
+                      t                                             the issue becomes more severe when the number of prefer-
+                                                                    ences from different hidden contexts z is imbalanced.
+even though the true shared reward rshare is not directly
+observable in practice.                                             Theorem 4.3. Assume a finite set of hidden contexts
+                                                                    {z1, . . . , zm} and a finite trajectory set T . Denote Xics
+4.2. Does Vanilla RLHF Work?                                        as the set of all inconsistent pairs, define
+
+One intuitive approach is to directly learn a single reward         N ( 1,  2, z) =      I u( 1, z) > u(, z) > u( 2, z)}
+model r^(s, a) using vanilla reward learning (Eq. 2) on crowd
+preferences to capture shared user criteria, which induces a                          T
+trajectory-level utility u^ = t r^(st, at), and then combine
+it with the new task reward:                                                         + I u( 1, z) < u(, z) < u( 2, z) .
+
+         rnew(s, a) = (1 - )rnew(s, a) + r^(s, a), (5)              For any zk, if the probability of zk satisfies
+                                                                                                        |T | - 1
+where  is a trade-off weight. To analyze the properties of
+r^, we consider preferences over complete trajectories and                   p(zk) > min(,)Xics N (,  , zk) + |T |
+introduce the following definition:                                 then for all  1,  2  T ,
+Definition 4.1. A trajectory pair ( 1,  2) is consistent if
+                                                                    u^( 1) > u^( 2)  u( 1, zk) > u( 2, zk).
+u( 1, z)  u( 2, z) for all z or u( 1, z)  u( 2, z) for all z.
+
+1Extensions to more general forms of safety consensus in crowd The proof is provided in Appendix A.1. This result provides
+
+preferences are discussed in Appendix F.                            an upper bound: once the proportion of preference data
+
+                                                                 4
+                                                       Implicit Safety Alignment from Crowd Preferences
+
+Predicted Reward               Run                            HalfCheetah-vel       behaviors drawn from the preference-aligned skill space
+                                                                                    learned from the crowd preferences. This approach is moti-
+                  0.2                                  0.2                          vated by two insights: (1) constraining policy optimization
+                  0.0                                                               to preference-aligned behaviors--rather than the raw action
+                                                       0.0                          space--naturally enforces the shared criteria (e.g., avoiding
+                                                                                    unsafe state­action pairs in this work); and (2) behaviors
+                                                       0.2                          from users with diverse task objectives provide useful prim-
+                                                                                    itives that facilitate downstream task learning. Formally, in-
+                  0.2     Safe sample      Major Pref  0.4     5 Vel(obc0)ity 5     spired by hierarchical learning, we treat preference-aligned
+                       0  Unsafe sample    Minor Pref      10                       policies l(a|s, z) as low-level skills and learn a high-level
+                                           45                                       policy h(z|s) that composes these skills to solve the down-
+                          1 V2el(oac)i3ty                                           stream task:
+
+Figure 1. Predicted rewards on safe and unsafe samples under
+the imbalanced crowd-preference setting. Safe trajectories (green)
+receive higher rewards than unsafe ones (red), while trajectories
+aligned with the majority preference (blue) are over-rewarded
+compared to minority-preferred ones (yellow).
+
+from a task zk exceeds this threshold, the learned model's                                    max E                 rnew(st, at) .        (6)
+preference ordering aligns completely with u(, zk). Con-
+sequently, maximizing the learned utility yields trajecto-                                    h·l                t
+ries that are optimal for task zk, i.e., arg max u^( ) =
+arg max u(, zk). However, since the optimal trajectories                            5.2. Skill Discovery from Crowd Preference
+under different context z can be potentially disjoint, the
+learned reward will bias policy optimization toward the op-                         There exist several RLHF techniques that can learn
+timal trajectories under zk, deviating from those optimal                           preference-aligned policies, as discussed in Section 3. How-
+under rnew. This mismatch in task rewards directly harms                            ever, without access to the true label z for each preference
+the performance on the target task.                                                 pair, we cannot directly model the behaviors of different
+                                                                                    users in crowd preference data. Inspired by Variational Pref-
+We empirically validate these conclusions by training a re-                         erence Learning (VPL) (Poddar et al., 2024), we address
+ward model on an imbalanced crowd preference dataset,                               this challenge by inferring a latent variable z from crowd
+where the majority of users favor a specific target and con-                        preference data using a Variational Auto-Encoder (VAE),
+tribute ten times more data than the others. In Run, the                            where z serves as a proxy for the underlying (unobserved)
+majority prefers a lower target velocity (0) over a higher                          user context z that governs preference behavior. Here, z de-
+velocity (5), while all trajectories must avoid constrained                         notes the true but unobserved context, while z is a learned
+regions; in HalfCheetah, the majority prefers positive over                         latent variable that approximates this context and is used to
+negative velocity, subject to velocity limits (see Appendix C                       condition both the reward model and the policy. Specifically,
+for details). Figure 1 shows that the learned reward assigns                        we first learn a latent-conditioned reward:
+higher values to safe trajectories than unsafe ones, consistent
+with Theorem 4.2, but also over-rewards trajectories aligned                        E E [ Sz Dpref zq (z|Sz )                      log P (y| 1,  2, z)]
+with the majority preference, confirming Theorem 4.3. We
+further investigate the downstream performance of reward                                                      ( 1, 2,yz )Sz
+combination (i.e., Eq. 5) under different trade-off weights 
+in Section 6.2, and show that it suffers from strong sensitiv-                               - DKL(q(z|Sz)||p(z))
+ity to the trade-off weight as well as performance degrada-
+tion induced by preference imbalance, as predicted by the                                                                                 (7)
+Theorem 4.3.
+                                                                                    where q is an encoder to predict the latent variable z based
+5. Safe Crowd Preference-based
+   Reinforcement Learning                                                           on a set of preferences from some user with hidden context
+
+5.1. Policy Composition Rather Than Reward                                          z and p(z) is a prior distribution. P (y| 1,  2, z) follows
+     Combination
+                                                                                    the definition of Eq. 2 except that r(s, a) is replaced with
+Since it is difficult to disentangle the user-specific com-                         r(s, a, z) as a decoder to predict the preference relation-
+ponent and the shared criteria, it may not be effective to                          ship under z:
+directly incorporate the learned reward into downstream
+optimization as in Eq. 5. Instead, our idea is to optimize                          P (y  =  1| 1,  2, z)  =            exp u^( 1, z)
+only the downstream reward rnew while restricting the pol-                                                     exp u^( 1, z) + exp u^( 2, z) ,
+icy search to behaviors consistent with the crowd prefer-
+ences. Specifically, we constrain the agent to compose                                                                                    (8)
+
+                                                                                    where u^( i, z) =       k    r(sit  ,  ati  ,  z  ).  Then a latent-
+                                                                                                            t=1
+                                                                                    conditioned (a|s, z) as our low-level policy can be
+
+                                                                                    learned via offline RL methods (e.g., IQL (Kostrikov et al.,
+
+                                                                                    2022) in the implementation): for each z  p(z),
+
+                                                                                               max       E  D    [     r(st, at, z)],     (9)
+
+                                                                                              (a|s,z  )             t
+
+                                                                                    where D is an offline trajectory dataset.
+
+                                                                                 5
+                                      Implicit Safety Alignment from Crowd Preferences
+
+However, this approach requires access to an additional                  online interaction:
+offline trajectory dataset D and is susceptible to RL op-
+timization instability (Hejna et al., 2024). Therefore, we               Lofhfline = -E(sD,aD)D Q(sD, a)+reg Lreg+BC LBC ,
+also propose an alternative approach that incorporates Con-
+trastive Preference Learning (CPL) into the VPL framework                                       ah·l(sD )
+under the regret-based preference setting, i.e., by defining
+P (y| 1,  2, z) in Eq. 7 as                                                                                                                (12)
+                                                                         where D is the offline dataset, and LBC = a - aD22,
+P (y  =  1| 1,  2, z)  =            exp f ( 1|z)                         weighted by BC, is a behavior cloning term that discour-
+                          exp f ( 1|z) + exp f ( 2|z) ,                  ages the policy from producing out-of-distribution actions
+                                                                         beyond the support of D (Fujimoto & Gu, 2021).
+                                                             (10)
+                                                                         5.4. Theoretical Insights into Skill Composition
+where f ( i|z) =  k       t    log    (ait  |sti ,  z).  We  empiri-
+                  t=1                                                    Here, we briefly outline theoretical insights into the safety
+                                                                         and task performance of downstream policies obtained via
+cally validate VPL and its novel CPL variant in Section 6                skill composition. Formal statements and proofs are de-
+                                                                         ferred to Appendix A.2. We first simplify the analysis by
+using crowd preferences under the partial-return and regret-             viewing the encoder q(z | Sz) as a classifier. Each trajec-
+                                                                         tory is assigned to a latent variable z by the encoder and
+based models, respectively.                                              thus grouped into a subset Dpzref, which is subsequently used
+                                                                         to train a conditional utility function u^(·, z). Under this
+5.3. Downstream Learning                                                 abstraction, we obtain two key conclusions. First, similar to
+                                                                         Theorem 4.2, the latent-conditioned utility u^(·, z) learned
+For a new downstream task, instead of predicting actions di-             on infinite crowd preferences prefers safe trajectories to un-
+rectly from states, the high-level policy outputs a latent vari-         safe trajectories across all z. As a result, if each low-level
+able that indexes a preference-aligned low-level behavior to             policy is optimal with respect to its corresponding condi-
+generate the actions, i.e., a  l(a | s, z = h(s)).2 This                 tioned utility, any downstream policy obtained via skill com-
+skill-based action selection keeps the agent within the distri-          position is guaranteed to preserve safety; see Corollary A.6.
+bution of preference-aligned behaviors, thereby inheriting               Moreover, we provide an upper bound on downstream safety
+the safety preferences encoded in crowd data and avoiding                violations when accounting for the suboptimality of low-
+unsafe actions and states. Moreover, given that the VAE ob-              level policies (Theorem A.7), which shows that the number
+jective in Eq. 7 encourages preference-aligned behaviors to              of violations scales with suboptimality.
+be encoded near the prior p(z), we regularize the high-level
+policy via Lreg = log p(z = h(s)), which keeps the latent                Second, we seek to explore the positive correlation between
+skill z selected by h close to the latent structure learned              skill discovery performance and downstream task perfor-
+from crowd preferences and prevents out-of-distribution                  mance. Specifically, Theorems A.8 and A.9 establish a
+skills that could lead to unsafe behavior. Following this                connection between (a) how well the VAE-generated labels
+design, we adopt the TD3 (Fujimoto et al., 2018) framework               match the true contexts and (b) how effectively the learned
+for high-level policy training using the loss:                           latent-conditioned utilities align with diverse user prefer-
+                                                                         ences. Part (a) characterizes the quality of skill learning,
+          Lh = -Eah·l Q(s, a) + regLreg , (11)                           while part (b) determines the diversity of skills available
+                                                                         for downstream task execution and thus influences final per-
+where reg weights the regularization term, Q is the esti-                formance. In conclusion, more accurate modeling of latent
+mated value for rnew, and the low-level policy l is frozen               variables leads to more versatile preference-aligned skills,
+so that gradients propagate through Q and l into h.                      thereby improving downstream task performance.
+
+Eq. (11) assumes that new interaction samples are available              6. Safe RL Experiments
+during downstream training (referred to as the online down-
+stream setting), which may incur additional costs. Given                 Environments. For evaluation, we extend six environ-
+that Dpref is typically constructed from an existing offline             ments from the Bullet-Safety (Gronauer, 2022) and Safety-
+dataset, we also consider a more practical setting: perform-             Gymnasium (Ji et al., 2023) suites to crowd preference
+ing downstream training using only the offline dataset to-               settings by constructing a set of goal-specific reward func-
+gether with rnew(s, a) (referred to as the offline downstream            tions, together with a common safety reward, for preference
+setting), and we adopt this setup in our experiments.3 In                annotation and downstream tasks. In these environments,
+this setting, an offline RL dataset is used without additional           goal-specific rewards differ by task objectives (e.g., naviga-
+                                                                         tion targets or preferred velocities), while common safety
+    2Here, the high-level policy can switch skills every step. In        constraints (e.g., avoiding unsafe areas or obeying speed
+Appendix F.3, we further discuss the effect of switching frequency.
+
+    3Results for the online downstream setting are also discussed
+in Section 6.1 and reported in Appendix D.1.
+
+                                                                      6
+                 Implicit Safety Alignment from Crowd Preferences
+
+Table 1. Normalized performance under offline downstream settings. Overall, our methods significantly reduce safety cost compared to
+Task-Only baselines, while achieving task performance comparable to the Oracle.
+
+                                                                Baselines                               Ours
+
+Environment      Stats      Oracle  Task-Only SOPL                              RC( = 0.5)    Safe-VPL Safe-CPL
+Reach
+Run              Norm Rew    1.00   1.04 ± .00 0.98 ± .03                         0.83 ± .01  0.98 ± .04 0.98 ± .04
+Circle           Norm Cost  0.038   1.000 ± .01 0.024 ± .02                      0.101 ± .02  0.166 ± .04 0.069 ± .02
+Ant-vel
+Swimmer-vel      Norm Rew    1.00   1.00 ± .00 0.99 ± .00                         1.00 ± .00  0.95 ± .08 0.97 ± .01
+HalfCheetah-vel  Norm Cost  0.000   1.000 ± .08 0.000 ± .00                      0.000 ± .00  0.000 ± .00 0.000 ± .00
+Average
+                 Norm Rew    1.00   1.27 ± .02 1.04 ± .01                         1.09 ± .00  0.90 ± .01 0.91 ± .04
+                 Norm Cost  0.000   1.000 ± .02 0.000 ± .00                      0.000 ± .00  0.000 ± .00 0.000 ± .00
+
+                 Norm Rew    1.00   1.23 ± .02 0.98 ± .01                         0.77 ± .20  0.90 ± .01 0.76 ± .10
+                 Norm Cost  0.002   1.000 ± .01 0.007 ± .00                      0.078 ± .12  0.001 ± .00 0.007 ± .00
+
+                 Norm Rew    1.00   2.39 ± .04 1.34 ± .03                         0.83 ± .07  0.88 ± .01 0.99 ± .04
+                 Norm Cost  0.000   1.000 ± .09 0.014 ± .01                      0.000 ± .00  0.001 ± .00 0.005 ± .00
+
+                 Norm Rew    1.00   1.85 ± .36                     0.93 ± .00     0.44 ± .11  0.96 ± .02   0.92 ± .02
+                 Norm Cost  0.000   1.000 ± .19                    0.014 ± .00   0.107 ± .08  0.004 ± .00  0.018 ± .02
+                 Norm Rew    1.00
+                 Norm Cost   0.01      1.46                           1.04           0.82        0.93         0.92
+                                       1.00                           0.01           0.05        0.03         0.02
+
+limits) are imposed via a shared safety reward. During pref-       To isolate the effect of entanglement between user-specific
+erence annotation, a subset of the goal-specific rewards is        and shared components, SOPL follows Safe RLHF (Dai
+selected to represent crowd variation (i.e., the user-specific     et al., 2024) by using preference data generated solely from
+component ruser) and combined with the safety reward (i.e.,        the safety reward rshare, learning a unimodal reward r^SOPL,
+the shared component rshare) to form the annotation rewards.       and optimizing rnew + r^SOPL in the downstream stage. In
+All goal-specific rewards--including those not used for an-        contrast, all other RLHF methods operate on coupled pref-
+notation--are then treated as safety-agnostic task rewards,        erence data without access to such separated signals. (4)
+thereby defining a collection of downstream tasks.                 Reward Combination (RC). RC () adopts TD3+BC (or
+                                                                   TD3 for online downstream settings) to optimize a weighted
+Dataset. To generate preference datasets, we first train an        combination of the downstream reward rnew and the uni-
+unsafe SAC agent (Haarnoja et al., 2018) using only goal-          modal reward r^ learned from crowd preference datasets,
+specific reward and a safe SAC agent using the combined            with the trade-off weight   {0.1, . . . , 0.9, 1.0} as defined
+goal-specific and safety rewards for each designed goal.           in Eq. 5. Safe-VPL and Safe-CPL denote our proposed
+The replay buffers of these agents are combined to form            approaches, which use the original VPL or CPL-variant for
+the offline dataset D . We then sample trajectory pairs to         skill discovery, respectively.
+construct a crowd preference dataset, which is annotated
+either using Eq. 2 with the ground-truth reward or using           Evaluation Protocol We evaluate all methods in terms
+Eq. 3 with the optimal advantage. The latter is used for
+CPL-based skill discovery, while the former is used for            of both downstream task performance and shared safety per-
+VPL-based skill discovery and other RLHF baselines. In
+addition, the offline dataset D is used for low-level policy       formance. In the main paper, task performance is reported
+training in Eq. 9 and offline downstream learning in Eq. 12.
+See more environment and dataset details in Appendix C.            in normalized form:  Rnorm(Algo)     =   R(Algo)-R(Random)    ,
+                                                                                                           R(Oracle)-R(Random)
+Baselines. We evaluate three groups of baselines. (1) Or-
+acle. These methods have access to the true safety reward          where R(·) denotes the cumulative task reward t rnew
+rshare. For offline downstream learning, we apply CDT (Liu
+et al., 2023b), an offline safe RL algorithm, to optimize          averaged over all downstream tasks. Safety performance
+ED [ rnew] while enforcing ED [ rshare] = 0, which
+corresponds to zero constraint violations since rshare  0.         is normalized as Cnorm(Algo)  =  C        C(Algo)          ,  where
+For online downstream learning, we use SAC to maximize                                                  (Task-only baseline)
+E[ rnew + rshare]. (2) Task-Only. These baselines op-
+timize only the task reward and ignore the safety reward           C(·) is the cumulative safety violations. See Appendix D.2
+using TD3+BC (Fujimoto & Gu, 2021) and TD3 (Fujimoto
+et al., 2018) for offline and online downstream settings, re-      for the main experimental results with all raw data. All
+spectively. (3) Safety-Only Preference Learning (SOPL).
+                                                                   experiments are run with three random seeds, and we report
+
+                                                                   means and standard deviations. Code and implementation
+
+                                                                   details are provided in Appendix B.
+
+                                                                   6.1. Recovering Shared Criteria in Crowd Preferences
+
+                                                                   Table 1 summarizes the performance of all methods un-
+                                                                   der the offline downstream setting. The Task-Only base-
+                                                                   line achieves strong task performance but incurs severe
+                                                                   safety violations, demonstrating that optimizing an imper-
+
+                                                                7
+Implicit Safety Alignment from Crowd Preferences
+
+           Reach                                       Run                               1.0         Circle                 1.5          Ant-vel
+
+1.0                                        1.0                                           0.8                                1.0         0.8 1.0 1.2
+                                           0.8                                           0.6
+0.5                                        0.6                                                                                        Oracle
+                                           0.4                                           0.4                                0.5       Task-Only
+0.0 0.25 0.0S0w0im.25m0e.5r0-ve0.l75 1.00  0.2                                                                                        RC (Balance)
+Normalized Cost                                                                          0.2                                          RC (Imbalance)
+1.0                                                                                                                                   Safe-VPL (Balance)
+0.8                                                                           Cost Reward0.00.0                             0.0       Safe-VPL (Imbalance)
+0.6                                             0.80 H0.a85lfCh0e.9e0tah0-.v9e5 l 1.00 0.6 0.8Aver1a.0ge 1.2                     0.6  Safe-CPL (Balance)
+0.4                                                                                                                                   Safe-CPL (Imbalance)
+0.2                                                                                      1.0
+0.0
+                                           1.0                                           0.8
+       0.5 1.0 1.5 2.0
+                                                                                         0.6
+
+                                           0.5                                           0.4
+
+                                                                                         0.2
+
+                                           0.0  0.0 0.5 1.0 1.5                          0.0      0.4 0.6 0.8 1.0 1.2 1.4
+
+                                                            Normalized Reward
+
+Figure 2. Performance points of different algorithms and RC () with various weight  under balanced and imbalanced preference
+
+settings. The corresponding numerical results are reported in Table 10 in the appendix. RC is highly sensitive to the reward trade-off
+
+weight and degrades under preference imbalance, whereas our method remains consistently close to the Oracle across both settings.
+
+fect task reward alone--without capturing underlying safety                                          Circle            100            Run                                 Ant-vel
+objectives--can lead to hazardous behavior. Moreover, the
+SOPL baseline achieves performance comparable to the Or-                                 100                                                                     2000
+                                                                                                                       50
+                                                                                                                                                     0
+                                                                                              00
+                                                                                                  2          4  6           012345                                     2  0        2
+
+acle, as both have access to separated safety signals, while                                  50                       50                            200
+RC( = 0.5), despite a similar training pipeline with SOPL,
+operates on coupled preference data and performs signifi-                                                                                            100
+cantly worse, highlighting the challenge of entanglement
+                                                                                              0                        0    0 1Targe2t Vel3ocity4 5  0                 T2arget D0irection2
+                                                                                                                                                                         Oracle
+                                                                                                0 Tar2get Velo4city 6       RC ( = 0.1)    Safe-VPL
+                                                                                                          Major Pref        RC ( = 0.9)    Safe-CPL
+                                                                                                          Minor Pref
+
+between user-specific and shared components. In contrast, Figure 3. Performance on different downstream tasks under im-
+our method substantially reduces cost compared to the Task- balanced settings; the x-axis corresponds to task IDs. RC either
+
+Only baseline (e.g., 1.0 vs. 0.01­0.02 in average normalized incurs high safety cost or performs well only on a subset of tasks,
+
+cost), while achieving task performance comparable to both whereas our method remains robust across tasks.
+
+the Oracle and SOPL. This indicates that, despite not ob-           noticeably away from the Oracle, consistent with the conclu-
+serving the true safety reward or safety-only preference data,      sion in Section 4.2 that preference imbalance induces bias
+our method can effectively discover and transfer underlying         in the learned reward, which in turn misguides downstream
+safety objectives from crowd preferences via preference-            optimization and degrades task performance. In contrast,
+aligned skill learning and composition, without significantly       our method remains close to the Oracle under both balanced
+sacrificing task performance.                                       and imbalanced settings, with average normalized reward
+
+We report results for the online downstream setting in Ap- and cost decreasing by less than 0.02 across environments,
+pendix D.1, where we observe conclusions consistent with whereas RC (averaged over ) degrades by at least 0.1.
+
+the offline case, as well as improved sample efficiency com-        While the above results summarize average performance
+pared to the oracle baseline trained from scratch. Moreover,        across downstream tasks, Figure 3 highlights per-task down-
+performance in the online setting is generally better than          stream performance under imbalanced settings. When the
+in the offline case, suggesting that additional interaction         imperfect task reward dominates ( = 0.1), RC achieves
+further improves performance, while our offline formulation         high task reward but incurs substantial safety cost on many
+remains effective under limited interaction.                        downstream tasks; when the preference-learned reward dom-
+                                                                    inates ( = 0.9), RC remains safe across all tasks but only
+6.2. Comparison to Reward Combination under                         achieves high reward on those aligned with the major pref-
+     Balanced and Imbalanced Preference Settings                    erence, while degrading on minor tasks. In contrast, our
+                                                                    method is less affected by preference imbalance, achieving
+In this section, we consider both balanced settings, where          strong task performance with low safety cost across tasks.
+preferences from different user-specific rewards are equally
+represented, and imbalanced settings, where one dominant            6.3. Ablation Studies
+user-specific preference accounts for ten times more data
+
+than the others. Figure 2 visualizes RC performance un-             Figure 4 summarizes ablation studies that analyze the sen-
+der different   {0.1, . . . , 1.0} as reward­cost frontiers         sitivity of our method to key design choices. Figure 4(a)
+(numerical values are reported in Table 10). Across envi-           shows the effect of the prior regularization weight reg in
+ronments, RC is highly sensitive to the choice of , often           Eq. 11, which controls the optimization space of the high-
+yielding either strong task performance at the expense of           level policy. Larger reg enforces conservative skill selec-
+high safety cost, or vice versa. Moreover, under imbalanced         tion aligned with the crowd preference distribution, yielding
+preference data, the entire RC performance frontier shifts          safer but less performant behavior, while smaller reg in-
+
+                                                                 8
+                                                                              Implicit Safety Alignment from Crowd Preferences
+
+Norm Cost Norm Reward            Circle                               Circle            1             Circle              Setup Inspired by the PET dataset setup in VPL (Poddar
+                                                                                                                          et al., 2024), we construct a simplified RLHF-style conver-
+                       1                                    1                                                             sational bandit setting with one query and three response
+                                                                                                                          categories (A, B, C), each containing both safe and harmful
+                       0  0.0  0.01 0.05      0.1  1.0  10  0 0.0  0.25  0.5  0.75      0  2       4          8  16       responses. Given two candidate responses as the state, the
+                       1                                                                1                                 agent selects between them according to two objectives: (1)
+                                                                                                                          a safety objective of not selecting harmful responses, and
+                                                            1                                                             (2) a task-specific objective of selecting the higher-ranked
+                                                                                                                          response when both candidates are safe. We construct an im-
+                       0  0.0  0.01  0(.a0)5  0.1  1.0  10  0 0.0 (b)0.F2li5pping0.P5rob 0.75 0 2  (c)4Crowd S8ize 16     balanced crowd-preference dataset where User 1 (80%) and
+                                                                                                                          User 2 (20%) prefer safe responses over harmful ones but
+                                              reg                                                                         follow different rankings over (A, B, C) on safe responses.
+
+                                                               Safe-VPL       Safe-CPL                                    Each downstream task is associated with a distinct ranking
+                                                                                                                          over response categories and provides a safety-agnostic task
+Figure 4. Performance under different regularization weights reg,                                                         reward rnew that rewards only task-specific ranking consis-
+noise ratios, and crowd sizes. Dashed lines denote Rnorm(Oracle)                                                          tency, without considering the implicit safety objective. We
+in the first row and Cnorm(Task-Only) in the second. Our method                                                           evaluate two downstream tasks with rankings that do not
+is robust to reg and crowd size; while preference noise degrades                                                          match any crowd user preference ordering, meaning that
+safety performance, task reward remains largely unaffected.                                                               simply following the majority preference or imitating a sin-
+                                                                                                                          gle user cannot maximize task reward. Instead, successful
+                                     Task-only RC( = 0.25) RC( = 0.75) Ours                                               performance requires composing crowd preferences and
+                                                                                                                          generalizing beyond the preference structures observed in
+                       Reward 0.95± .01 0.94 ± .01                            0.50± .01 0.75 ± .01                        crowd data. See Appendix E for full experimental details.
+                       Cost 0.24± .00 0.22± .03                               0.00 ± .00 0.00 ± .00
+                                                                                                                          Results Table 2 shows that Task-only, which optimizes
+Table 2. LLM evaluation results averaged on two downstream                                                                only the task reward, frequently selects harmful responses
+tasks. Our method achieves strong task performance while avoid-                                                           to maximize reward, resulting in severe violations of the im-
+ing harmful responses, whereas Task-only violates safety and RC                                                           plicit safety objective. Moreover, RC either violates safety
+suffers from the reward trade-off under imbalanced preferences.                                                           when the task reward dominates ( = 0.25) or sacrifices
+                                                                                                                          task performance due to bias induced by imbalanced prefer-
+creases skill flexibility and improves task performance, with                                                             ences ( = 0.75). In contrast, our method substantially re-
+only mild safety degradation that remains much better than                                                                duces unsafe selections compared to Task-only while achiev-
+directly optimizing the task reward. Overall, as a hyperpa-                                                               ing significantly stronger task performance than the safe but
+rameter in our method, reg is more robust than the weight                                                                 overly conservative RC baseline.
+ in the RC baseline; across a wide range of values, it has
+little impact on task reward while consistently improving                                                                 8. Conclusion
+safety, making it easy to tune in practice.
+                                                                                                                          In this work, we focus on the hidden safety objectives em-
+An implicit assumption in our setting is that crowd pref-                                                                 bedded in crowd preferences, with the goal of discovering
+erences accurately and noiselessly reflect a shared safety                                                                and transferring them to downstream tasks to encourage safe
+consensus across all users. To analyze the impact of prefer-                                                              behavior. We theoretically and empirically discuss the feasi-
+ence noise on our methods, we introduce preference noise by                                                               bility and limitations of direct reward combination, where a
+randomly flipping labels with a given probability and report                                                              reward model learned from crowd preferences is combined
+results in Figure 4(b). As noise increases, the safety signal                                                             with the task reward for policy optimization. Then we pro-
+encoded in preferences is progressively corrupted, leading                                                                pose a hierarchical approach that composes skills--rather
+to degraded cost performance; however, task performance                                                                   than rewards--extracted from crowd preferences. Specifi-
+remains largely unaffected, suggesting that preference noise                                                              cally, we learn latent skill representations using both a VAE
+does not substantially reduce skill diversity leveraged for                                                               reward learning and a novel CPL-based, reward-free variant,
+downstream composition. Figure 4(c) further analyzes the                                                                  after which the high-level policy outputs latent variables for
+effect of the number of crowd users, where we vary crowd                                                                  downstream tasks to optimize the task reward. We extend
+size by sampling target velocities or directions at regular                                                               several safe RL environments to crowd preference settings
+intervals within a fixed range to construct user-specific pref-                                                           and conduct a proof-of-concept language-domain evalua-
+erences. As the number of users increases, performance                                                                    tion, showing that our method achieves competitive task
+exhibits only a modest degradation while maintaining sub-                                                                 performance while substantially reducing safety costs, even
+stantially better safety than the task-only baseline, demon-                                                              without access to explicit safety rewards.
+strating the robustness of our method. See Appendix D.3
+for ablation results across more environments and settings.
+
+7. LLM Evaluation
+
+While our primary evaluation focuses on continuous con-
+trol, we also conduct a proof-of-concept evaluation in a
+simplified language-based setting to provide evidence of the
+broader applicability of our approach.
+
+                                                                                                                       9
+Implicit Safety Alignment from Crowd Preferences
+
+Acknowledgements                                                      A. D. Learning robot objectives from physical human
+                                                                       interaction. In Conference on robot learning, pp. 217­
+This work was conducted in the Aligned, Robust, and In-                226. PMLR, 2017.
+teractive Autonomy (ARIA) Lab at the University of Utah.
+ARIA Lab research is supported in part by the NSF (IIS-             Boldi, R., Ding, L., Spector, L., and Niekum, S. Pareto-
+2310759, IIS2416761), the NIH (R21EB035378), ARPA-H,                   optimal learning from preferences with hidden context.
+the ARL STRONG program, and Coefficient Giving.                        2024.
+
+Impact Statement                                                    Booth, S., Knox, W. B., Shah, J., Niekum, S., Stone, P., and
+                                                                      Allievi, A. The perils of trial-and-error reward design:
+This paper presents work whose goal is to advance the field            misdesign through overfitting and invalid task specifica-
+of machine learning. One potential benefit is that our ap-             tions. In Proceedings of the AAAI Conference on Artificial
+proach enables the reuse of crowd preference data across              Intelligence, volume 37, pp. 5920­5929, 2023.
+tasks, even when such preferences are not collected for
+a specific downstream task, potentially reducing repeated           Bradley, R. A. and Terry, M. E. Rank analysis of incom-
+preference collection and the associated cost of human feed-           plete block designs: I. the method of paired comparisons.
+back. More broadly, by leveraging implicit safety signals             Biometrika, 39(3/4):324­345, 1952.
+from crowd preferences, our method may help mitigate
+challenges in reward design, where it is common for human-          Brown, D., Goo, W., Nagarajan, P., and Niekum, S. Extrap-
+specified rewards to be incomplete or misspecified. By                 olating beyond suboptimal demonstrations via inverse re-
+learning safe behaviors without explicit safety criteria, our          inforcement learning from observations. In International
+method may facilitate RL application in domains where                  conference on machine learning, pp. 783­792. PMLR,
+safety specifications are difficult to define.                         2019.
+
+At the same time, our approach assumes that crowd prefer-           Brown, D. S., Goo, W., and Niekum, S. Better-than-
+ence data reflect a shared consensus on safety, which may              demonstrator imitation learning via automatically-ranked
+not always hold in practice due to noisy or intentionally              demonstrations. In Conference on robot learning, pp.
+misleading feedback. Consequently, care is required when               330­359. PMLR, 2020.
+applying this method in real-world settings, and improving
+robustness to misaligned or adversarial preferences remains         Chakraborty, S., Qiu, J., Yuan, H., Koppel, A., Huang, F.,
+an important direction for future work. Overall, we be-                Manocha, D., Bedi, A., and Wang, M. Maxmin-rlhf:
+lieve that, when applied with appropriate care, the potential         Towards equitable alignment of large language models
+benefits of our approach outweigh these limitations.                  with diverse human preferences. In ICML 2024 Workshop
+                                                                       on Models of Human Feedback for AI Alignment, 2024.
+
+References                                                          Chhan, D., Novoseller, E., and Lawhern, V. J. Crowd-prefrl:
+                                                                       Preference-based reward learning from crowds. arXiv
+Ajay, A., Kumar, A., Agrawal, P., Levine, S., and Nachum,              preprint arXiv:2401.10941, 2024.
+   O. Opal: Offline primitive discovery for acceler-
+   ating offline reinforcement learning. arXiv preprint             Chittepu, Y., Metevier, B., Schwarzer, W., Hoag, A.,
+   arXiv:2010.13611, 2020.                                             Niekum, S., and Thomas, P. S. Reinforcement learn-
+                                                                       ing from human feedback with high-confidence safety
+An, G., Lee, J., Zuo, X., Kosaka, N., Kim, K.-M., and Song,            constraints. arXiv preprint arXiv:2506.08266, 2025.
+   H. O. Direct preference-based policy optimization with-
+   out reward modeling. Advances in Neural Information              Christiano, P. F., Leike, J., Brown, T., Martic, M., Legg,
+  Processing Systems, 36:70247­70266, 2023.                            S., and Amodei, D. Deep reinforcement learning from
+                                                                       human preferences. Advances in neural information pro-
+Bacon, P.-L., Harb, J., and Precup, D. The option-critic               cessing systems, 30, 2017.
+   architecture. In Proceedings of the AAAI conference on
+   artificial intelligence, volume 31, 2017.                        Dai, J., Pan, X., Sun, R., Ji, J., Xu, X., Liu, M., Wang,
+                                                                      Y., and Yang, Y. Safe rlhf: Safe reinforcement learning
+Bai, Y., Jones, A., Ndousse, K., Askell, A., Chen, A., Das-            from human feedback. In International Conference on
+   Sarma, N., Drain, D., Fort, S., Ganguli, D., Henighan, T.,         Learning Representations, 2024.
+   et al. Training a helpful and harmless assistant with rein-
+   forcement learning from human feedback. arXiv preprint           Eysenbach, B., Gupta, A., Ibarz, J., and Levine, S. Diversity
+   arXiv:2204.05862, 2022.                                             is all you need: Learning skills without a reward function.
+                                                                       arXiv preprint arXiv:1802.06070, 2018.
+Bajcsy, A., Losey, D. P., O'malley, M. K., and Dragan,
+
+                                                                10
+Implicit Safety Alignment from Crowd Preferences
+
+Fujimoto, S. and Gu, S. S. A minimalist approach to offline       Knox, W. B., Hatgis-Kessell, S., Adalgeirsson, S. O., Booth,
+   reinforcement learning. Advances in neural information            S., Dragan, A., Stone, P., and Niekum, S. Learning op-
+   processing systems, 34:20132­20145, 2021.                         timal advantage from preferences and mistaking it for
+                                                                     reward. In Proceedings of the AAAI Conference on Artifi-
+Fujimoto, S., Hoof, H., and Meger, D. Addressing function            cial Intelligence, volume 38, pp. 10066­10073, 2024.
+   approximation error in actor-critic methods. In Interna-
+   tional conference on machine learning, pp. 1587­1596.          Kostrikov, I., Nair, A., and Levine, S. Offline reinforce-
+   PMLR, 2018.                                                       ment learning with implicit q-learning. In International
+                                                                    Conference on Learning Representations, 2022.
+Gronauer, S. Bullet-safety-gym: A framework for con-
+   strained reinforcement learning. Technical report, media-      Krakovna, V., Uesato, J., Mikulik, V., Rahtz, M., Everitt, T.,
+  TUM, 2022.                                                         Kumar, R., Kenton, Z., Leike, J., and Legg, S. Specifi-
+                                                                     cation gaming: the flip side of AI ingenuity. DeepMind
+Haarnoja, T., Zhou, A., Abbeel, P., and Levine, S. Soft              Blog, 2020. URL https://deepmind.google/
+   actor-critic: Off-policy maximum entropy deep reinforce-          blog/specification- gaming- the- flip- s
+   ment learning with a stochastic actor. In International           ide-of-ai-ingenuity/.
+   conference on machine learning, pp. 1861­1870. Pmlr,
+   2018.                                                          Lee, K., Smith, L., Dragan, A., and Abbeel, P. B-pref:
+                                                                     Benchmarking preference-based reinforcement learning.
+Hadfield-Menell, D., Dragan, A. D., Abbeel, P., and Russell,         arXiv preprint arXiv:2111.03026, 2021.
+   S. The off-switch game. In AAAI Workshops, 2017.
+                                                                  Levine, S. Reinforcement learning and control as proba-
+Hejna, J., Rafailov, R., Sikchi, H., Finn, C., Niekum, S.,           bilistic inference: Tutorial and review. arXiv preprint
+   Knox, W. B., and Sadigh, D. Contrastive preference learn-         arXiv:1805.00909, 2018.
+   ing: Learning from human feedback without reinforce-
+   ment learning. In International Conference on Learning         Lioutikov, R., Neumann, G., Maeda, G., and Peters, J.
+  Representations, volume 2024, pp. 18770­18798, 2024.               Learning movement primitive libraries through prob-
+                                                                     abilistic segmentation. The International Journal of
+Hejna III, D. J. and Sadigh, D. Few-shot preference learn-          Robotics Research, 36(8):879­894, 2017.
+   ing for human-in-the-loop rl. In Conference on Robot
+  Learning, pp. 2014­2025. PMLR, 2023.                            Liu, Y., Datta, G., Novoseller, E., and Brown, D. S. Efficient
+                                                                     preference-based reinforcement learning using learned
+Jang, J., Kim, S., Lin, B. Y., Wang, Y., Hessel, J., Zettle-         dynamics models. In 2023 IEEE International Confer-
+   moyer, L., Hajishirzi, H., Choi, Y., and Ammanabrolu, P.          ence on Robotics and Automation (ICRA), pp. 2921­2928.
+   Personalized soups: Personalized large language model             IEEE, 2023a.
+   alignment via post-hoc parameter merging. arXiv preprint
+   arXiv:2310.11564, 2023.                                        Liu, Z., Guo, Z., Yao, Y., Cen, Z., Yu, W., Zhang, T., and
+                                                                     Zhao, D. Constrained decision transformer for offline
+Ji, J., Zhang, B., Zhou, J., Pan, X., Huang, W., Sun, R.,            safe reinforcement learning. In International conference
+   Geng, Y., Zhong, Y., Dai, J., and Yang, Y. Safety gymna-          on machine learning, pp. 21611­21630. PMLR, 2023b.
+   sium: A unified safe reinforcement learning benchmark.
+   In Thirty-seventh Conference on Neural Information Pro-        Malik, S., Anwar, U., Aghasi, A., and Ahmed, A. Inverse
+   cessing Systems Datasets and Benchmarks Track, 2023.              constrained reinforcement learning. In International con-
+   URL https://openreview.net/forum?id=                              ference on machine learning, pp. 7390­7399. PMLR,
+  WZmlxIuIGR.                                                        2021.
+
+Kim, K., Swamy, G., Liu, Z., Zhao, D., Choudhury, S., and         Nachum, O., Gu, S. S., Lee, H., and Levine, S. Data-efficient
+  Wu, S. Z. Learning shared safety constraints from multi-           hierarchical reinforcement learning. Advances in neural
+   task demonstrations. Advances in Neural Information               information processing systems, 31, 2018.
+  Processing Systems, 36:5808­5826, 2023.
+                                                                  Nachum, O., Tang, H., Lu, X., Gu, S., Lee, H., and Levine,
+Knox, W. B., Hatgis-Kessell, S., Booth, S., Niekum, S.,              S. Why does hierarchy (sometimes) work so well in re-
+   Stone, P., and Allievi, A. Models of human prefer-                inforcement learning? arXiv preprint arXiv:1909.10618,
+   ence for learning reward functions. arXiv preprint                2019.
+   arXiv:2206.02231, 2022.
+                                                                  Ng, A. Y., Russell, S., et al. Algorithms for inverse rein-
+                                                                     forcement learning. In Icml, volume 1, pp. 2, 2000.
+
+                                                              11
+Implicit Safety Alignment from Crowd Preferences
+
+Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright, C.,        Wirth, C., Akrour, R., Neumann, G., and Fu¨rnkranz, J. A
+   Mishkin, P., Zhang, C., Agarwal, S., Slama, K., Ray, A.,           survey of preference-based reinforcement learning meth-
+   et al. Training language models to follow instructions             ods. Journal of Machine Learning Research, 18(136):
+  with human feedback. Advances in neural information                1­46, 2017.
+   processing systems, 35:27730­27744, 2022.
+
+Papadimitriou, D. and Brown, D. S. Bayesian constraint
+   inference from user demonstrations based on margin-
+   respecting preference models. In 2024 IEEE Interna-
+   tional Conference on Robotics and Automation (ICRA),
+   pp. 15039­15046. IEEE, 2024.
+
+Papadimitriou, D., Anwar, U., and Brown, D. S. Bayesian
+   methods for constraint inference in reinforcement learn-
+   ing. Transactions on Machine Learning Research, 2022.
+
+Pertsch, K., Lee, Y., and Lim, J. Accelerating reinforcement
+   learning with learned skill priors. In Conference on robot
+   learning, pp. 188­204. PMLR, 2021.
+
+Poddar, S., Wan, Y., Ivison, H., Gupta, A., and Jaques,
+   N. Personalizing reinforcement learning from human
+   feedback with variational preference learning. Advances
+   in Neural Information Processing Systems, 37:52516­
+   52544, 2024.
+
+Shankar, T. and Gupta, A. Learning robot skills with tempo-
+   ral variational inference. In International Conference on
+  Machine Learning, pp. 8624­8633. PMLR, 2020.
+
+Shin, D., Dragan, A., and Brown, D. S. Benchmarks and
+   algorithms for offline preference-based reward learning.
+  Transactions on Machine Learning Research.
+
+Singh, A., Liu, H., Zhou, G., Yu, A., Rhinehart, N., and
+   Levine, S. Parrot: Data-driven behavioral priors for re-
+   inforcement learning. arXiv preprint arXiv:2011.10024,
+   2020.
+
+Siththaranjan, A., Laidlaw, C., and Hadfield-Menell, D.
+   Distributional preference learning: Understanding and
+   accounting for hidden context in rlhf. In International
+  Conference on Learning Representations, volume 2024,
+   pp. 27448­27471, 2024.
+
+Sutton, R. S., Barto, A. G., et al. Reinforcement learning:
+  An introduction, volume 1. MIT press Cambridge, 1998.
+
+Tien, J. and Brown, D. Causal confusion and reward
+   misidentification in preference-based reward learning. In
+  International Conference on Learning Representations,
+   2023.
+
+Wang, X., Lee, K., Hakhamaneshi, K., Abbeel, P., and
+   Laskin, M. Skill preferences: Learning to extract and ex-
+   ecute robotic skills from human feedback. In Conference
+   on robot learning, pp. 1259­1268. PMLR, 2022.
+
+                                                               12
+                                     Implicit Safety Alignment from Crowd Preferences
+
+A. Derivation
+
+A.1. Reward Combination
+
+Lemma A.1 (Distributional Preference Learning (Siththaranjan et al., 2024), Theorem 3.1). When preference learning
+follows the Bradley­Terry formulation, the utility u^ learned on crowd preference implicitly aggregates hidden contexts
+according to the Borda count in the limit of infinite data. Formally, let T denote a finite trajectory set. For any two
+trajectories (alternatives) a, b  T ,
+
+                                                  u^(a) > u^(b)  BC(a) > BC(b),
+
+where the Borda count is defined as
+
+                                     1
+                BC(a) =                     pu,Dz (a, b),        pu,Dz (a, b) = Ezp(z)[Ou(a, b, z)],
+                             |T |
+                                        bT
+
+and
+
+                         Ou(a, b, z) =      1   ,                         u(a, z) = u(b, z),
+                                            2                             otherwise.
+
+                                            I{u(a, z) > u(b, z)},
+
+Lemma A.2. If a trajectory pair ( 1,  2) is consistent, then the learned reward model u^ trained on infinite crowd preference
+
+data satisfies
+
+                                        u^( 1) > u^( 2) or u^( 1) < u^( 2),
+
+with the ordering matching the true utility ordering.
+
+Proof. Without loss of generality, assume u( 1, z) > u( 2, z) for all z. Consider the difference between the Borda counts
+of  1 and  2:
+
+                BC( 1) - BC( 2) = 1                        Ezp(z) Ou( 1,  , z) - Ou( 2,  , z) .       (13)
+                                            |T |
+                                                        T
+
+We analyze the summation term-by-term.
+
+Case 1: u( , z) = u( 1, z) and u( , z) = u( 2, z). Since u( 1, z) > u( 2, z) for all z, it follows that for any   and
+
+any z,
+
+                Ou( 1,  , z) = I{u( 1, z) > u( , z)}  I{u( 2, z) > u( , z)} = Ou( 2,  , z),
+
+and thus the corresponding summand is non-negative.
+
+Case 2: u( , z) = u( 1, z). For all z, we have
+
+                                        Ou( 1,  , z)   =   1  ,      Ou( 2,  , z) = 0,
+                                                           2
+
+since u( 2, z) < u( 1, z). Hence,
+
+                                        Ou( 1,  1, z) -    Ou( 2,  1, z)  =  1  >  0.
+                                                                             2
+
+Case 3: u( , z) = u( 2, z). For all z, we have
+
+                                        Ou( 1,  , z) = 1,            Ou( 2,  , z)  =  1  ,
+                                                                                      2
+
+and therefore
+
+                                        Ou( 1,  2, z) -    Ou( 2,  2, z)  =  1  >  0.
+                                                                             2
+
+Combining the above cases, every term in the summation is non-negative, and at least two terms are strictly positive ( 1 and
+ 2 themselves). Therefore,
+
+                                                          BC( 1) - BC( 2) > 0.
+
+According to Lemma A.1, the learned reward model u^ recovers the ordering induced by the Borda counts (Lemma A.1), and
+
+therefore
+
+                                                       u^( 1) > u^( 2).
+
+                                                                 13
+                                         Implicit Safety Alignment from Crowd Preferences
+
+Theorem A.3. Let the true utility be u(, z) = ruser(s, a, z) + rshare(s, a), where the shared component rshare(s, a)
+represents a safety penalty:
+
+                                         rshare(s, a) =            -K,  (s, a)  Xunsafe,
+                                                                   0,   otherwise.
+
+If the penalty K > 2L maxs,a,z |ruser(s, a, z)|, then all pairs ( safe,  unsafe) consisting of one safe and one unsafe trajectory
+are consistent. Consequently, the single reward model u^ learned from infinite crowd preference data satisfies
+
+                                                             u^( safe) > u^( unsafe),
+
+for any  safe and any  unsafe.
+
+Proof. For any pair ( safe,  unsafe), by definition there exists at least one unsafe state-action pair (s, a)  Xunsafe in  unsafe.
+We consider the utility difference
+
+           u( safe, z) - u( unsafe, z)                                                                        (14)
+
+        =     ruser(stsafe, atsafe, z) - ruser(sut nsafe, aut nsafe, z) + [0 - rshare(sut nsafe, aut nsafe)]  (15)
+
+           t                                                                           t
+
+        -                    2  max    |ruser(s,  a,  z  )|  + K.                                             (16)
+
+                          t     s,a,z
+
+                                                                                                              (17)
+
+Therefore, if K > 2L maxs,a,z |ruser(s, a, z)|, we have
+                                                   u( safe, z) > u( unsafe, z) for all z,
+
+which implies that every safe­unsafe trajectory pair is consistent. According to Lemma A.2, we have u^( safe) > u^( unsafe)
+for any safe­unsafe pair.
+
+Theorem A.4. Assume a finite set of hidden contexts {z1, . . . , zm} and a finite trajectory set T . Denote Xics as the set of
+all inconsistent pairs, define
+
+                                   N ( 1,  2, z) = I u( 1, z) > u(, z) > u( 2, z)}+
+
+                                                               T
+
+                                                             I u( 1, z) < u(, z) < u( 2, z) .
+
+For any zk, if the probability of zk in the crowd preference dataset satisfies
+
+                                                                   |T | - 1
+                                         p(zk) > min(,)Xics N (,  , zk) + |T |
+
+then for all  1,  2  T ,
+
+                                         u^( 1) > u^( 2)  u( 1, zk) > u( 2, zk).
+
+Proof. From the definition of the Borda count, for all  1,  2  T ,
+
+                                         BC( 1) - BC( 2)                                                      (18)
+
+                                             1        p(zi)        Ou( 1, , zi) - Ou( 2, , zi) .              (19)
+                                         =
+                                                  i           T
+                                           |T |
+
+Denote
+
+                                         Si :=               Ou( 1, , zi) - Ou( 2, , zi) ,
+
+                                                          T
+
+so that BC( 1) - BC( 2)         =   1    i p(zi)Si. We now analyze the bounds of Si. For an arbitrary context zi, assume
+                                   |T |
+
+without loss of generality that u( 1, zi) > u( 2, zi). Consider each trajectory   T in five cases:
+
+                                                                   14
+                                             Implicit Safety Alignment from Crowd Preferences
+
+· Case 1: u(, zi) > u( 1, zi). Then                     Ou( 1, , zi) = Ou( 2, , zi) = 0,
+  so the contribution is 0.
+
+· Case 2: u(, zi) = u( 1, zi). Then
+
+                                                   Ou( 1, , zi)  =  1  ,      Ou( 2, , zi) = 0,
+                                                                    2
+
+      so  the  contribution  is  1  .  In  particular,  the  self-comparison  term    =  1  contributes  1  .
+                                 2                                                                       2
+
+· Case 3: u( 1, zi) > u(, zi) > u( 2, zi). Then
+
+                                                   Ou( 1, , zi) = 1, Ou( 2, , zi) = 0,
+
+      so the contribution is 1. There are exactly N ( 1,  2, zi) such trajectories.
+
+· Case 4: u(, zi) = u( 2, zi). Then
+
+                                                   Ou( 1, , zi) = 1,          Ou( 2, , zi)  =  1  ,
+                                                                                               2
+
+      so  the  contribution  is  1  .  In  particular,  the  self-comparison  term    =  2  contributes  1  .
+                                 2                                                                       2
+
+· Case 5: u(, zi) < u( 2, zi). Then
+
+                                                        Ou( 1, , zi) = Ou( 2, , zi) = 1,
+
+      so the contribution is 0.
+
+Therefore, Case 3 occurs for exactly N ( 1,  2, zi) trajectories, while Cases 2 and 4 together contribute at least 1 due to the
+self-comparisons  =  1 and  =  2. Hence,
+
+                                       Si =        Ou( 1, , zi) - Ou( 2, , zi)  1 + N ( 1,  2, zi).
+
+                                              T
+
+Moreover, since every term is at most 1 and the remaining |T | - 2 non-self comparisons can contribute at most 1 each, we
+
+have
+
+                                             Si =       Ou( 1, , zi) - Ou( 2, , zi)  |T | - 1.
+
+                                                    T
+
+Hence,
+
+                                                        1 + N ( 1,  2, zi)  Si  |T | - 1.
+
+By symmetry, when
+
+                                                             u( 1, zi) < u( 2, zi),
+
+the ordering of all comparisons is reversed, yielding
+
+                                                 -(|T | - 1)  Si  - 1 + N ( 1,  2, zi) .
+
+Moreover, if u( 1, zi) = u( 2, zi), then for every   T we have Ou( 1, , zi) = Ou( 2, , zi), and hence Si = 0.
+Now we aim to derive the worst-case lower bound of BC( 1) - BC( 2). Without loss of generality, assume
+
+                                                             u( 1, zk) > u( 2, zk),
+
+so that
+
+                                                             Sk  1 + N ( 1,  2, zk).
+
+For any other context zi = zk, the relative ordering between u( 1, zi) and u( 2, zi) can be arbitrary. Therefore, in the worst
+case,
+
+                                                       Si  -(|T | - 1), i = k.
+
+                                                                    15
+                                         Implicit Safety Alignment from Crowd Preferences
+
+Combining these bounds, we obtain
+
+            BC( 1) - BC( 2) = 1                                      1    p(zk) 1 + N ( 1,  2, zk)  - (1 - p(zk))(|T | - 1)    .
+                                        |T |           p(zi)Si  |T |
+                                                 i
+
+Hence, if
+
+                                                          p(zk )    >          |T | - 1       ,
+                                                                                             |
+                                                                       N ( 1,  2, zk) +  |T
+
+then BC( 1) - BC( 2) > 0, which implies
+
+                                                                    u^( 1) > u^( 2).
+
+Therefore,  when      p(zk )  >  N  (    |T |-1     |  ,  we  have
+                                       1, 2,zk)+|T
+
+                              u( 1, zk) > u( 2, zk)  BC( 1) - BC( 2) > 0  u^( 1) > u^( 2)
+
+Let                                                           |T | - 1                           |T | - 1
+
+                              p(zk )  >     max           N (,  , zk) + |T  |  =  min(, )Xics    N (,  , zk) + |T   ,
+                                                                                                                   |
+                                         (, )Xics
+
+then for every inconsistent pair ( 1,  2)  Xics satisfying
+
+                                                              u( 1, zk) > u( 2, zk),
+
+we   have  p(zk )  >  max(, )Xics               |T |-1        >          |T |-1     and  thus
+                                         N (, ,zk)+|T |          N ( 1, 2,zk)+|T |
+
+                                                                    u^( 1) > u^( 2).
+
+Since consistent pairs share the same ordering across all contexts, while every inconsistent pair follows the ordering induced
+by zk, the learned reward ordering induced by u^ coincides exactly with the ordering induced by u(·, zk) over all trajectory
+pairs.
+
+Moreover, if we assume every trajectory has a distinct utility, we have Si = 1 + N ( 1,  2, zi) or Si = -(1 + N ( 1,  2, zi)),
+and thus
+
+            BC( 1) - BC( 2)  1                      p(zk) 1 + N ( 1,  2, zk)        - (1 - p(zk)) 1 + max N ( 1,  2, zi)    .
+                                        |T |
+                                                                                                                         i
+
+Finally, we can yield a tighter bound
+
+                                         p(zk )  >     max          2  +      1 + maxi N (,  , zi)   ,     zi)
+                                                                          N (,  , zk) + maxi N (,
+                                                    (, )Xics
+
+A.2. Policy Composition
+
+Corollary A.5. For any context zk, the learned utility function prefers safe trajectories over unsafe ones, i.e.,
+
+                                                        u^(safe, zk ) > u^(unsafe, zk ),
+for any zk and any pair of trajectories safe and unsafe in the limit of infinite data.
+
+This result follows from the fact that each conditioned utility u^(·, zk ) is trained only on a subset of the crowd preference
+dataset Dpref, consisting of trajectories assigned to the latent variable zk by the encoder q, i.e., Dzk = { | q(zk | Sz) =
+0,   Sz, Sz  Dpref}. As established in the Theorem 4.2, all safe-unsafe trajectory pairs in Dpref are consistent. Therefore,
+all safe-unsafe pairs in Dzk , which is a subset of Dpref, should remain consistent, and thus the learned conditioned utility
+u^(·, zk ) maintains the ordering between safe and unsafe trajectories, yielding u^(safe, zk ) > u^(unsafe, zk ).
+Next, we show that composing low-level policies--each of which is optimal with respect to its conditioned util-
+ity--guarantees safety.
+
+                                                                        16
+Implicit Safety Alignment from Crowd Preferences
+
+Corollary A.6. If each low-level policy (· | s, zk) is optimal with respect to the conditioned utility u^(·, zk), then any
+downstream policy obtained by composing the low-level policies {(· | s, zk)} satisfies the safety criteria.
+
+Proof. By construction, the downstream policy operates by selecting a latent variable zk and executing the corresponding
+low-level policy (· | s, zk) for a finite horizon. Therefore, any trajectory  induced by the downstream policy can be
+expressed as a concatenation of trajectory segments
+
+ =  (1)   (2)  · · ·   (m),
+
+where each segment  (i) is generated by some low-level policy (· | s, zki ).
+
+From Corollary A.5, each conditioned utility u^(·, zki ) strictly prefers safe trajectories over unsafe ones. Consequently, the
+corresponding low-level policy (· | s, zki ), which is optimal with respect to u^(·, zki ), induces only safe trajectories if safe
+trajectories are feasible; that is, all state­action pairs along each segment  (i) satisfy the safety constraints.
+
+Since safety violations are defined at the level of state­action pairs, and each segment  (i) is safe, their concatenation 
+cannot contain any unsafe state­action pair. Hence, any downstream policy obtained by composing the low-level policies is
+guaranteed to be safe.
+
+Theorem A.7. Consider a set of low-level policies {(· | s, z)}, where each policy (· | s, z) is z-suboptimal with respect
+to its conditioned utility u^(·, z), i.e.,
+
+                                                        E(·|z)[u^] - E(·|z)[u^]  z,
+
+where (· | z) denotes the optimal policy under u^(·, z).
+
+Assume the safety penalty is K > 0 per violation, and the downstream policy composes at most m low-level policies per
+trajectory. Then the expected number of safety violations incurred by the downstream policy is bounded by
+
+                    1                           m          m maxz z .
+N (violation)                                                   K
+                                                     zj  
+                    K
+                                                j=1
+
+Proof. Consider a low-level policy (· | z) with utility gap z relative to the optimal policy (· | z). The utility is defined
+as t ruser + rshare, where violations of safety constraints incur a penalty of K per occurrence.
+
+In the worst case, the entire utility gap z can be attributed to safety violations. Since each violation contributes at least K to
+the utility difference, the expected number of violations under (· | z) is bounded by z/K.
+
+Now consider a downstream policy that composes at most m low-level policies, yielding at most m trajectory segments,
+each governed by some (· | zj). Summing over all segments, the total number of violations is bounded by
+
+                                                m    zj = 1  m
+                                                     KK
+N (violation)                                                   zj .
+
+                                                j=1          j=1
+
+Finally, since zj  maxz z for all j, we obtain
+
+N (violation)  m maxz z .
+                         K
+
+We next study the downstream task performance achieved by policies composed from learned skills. Although a direct
+analysis is challenging, it is clear that downstream performance is strongly influenced by the diversity of the learned skills.
+In particular, if the VAE collapses most preferences into a single latent subset, the model effectively learns only one skill,
+which typically lacks the behavioral primitives required to solve new downstream tasks. Therefore, desirable skills should
+align with a diverse set of underlying preferences in the crowd preference dataset, thereby exhibiting sufficient diversity.
+
+To facilitate analysis, we introduce two simplifying assumptions. First, we assume that the encoder q(z | Sz) outputs a
+categorical distribution over m annotation tasks, predicting which task each preference set Sz originates from.4 We further
+
+    4In practice, m is unknown, and we therefore use a continuous encoder with Gaussian outputs rather than a categorical encoder.
+
+                                                                        17
+                               Implicit Safety Alignment from Crowd Preferences
+
+assume that the probability of misassignment is upper bounded by . Under this assumption, Theorem A.8 shows that
+for any two trajectories, if their utility-based ranking gap in context zk exceeds a threshold depending on , then their
+preference relationship induced by the learned utility is consistent with the true utility. In the special case  = 0, the learned
+utility recovers the correct ordering over all trajectories, implying that the resulting low-level policy l(a | s, zk ) will
+be optimal for context zk. Second, although the learned utility derived from the Bradley­Terry model does not have a
+closed-form expression, we leverage the equivalence between Borda count and the learned utilities in terms of ranking, and
+thus approximate the learned utility using Borda count, which in turn enables a tractable analysis of the KL divergence
+between the trajectory distribution induced by l(a | s, zk ) and that of the optimal policy for context zk. As shown in
+Theorem A.9, this divergence is upper bounded by 2.
+
+Together, Theorems A.8 and A.9 establish a connection between the quality of the skill discovery--captured by the classifi-
+cation error  of VAE encoder--and the optimality of the learned utilities and low-level policies under the corresponding
+context. Since the latter directly influence skill diversity, these results provide theoretical insight into how skill discovery
+influences downstream task performance through skill composition.
+
+Theorem A.8. Assume that under the hidden context zk, all trajectories are ranked by their true utilities u(, zk) such that
+
+                                      u( 1, zk)  u( 2, zk)  · · ·  u( |T |, zk).
+
+Let   [0, 1] be an upper bound on the probability that a sample assigned to zk actually has a different true context, i.e.,
+P (True = zk|Assigned = zk)  . If for two trajectories  i and  j, the rank gap satisfies
+
+                                                                                
+                                                              i - j > |T | ,
+
+                                                                             1-
+
+then under the learned model we have
+
+                                                u^( i, zk) > u^( j, zk).
+
+Proof. Under our assumption that P (True = zk|Assigned = zk)  , the true context distribution of preferences within
+this training set Dzk can be written as
+
+                                      Pzk (z) = (1 - ) I{z = zk} +  R(z),
+
+where R(z) denotes an arbitrary distribution over contexts corresponding to misassigned preference data.
+For any trajectory  , the Borda counts under the Dzk are given respectively by
+
+                                      BCzk ( )  =   1       EzPzk (z)[Ou(,  , z)],                                      (20)
+                                                   |T |
+                                                         
+
+                                                = (1 - )BCzk ( ) +  B~Czk ( ),                                          (21)
+
+where                    1                                                 1
+         BCzk ( ) = |T |                                                  |T |
+                                      Ou(,  , zk),          B~Czk ( )  =          EzR(z)[Ou(,  , z)]
+
+                                                                                
+
+Now consider two trajectories  i and  j with ranks i > j in the true order, i.e. BCzk ( i) > BCzk ( j). For convenience, let
+
+         ij  =          BCzk ( i)     -  BCzk ( j )      =   1       Ou( i, , zk) - Ou( j, , zk)].
+                                                                [
+                                                                   
+                                                            |T |
+
+Since  i is ranked at position i and  j is ranked at position j, there are at least i - j + 1 trajectories whose utilities lie
+between them. Besides, at least one trajectories ( i /  j) itself) share the same utility with  i /  j. Therefore,
+
+         Ou( i, , zk) - Ou( j, , zk)
+
+       
+
+[Ou( i,  i, zk) + 0] +         Ou( i,  l, zk) - Ou( j,  l, zk)         + [Ou( i,  j, zk) - Ou( j,  j, zk)]  =  i-j
+                                                                                                                     .
+                        j<l<i
+                                                                                                                |T |
+
+                                                            18
+                                               Implicit Safety Alignment from Crowd Preferences
+
+Then, since Ou(·)  [0, 1], we have 0  B~Czk ( )  1 and 0  BCzk ( )  1 for all  . We can bound the noisy Borda
+counts as follows:
+
+                              BCzk ( i) = (1 - )BCzk ( i) +  B~Czk ( i)  (1 - )BCzk ( i),
+
+                              BCzk ( j) = (1 - )BCzk ( j) +  B~Czk ( j)  (1 - )BCzk ( j) + .
+
+Hence,
+
+                           BCzk ( i) - BCzk ( j )  (1 - ) BCzk ( i) - BCzk ( j )                                        i-j
+                                                                                                       -   (1 - ) - .
+
+                                                                                                                         |T |
+
+If  i  -  j  >  |T  |      satisfies,  then
+                       1-
+
+                                                            BCzk ( i) - BCzk ( j ) > 0
+
+Under this condition, the perturbed Borda order is consistent with the true order, implying that the learned model preserves
+the relative preference between  i and  j according to Lemma A.1:
+
+                                         BCzk ( i) > BCzk ( j ) = u^( i, zk) > u^( j , zk).
+
+Theorem A.9. Assume that under the hidden context zk, the learned utility is approximated by Borda count. Let   [0, 1]
+
+be an upper bound on the probability that a sample assigned to zk actually has a different true context satisfies Under
+
+the MaxEnt framework with the entropy temperature , let pzk ( )  exp                                1  B  C  (  )     denote the approximated optimal
+                                                                                                    
+                                                                                                                1           
+trajectory distribution for the utility u(·, zk) under context zk, and let qzk ( )  exp                               B  C    (  )  denote the approximate
+
+distribution for the learned utility u^(·, zk), where BC( ) and BC( ) is the Borda count of  under the u(·, zk) and u^(·, zk),
+
+respectively. Then the Kullback­Leibler divergence admits the bound
+
+                                                                                        2
+                                                                 KL pzk  qzk  22 .
+
+Proof. From the proof of Theorem A.8, for any trajectory  , the Borda counts under the Dzk are given respectively by
+
+                                                   BCzk ( )    =     1          EzPzk (z)[Ou(,  , z)],                              (22)
+                                                                    |T |
+                                                                          
+
+                                                               = (1 - )BCzk ( ) +  B~Czk ( ),                                       (23)
+
+where                                      1                                                   1
+                           BCzk ( ) = |T |                                                    |T |
+                                                      Ou(,  , zk),              B~Czk ( )  =           EzR(z)[Ou(,  , z)]
+
+                                                                                                    
+
+Let
+                                     ( ) := BCzk ( ) - BCzk ( ) =  B~Czk ( ) - BCzk ( ) .
+
+Since each Ou(·)  [0, 1], both BCzk ( ) and B~Czk ( ) lie in [0, 1], and hence
+
+                                                                 |( )|   for all .
+
+Under the maximum entropy RL framework, the optimal trajectory distribution induced by a reward function r is given by
+
+p( ) = exp          1  u(  )  (Levine, 2018), where u( ) denotes the utility (or cumulative reward) and  is temperature parameter.
+                    
+
+Since the trajectory-level utility learned via the Bradley-Terry loss does not admit a closed-form expression, we exploit
+
+the ranking equivalence between the learned utility and the Borda count to approximate the utility, i.e., u(, z)  BCz( ).
+
+Accordingly, we approximate the optimal trajectory distributions induced by the true utility u(·, zk) and the learned utility
+
+u^(·, zk) as follows:
+
+                                             p( )  =  exp   1  B  Czk  (  )  ,      q( )  =   exp   1  BCz k  (    )  ,
+                                                                                                       Z
+
+                                                               Z
+
+with partition functions Z =                   exp    1  B  Czk  (  )  and   Z  =          exp  1   BCzk (    ).      It is worth noting that when the
+                                                                                                
+temperature parameter  approaches 0, the above approximation becomes exactly equivalent to the true optimal trajectory,
+
+                                                                                19
+                                    Implicit Safety Alignment from Crowd Preferences
+
+since probability mass is assigned exclusively to trajectories that achieve the maximum utility, which coincide with those
+achieving the highest Borda count.
+
+Compute the KL divergence:
+
+               KL(pq) =                       p( )       p( )  1  BCzk ( )  -  1  BCzk ( )         Z
+                                    p( ) log =                                              + log
+                                                       
+                                              q( )                                                  Z
+
+                                 1       Z
+                            = -  Ep[] + log Z .
+
+Noting that
+
+Z =            exp BCzk ( ) =       exp BCzk ( ) exp ( ) = Z        exp     BCzk ( )  exp  ( )  =  Z           ( )  ,
+                                                                                                          exp 
+                                                                                                      Ep
+                                                                             Z
+                                                                  
+
+we have
+
+                                         Z                        ( )
+                                    log Z = log Ep exp  .
+
+Therefore the KL divergence can be written exactly as
+
+                                                       ( )                  ( )
+                                    KL(pq) = -Ep[  ] + log Ep exp  .
+
+Now after applying Hoeffding's lemma to the bounded random variable satisfying ( )/  [-/, /] under
+
+distribution p, we have
+
+                                    ( )                ( ) (2)2             ( ) 2
+                            log Ep exp   Ep[  ] + 82 = Ep[  ] + 22 .
+
+Substituting this bound into the expression for the KL divergence yields
+
+                                         ( )                   ( ) 2                  2
+                               KL(pq)  -Ep[  ] + Ep[  ] + 22 = 22 .
+
+which completes the proof.
+
+B. Implementation Details
+
+B.1. Our Method
+
+Our code is available at https://github.com/qianlin04/Implicit-Safety-Alignment-from-Crowd
+-Preferences.
+
+Skill Discovery Our implementation is based on the official VPL codebase5. We consider two variants in this work. The
+first variant follows the original VPL formulation: we first learn a latent-conditioned reward function r(s, a, z) using the
+VPL losses in Eqs. 7,8, and then train a latent-conditioned low-level policy (a | s, z) via IQL (Kostrikov et al., 2022).
+The second variant combines VAE-based loss in Eq. 7 with CPL (i.e., Eq. 10), to directly learn the latent-conditioned policy
+(a | s, z). However, we find that this variant jointly training the encoder q(z | Sz) and the policy (a | s, z) leads to
+unstable policy learning. To address this issue, we first jointly train the encoder and the latent-conditioned reward using
+the standard VPL losses in Eqs. 7 and 8, following the first variant. We then discard the latent-conditioned reward, fix the
+encoder and update only the policy using the objectives in Eqs. 7 and 10. Unless otherwise specified, we adopt the default
+hyperparameters from the VPL and CPL implementations. Hyperparameters that differ from the original implementations
+are summarized in Table 3.
+
+    5https://github.com/WEIRDLabUW/vpl
+
+                                                                        20
+                                                 Implicit Safety Alignment from Crowd Preferences
+
+Downstream Training We train the downstream policy using TD3 and TD3+BC for the online and offline downstream
+settings, respectively. Our implementations are based on the official codebases6. To further prevent the exploitation of
+out-of-distribution skills, in addition to the prior regularization term, we explicitly constrain the output range of the high-level
+policy. Specifically, we apply a tanh activation at the output of the policy network, yielding the high-level action
+
+                                                            ah = Amax · tanh(x),
+
+where x denotes the output of the final layer of the policy network, and Amax is a manually specified bound. The resulting
+latent variable is constructed as
+
+                                                   z = Mean(p(z)) + Std(p(z)) · ah,
+which is then used as the input to the low-level policy (a | s, z) to produce the final environment action. The specific
+hyperparameters used for downstream training are summarized in Table 3.
+
+B.2. Baselines
+
+TD3 and TD3+BC also serve as the backbone algorithms for both the Task-only and RC baselines. These baselines directly
+learn action-level policies that output environment actions, whereas our approach optimizes a high-level policy while keeping
+the low-level policy fixed. The Task-only baseline optimizes only the downstream task reward, consistent with our objective,
+while the RC baseline optimizes a fused reward that combines the downstream task reward with a single reward learned
+from the crowd preference dataset. In addition, we adopt CDT as the oracle baseline under the offline downstream setting,
+implemented based on the OSRL framework7.
+
+Constraint Decision Transformer (CDT) CDT has access to real safety reward, and solves the following constrained
+optimization problem:
+
+                                              ED [rnew(st, at)] s.t. ED [rshare(st, at)] = 0.
+
+Specifically, CDT employs a transformer-based policy trained via trajectory cloning:
+
+          T
+
+max  E D       log (at | st, Gtr, Gtc) ,
+
+          t=1
+
+where Grt denotes the return-to-go from step t to T (i.e., Gtr =  T      rnew,i),  and  Gct  is  a  randomly  sampled     constraint
+                                                                  i=t
+                                                                         T
+threshold that upper-bounds the cumulative cost from t to T (i.e., Gtc   i=t  rshare,i).  During    evaluation,  we  set  Gct  =  0  to
+
+enforce constraint satisfaction, and set Gtr to the task performance achieved by the oracle (SAC trained with full reward).
+
+Reward Combine (RC) For the RC baselines, we first learn a single reward model r(s, a) from the crowd preference
+dataset using Eq. 2, and then combine it with the new-task reward rnew(s, a) to form the downstream objective. We observe
+that the scale of r(s, a) is often significantly larger than that of rnew(s, a). To mitigate this issue, we adopt two techniques:
+(1) we add an L2 regularization term on the reward outputs in the Bradley­Terry loss when training r:
+
+                L = E(1,2)Dpref y · log P (y = 1 |  1,  2) + (1 - y) · log P (y = 0 |  1,  2) +  · L2(r) ,
+
+where L2(r) denotes the 2 norm of the predicted rewards over  1 and  2; (2) we normalize r over the entire offline
+dataset D by subtracting the mean and dividing by the standard deviation.
+
+C. Safe RL Experiment Details
+
+C.1. Environment
+
+The Reach, Run, and Circle environments are adapted from Bullet-Safety (Gronauer, 2022), where a ball agent is used to
+perform different tasks. The Ant-vel, Swimmer-vel, and HalfCheetah-vel are adapted from Safety-Gym (Gronauer, 2022),
+where Ant, Swimmer, and HalfCheetah agents perform direction-based tasks under velocity constraints.
+
+    6https://github.com/sfujim/TD3, https://github.com/sfujim/TD3_BC
+    7https://github.com/liuzuxin/OSRL
+
+               21
+Implicit Safety Alignment from Crowd Preferences
+
+Table 3. Some hyperparameters of our methods and baselines.
+
+Parameter                                               Setting
+
+Latent variable dimension                               4
+Expectile for IQL                                       0.9 for Reach, and 0.75 for all other environments
+Bias regularizer  for CPL ()                            1.0 for Reach and Run, and 0.5 for all other environments
+Bound for h(Amax)                                       3.0
+Prior regularization coefficient reg in Eqs. 11,12      1.0 in offline settings, and 0.01 in online settings
+Behavior cloning weight in TD3+BC (BC)                  Tuned over {1.0, 20.0, 200.0, 2000.0} for each environment
+Regularization coefficient for RC ()                    0.0005
+
+Figure 5. Visualization of the six downstream environments considered in this work. In the left three panels, the red dot denotes the agent;
+wall constraints are present in the first and third panels, while the blue region in the second panel indicates a risky area.
+
+Reach At the beginning of each episode, six hazardous regions are randomly generated. The agent is required to navigate
+to a target location while avoiding hazardous regions. The safety reward and a set of goal-specific rewards are defined as
+
+rshare = -K · I(distance to any risk area < 1)               (24)
+
+rgoal = I(s - starget22 < 2),                                (25)
+
+where s denotes the agent's current position and starget denotes an target location associated with different goal-specific
+rewards. Notably, starget is not included in the agent's state representation; thus, the agent can only infer target information
+implicitly through the reward signal. During annotation, we consider the four corner locations of the square map as targets,
+and use the corresponding goal-specific rewards rgoal to induce crowd variation, i.e., the user-specific component ruser. The
+final annotation reward is then given by the combination ruser + rshared. Such an option is motivated by the observation that
+behaviors for reaching arbitrary locations in downstream tasks can be composed from those for reaching the corner targets. In
+the downstream stage, the shared safety reward rshared is not available; instead, we have access only to goal-specific rewards
+associated with arbitrary target locations, corresponding to a continuum of downstream tasks, and report performance
+
+averaged across these tasks.
+
+Run This environment contains two passable walls located at y = 0.5 and y = -0.5. The agent is required to move along
+the x-axis at a target speed vtarget  [0, 5.0]. The safety reward and a set of goal-specific rewards are defined as
+
+rshare = -K · I(|sy| > 0.5)                                  (26)
+
+rgoal = exp(-0.5|vx - vtarget|),                             (27)
+
+where s and v denote the agent's position and velocity, respectively. During annotation, preference labels are generated
+using annotation rewards composed of the shared safety reward and two target speeds, vtarget  0, 5.0. In the downstream
+stage, we use goal-specific rewards with arbitrary target speeds vtarget  [0, 5.0].
+
+Circle Similar to Run, the environment contains two passable walls located at x = 6.0 and y = -6.0. The agent is
+required to move at a target tangential speed vtarget  [0, 6.0] while rotating around the origin (0, 0). The safety reward and a
+set of goal-specific rewards are defined as
+
+rshare = -K · I(|x| > 6.0)                                   (28)
+
+rgoal = - exp(-0.5|vtangent - vtarget|) 1 + s22 - 7.0 ,      (29)
+
+                                                    22
+                                                 Implicit Safety Alignment from Crowd Preferences
+
+where s denotes the agent's position and vtangent is the tangential velocity around the origin. During annotation, preference
+labels are generated using two target speeds, vtarget = 0 and vtarget = 6.0. In the downstream stage, we consider arbitrary
+target speed vtarget  [0, 6.0].
+
+Ant-vel, Swimmer-vel, and HalfCheetah-vel In these environments, Ant, Swimmer, and HalfCheetah agents are required
+to move as fast as possible along a target direction u = (cos target, sin target), while ensuring that the overall speed does not
+exceed a threshold v. The reward functions are defined as
+
+                                                rshare = -K · I(v > v)                                                  (30)
+
+                                                     rgoal = vxux + vyuy,                                               (31)
+
+where v  denotes  the  agent's  velocity.  For  Ant  and Swimmer,  target    {0,     ,  ,  3   }  combined with rshare  are used  for
+                                                                                  2         2
+
+annotation, and goal-specific reward rgoal with target = i · 2/40 for i = 0, 1, . . . , 39 are used as downstream task rewards.
+
+Due to structural constraints, HalfCheetah can only move forward or backward, resulting in two feasible direction target = 0
+
+and target = , both of which are used for annotation and downstream training.
+
+Discussion In the Reach and Run environments, the shared objective and task objective are largely non-conflicting, leading
+to similar task performance with or without safety constraints. In contrast, in Circle and velocity-based tasks, the shared and
+task objectives are inherently conflicting, resulting in a larger task performance gap between safe agents and unsafe agents.
+We consider environments where user-specific preferences are defined by target velocity, goal, or direction, and safety is
+implicitly encoded through region or velocity constraints, covering most standard Safe RL benchmarks. We focus on tasks
+of moderate difficulty, where all methods can achieve high task performance, enabling clear evaluation of safety. In more
+challenging tasks, where all methods struggle, it becomes difficult to isolate the impact of safety due to the lack of a reliable
+performance reference on task completion.
+
+C.2. Offline Data Generation
+
+To construct the crowd preference datasets, we first collect trajectories to form an offline dataset D . We train agents using
+SAC for each goal-specific reward. Training is conducted for a total of N steps: during the first N /2 steps, the agent
+optimizes only the task reward ruser, while during the remaining N /2 steps it optimizes the full reward rshare + ruser. The
+resulting replay buffer of size N constitutes the offline dataset D . This procedure ensures that D contains a mixture of
+unsafe and safe trajectory from all goals.
+
+Besides, for all environments, we use a penalty coefficient K = 10.0, which allows the agent to achieve good task
+performance while maintaining near-zero cost across tasks. Although using a larger K is possible, we find that it significantly
+harms exploration.
+
+C.3. Preference Generation
+
+In the main experiments, we adopt a balanced preference dataset, where each task contributes an equal amount of preference
+data. Specifically, we sample Npref trajectory-pair sets from the offline dataset D . Each set contains S trajectory segment
+pairs, with each segment having length L. For each of the M goal-specific rewards used for annotation (corresponding
+to different user-specific rewards ruser), preference labels are generated for all trajectory sets using the combined reward
+rshare + ruser, resulting in a total of Npref × S × M preference sets.8 Although the annotation reward underlying each
+preference set are unobserved, we know all preference labels within the same set are generated under the same annotation
+reward. In Section 6.2, we additionally consider imbalanced preference settings, where preferences associated with one
+goal-specific reward dominate the dataset: after sampling Npref trajectory-pair sets, all sets are annotated under a single
+major annotation reward, whereas each remaining reward annotates only 0.1Npref sets.
+
+In addition, we consider a regret-based preference model, which requires optimal advantages rather than rewards to generate
+preference labels. Following CPL (Hejna et al., 2024), we add D to the replay buffer and re-training SAC policy using the
+full reward rshare + ruser until convergence. The value function during training is then used to compute optimal advantages
+for preference label generation.
+
+    8We adopt this dense annotation setting in the main experiments. In Section D.5, we further consider a sparse annotation setting where
+trajectory sets are generated independently for each annotation reward.
+
+                                                     23
+                 Implicit Safety Alignment from Crowd Preferences
+
+Table 4 summarizes the hyperparameters used for offline data generation and preference generation.
+                                Table 4. Hyperparameters for Offline Data Generation and Preference Generation.
+
+Parameter                                        Setting
+
+SAC steps (N )                                   5M for Ant-vel, and 2M for others
+Penalty coefficient (K)                          10.0
+Number of ruser (M )                             2 for Run, Circle and HalfCheetah, 4 for others
+Number of preference sets (Npref) (balanced)     5000 from each task
+Number of preference sets (Npref) (imbalanced)   10000 from a major task, and 1000 from other tasks
+Context set size (S)                             16
+Segment length (L)                               16 for Reach, and 64 for others.
+
+D. Additional Experimental Results
+
+D.1. Performance under Online Downstream Settings
+
+In this section, we evaluate our methods under the online downstream setting, where the high-level policy is trained according
+to Eq. 11 using samples collected through online interaction with the environment. Table 5 reports the quantitative task
+and cost performance of different methods, while Figure 6 visualizes their performance fronts. Overall, the observed
+results are consistent with those in the offline downstream setting. Finally, Figure 7 shows performance over the first 0.5M
+online interaction steps, demonstrating that our method achieves substantially higher sample efficiency compared to online
+training from scratch. We attribute this improvement to the reuse of preference-aligned skills learned offline, which allows
+the high-level policy to focus on composing existing behaviors rather than relearning low-level behaviors through online
+exploration. As a result, our approach reaches strong performance with significantly fewer online interactions, suggesting
+that our approach is well suited to offline-to-online RL scenarios with limited interaction budgets.
+
+Table 5. Normalized performance under online downstream settings. RC is the RC's performance averaged on all   {0.1, 0.2, ..., 1.0}
+
+Environment      Stats      Oracle  Task-Only      SOPL       RC( = 0.5)    Safe-VPL                             Safe-CPL
+Reach
+Run              Norm Rew    1.00   0.96 ± .01   0.76 ± .01     0.73 ± .01  0.91 ± .01                           0.90 ± .03
+Circle           Norm Cost  0.033   1.000 ± .02  0.083 ± .01   0.081 ± .02  0.124 ± .03                          0.074 ± .07
+Ant-vel
+Swimmer-vel      Norm Rew    1.00   1.00 ± .00   1.00 ± .00     1.00 ± .00  1.00 ± .00                           0.99 ± .01
+HalfCheetah-vel  Norm Cost  0.000   1.000 ± .50  0.000 ± .00   0.000 ± .00  0.000 ± .00                          0.000 ± .00
+Average
+                 Norm Rew    1.00   1.28 ± .01   1.08 ± .01     1.07 ± .00  0.97 ± .03                           0.94 ± .08
+                 Norm Cost  0.000   1.000 ± .02  0.000 ± .00   0.000 ± .00  0.000 ± .00                          0.000 ± .00
+
+                 Norm Rew    1.00   1.11 ± .11   0.84 ± .07     0.90 ± .01  0.94 ± .03                           0.88 ± .07
+                 Norm Cost  0.000   1.000 ± .00  0.039 ± .02   0.100 ± .14  0.001 ± .00                          0.028 ± .01
+
+                 Norm Rew    1.00   1.65 ± .18   1.52 ± .09     0.81 ± .07  0.92 ± .03                           1.00 ± .13
+                 Norm Cost  0.000   1.000 ± .17  0.009 ± .01   0.000 ± .00  0.001 ± .00                          0.022 ± .02
+
+                 Norm Rew    1.00   2.80 ± .29   0.90 ± .07     0.82 ± .10  0.96 ± .02                           0.89 ± .04
+                 Norm Cost  0.000   1.000 ± .00  0.007 ± .01   0.076 ± .06  0.004 ± .00                          0.003 ± .00
+                 Norm Rew    1.00
+                 Norm Cost   0.01      1.47         0.95           0.82        0.95                                 0.93
+                                       1.00         0.02           0.04        0.02                                 0.02
+
+D.2. Raw Data in Main Comparison
+We present the raw performance data under the offline and online downstream settings in Table 6 and Table 7, respectively.
+The results also include the random policy, which is used to compute the normalized reward and cost.
+
+D.3. Ablation Results on Additional Environments
+This section presents ablation results on the regularization weight reg, preference noise ratios, and crowd size across
+additional environments; see Figures 8, 9 and 10, which is consistent with the conclusions in Section 6.
+
+                                                                        24
+                                 Implicit Safety Alignment from Crowd Preferences
+
+                        Table 6. Raw task and safety performance under offline downstream settings
+
+Env              Stats  Random    CDT      Task-Only             SOPL       RC( = 0.5)       Safe-VPL        Safe-CPL
+Reach
+Run              R        -4.5    18.8      19.7 ± .1          18.3 ± .6       14.8 ± .2      18.3 ± .8      18.2 ± 1.0
+Circle           C         7.0     0.1       2.2 ± .0           0.1 ± .0        0.2 ± .0       0.4 ± .1        0.2 ± .1
+Ant-vel
+Swimmer-vel      R       -151.7   94.7      93.7 ± .1          91.8 ± .4       93.5 ± .7      82.1 ± 2.1     86.1 ± 1.7
+HalfCheetah-vel  C        45.6     0.0      67.4 ± 5.5          0.0 ± .0        0.0 ± .0       0.0 ± .0        0.0 ± .0
+
+                 R        19.6   149.8     185.5 ± 2.4        155.7 ± 1.7     161.1 ± .5     136.9 ± 1.0    137.6 ± 5.3
+                 C        63.1     0.0      63.0 ± 1.2          0.0 ± .0        0.0 ± .0       0.0 ± .0        0.0 ± .1
+
+                 R       -65.7   2306.8   2860.7 ± 42.3      2259.4 ± 27.3  1753.4 ± 466.3  2058.0 ± 36.1  1746.9 ± 228.2
+                 C         0.7     0.8     488.1 ± 3.4         3.3 ± 1.2      38.2 ± 58.7      0.6 ± .1       3.5 ± 1.9
+
+                 R         1.5    42.7     100.0 ± 1.5         56.6 ± 1.4     35.8 ± 3.1      37.7 ± .3      42.4 ± 1.5
+                 C        63.2     0.0      27.4 ± 2.4          0.4 ± .2        0.0 ± .0       0.0 ± .0        0.1 ± .1
+
+                 R       -210.2  2688.7  5166.3 ± 1053.2      2477.3 ± .0   1060.1 ± 317.0  2581.5 ± 59.6   2452.5 ± 6.5
+                 C         0.1     0.0    696.3 ± 134.9         9.5 ± .0      74.2 ± 57.4     2.7 ± 1.6      12.3 ± 12.2
+
+                        Table 7. Raw task and safety performance under online downstream settings
+
+Env              Stats  Random    SAC      Task-Only          SOPL          RC( = 0.5)       Safe-VPL        Safe-CPL
+Reach
+Run              R        -4.5    21.8      20.7 ± .1        15.4 ± .2         14.8 ± .2      19.6 ± .2       19.1 ± .8
+Circle           C         7.0     0.1       2.7 ± .0         0.2 ± .0          0.2 ± .0       0.3 ± .1        0.2 ± .2
+Ant-vel
+Swimmer-vel      R       -151.7   93.9      94.5 ± .0        94.3 ± .1         93.5 ± .7      94.0 ± .6      91.5 ± 1.8
+HalfCheetah-vel  C        45.6     0.0     26.0 ± 12.9        0.0 ± .0          0.0 ± .0       0.0 ± .0        0.0 ± .0
+
+                 R        19.6   151.4     188.3 ± .6      162.3 ± 1.4        161.1 ± .5     147.3 ± 3.9    143.7 ± 1.8
+                 C        63.1     0.0     66.1 ± 1.1         0.0 ± .0          0.0 ± .0       0.0 ± .0        0.0 ± .0
+
+                 R       -65.7   2317.5  2590.1 ± 264.0   1938.5 ± 175.5    2091.0 ± 33.5   2171.7 ± 61.4  2023.3 ± 171.9
+                 C         0.7     0.2     523.2 ± .2       20.4 ± 9.8        52.3 ± 71.1      0.6 ± .1      14.9 ± 7.4
+
+                 R         1.5    43.8     71.3 ± 7.8       65.8 ± 4.0        35.8 ± 3.1      40.4 ± 1.3     43.9 ± 5.4
+                 C        63.2     0.0     21.9 ± 3.7         0.2 ± .2          0.0 ± .0       0.0 ± .0        0.5 ± .5
+
+                 R       -210.2  2806.3  8245.2 ± 889.3   2525.7 ± 224.7    2301.2 ± 317.0  2687.8 ± 6.9   2465.7 ± 129.6
+                 C         0.1     0.0     980.8 ± .6        7.3 ± 7.3        74.2 ± 57.4     3.6 ± 2.1       2.5 ± 2.4
+
+                                                         25
+                                                                  Implicit Safety Alignment from Crowd Preferences
+
+                             Reach                                       Run                                       1.0                      Circle             1.0              Ant-vel
+
+                  1.0                                        1.0
+                  0.8
+                  0.6                                        0.8                                                   0.8                                         0.8
+                  0.4
+                  0.2                                        0.6                                                   0.6                                         0.6
+
+Normalized Cost   0.0 0.25 0.0S0w0im.25me0.r5-0ve0l.75 1.00  0.4                                                   0.4                                         0.4
+
+                  1.0                                        0.2                                                   0.2                                         0.2
+                  0.8
+                  0.6                                        0.0  0.875 0H.9a0l0fC0.9h2e5e0t.9a5h0-0v.9e7l5 1.000  0.0       0.6 A0.v8 erag1.e0 1.2            0.0         0.0          0.5     1.0
+                  0.4
+                  0.2                                        1.0                                                   1.0                                                     Oracle
+                  0.0                                                                                                                                                      Task-Only
+                                                             0.8                                                   0.8                                                     RC (Balance)
+                           0.5 1.0 1.5                                                                                                                                     RC (Imbalance)
+                                                             0.6                                                   0.6                                                     Safe-VPL (Balance)
+                                                                                                                                                                           Safe-VPL (Imbalance)
+                                                             0.4                                                   0.4                                                     Safe-CPL (Balance)
+                                                                                                                                                                           Safe-CPL (Imbalance)
+                                                             0.2                                                   0.2
+
+                                                             0.0                1     2                            0.0       0.25 0.50 0.75 1.00 1.25 1.50
+                                                                    0
+                                                                                      Normalized Reward
+
+Figure 6. Performance fronts of different algorithms and RC with various trade-off weights  using balanced and imbalanced crowd
+preference dataset under the online downstream setting.
+
+                    Reach                     Run                                  Circle                                          Ant-vel                  Swimmer-vel                 HalfCheetah-vel
+
+Norm Reward  1.0                  1.00                                 1.0                                         0.8                              0.9                         1.0
+                                                                       0.8                                         0.6                              0.8                         0.8
+             0.8                  0.95                                 0.6                                                                          0.7                         0.6
+
+             0.6                  0.90                                 0.4                                         0.4                              0.6                         0.4
+
+             0.4                  0.85                                 0.2                                         0.2                              0.5                         0.2
+                0                      0
+                    2      4 1e5           2                 4 1e5     0.0   0     2       4 1e5                          0        2        4 1e5   0.4 0   2       4 1e5       0.0  0       2  4 1e5
+
+             0.4                  0.05                                 0.15                                        0.100                            0.3                    0.20
+
+Norm Cost    0.3                  0.04                                 0.10                                        0.075                            0.2                    0.15
+             0.2                  0.03
+             0.1                  0.02                                 0.05                                        0.050                            0.1                    0.10
+                                  0.01
+                                                                                                                   0.025                                                   0.05
+
+             0.0 0  2      4 1e5  0.00  0  2                 4 1e5     0.00  0     2       4 1e5                   0.000  0        2        4 1e5   0.0  0  2       4 1e5  0.00      0       2  4 1e5
+
+                                                                                                                             Step
+
+                                                                                      SAC  Safe-VPL                          Safe-CPL
+
+                    Figure 7. Performance curves of different algorithms during the first 0.5M training steps under online downstream settings.
+
+D.4. Ablations on Additional Settings
+
+Number of preference sets Npref and size of each preference set Sz. We further analyze the sensitivity of our method to
+the number of preference sets Npref and the size of each preference set Sz. As shown in Figure 11, reducing the number of
+preference sets (i.e., decreasing the overall dataset size) primarily degrades safety performance, while only mildly affecting
+task performance. In contrast, Figure 12 studies the effect of reducing the size of each preference set Sz while keeping the
+total number of samples Npref × |Sz| fixed. In this setting, compared with task performance, safety performance degrades
+significantly. This is because a smaller Sz limits the model's ability to capture user-level behavioral patterns through the
+latent variable z, causing it to instead encode individual trajectory-level preferences. Specifically, when comparing two
+unsafe trajectories, the less unsafe one may be incorrectly treated as preferred within a given context z. As Sz increases, each
+trajectory is more likely to be compared against safe trajectories under the same context, allowing the model to correctly
+identify and exclude such less unsafe behaviors from the learned low-level skills.
+
+Training steps. We further study the effect of low-level policy training steps on downstream performance. By varying the
+number of training steps, we explicitly control the quality of the learned skills. Figure 13 shows as the number of training
+steps decreases, task performance degrades slightly, reflecting reduced skill optimality. In contrast, safety performance
+remains relatively stable, indicating that the shared safety structure is more robust to imperfect skill learning. This suggests
+that safety properties can be largely preserved even when the learned low-level policies are suboptimal.
+
+                                                                        26
+                                                    Implicit Safety Alignment from Crowd Preferences
+
+                         Reach               Circle                          1.0            Ant-vel                 Swimmer-vel                HalfCheetah-vel
+
+Norm Reward  1.0                1.0                                          0.5                           1.0                         1.0
+             0.5                0.5                                                                        0.5                         0.5
+
+             0.0 0.0 0.01 0.05 0.1 1.0 10 0.0 0.0 0.01 0.05 0.1 1.0 10 0.0 0.0 0.01 0.05 0.1 1.0 10 0.0 0.0 0.01 0.05 0.1 1.0 10 0.0 0.0 0.01 0.05 0.1 1.0 10
+             1.0                1.0                                          1.0                           1.0
+                                                                                                                                       1.0
+
+Norm Cost    0.5                0.5                                          0.5                           0.5                         0.5
+
+             0.0 0.0 R0e.g0u1la0r.i0za5tio0n.1We1i.g0ht 10 0.0 0.0 R0e.g0u1la0r.i0za5tio0n.1We1i.g0ht 10 0.0 0.0 R0e.g0u1la0r.i0za5tio0n.1We1i.g0ht 10 0.0 0.0 R0e.g0u1la0r.i0za5tio0n.1We1i.g0ht 10 0.0 0.0 R0e.g0u1la0r.i0za5tio0n.1We1i.g0ht 10
+
+                                                                             Safe-VPL            Safe-CPL
+
+Figure 8. Performance of our methods under different prior regularization weights reg  [0.0, 0.01, 0.05, 0.1, 1.0, 10.0] in Eq. 11.
+
+                                Norm Reward                     Circle                                       Swimmer-vel
+                                           1.0                                              1.0
+
+                                           0.5                                              0.5
+
+                                           0.0 0.0  0.25                0.5       0.75      0.0 0.0        0.25  0.5             0.75
+                                           1.5                                              1.0
+
+                                Norm Cost1.0                                                0.5
+
+                                           0.5
+
+                                           0.0 0.0  0.2F5lipping Prob0.5          0.75      0.0 0.0        0.2F5lipping Prob0.5  0.75
+
+                                                                                  Safe-VPL  Safe-CPL
+
+                                Figure 9. Performance of our methods under different preference noise ratios.
+
+D.5. Dense and Sparse Annotation for Crowd Preference Data
+
+In the main experiments, we adopt a dense annotation setting, where the same Npref trajectory sets is labeled under all
+M annotation tasks, resulting in Npref × M preference sets in total. In this subsection, we additionally consider a sparse
+annotation setting, where for each annotation reward, we independently samples and labels Npref trajectory sets, with no
+trajectory pairs shared across different users, while keeping the total number of preference pairs the same. A comparison
+between the two settings is shown in Table 8, from which we observe that the choice of annotation scheme has no significant
+impact on performance, except for a slight degradation in safety performance for CPL..
+
+D.6. Safe-VPL with Full Dataset and Preference-only Dataset
+
+Following the original VPL formulation (Poddar et al., 2024), Safe-VPL requires an additional offline dataset D in Eq. 9
+during skill discovery, whereas Safe-CPL directly learns policies from the preference dataset without D . As a result,
+Safe-VPL benefits from substantially more offline data, making a direct comparison between the two methods inherently
+unfair. To address this issue, we construct a variant denoted as Safe-VPL (Pref only), in which the preference dataset
+Dpref is reorganized into an offline transition dataset and used as a substitute for D . Offline RL is then performed on this
+reorganized dataset, thereby ensuring that both algorithms have access to the same amount of training data. As shown in
+Table 9, when the data size is the same, the performance of Safe-VPL degrades, suggesting that access to additional offline
+data can benefit skill discovery, and the choice between the two methods can be adapted based on data availability.
+
+                                                                                        27
+                 Implicit Safety Alignment from Crowd Preferences
+
+Table 8. Performance comparison of our method with dense-annotated and sparse-annotated preference data.
+
+                                  Dense                            Sparse
+
+Environment      Stats      Safe-VPL Safe-CPL        Safe-VPL Safe-CPL
+Reach
+Run              Norm Rew   1.00 ± .03 1.00 ± .01    0.97 ± .02 1.03 ± .01
+Circle           Norm Cost  0.141 ± .02 0.059 ± .01  0.146 ± .04 0.249 ± .02
+Ant-vel
+Swimmer-vel      Norm Rew   0.99 ± .00 0.96 ± .01    0.99 ± .00 0.97 ± .01
+HalfCheetah-vel  Norm Cost  0.000 ± .00 0.000 ± .00  0.000 ± .00 0.000 ± .00
+Average
+                 Norm Rew   0.90 ± .01 0.93 ± .03    0.92 ± .01 0.92 ± .01
+                 Norm Cost  0.000 ± .00 0.000 ± .00  0.000 ± .00 0.099 ± .06
+
+                 Norm Rew   0.91 ± .01 0.74 ± .10    0.91 ± .01 0.62 ± .03
+                 Norm Cost  0.002 ± .00 0.008 ± .00  0.002 ± .00 0.020 ± .01
+
+                 Norm Rew   0.88 ± .01 1.01 ± .03    0.90 ± .02 1.17 ± .04
+                 Norm Cost  0.001 ± .00 0.008 ± .01  0.001 ± .00 0.120 ± .03
+
+                 Norm Rew   0.96 ± .02 0.91 ± .01    0.99 ± .01 0.87 ± .04
+                 Norm Cost  0.005 ± .00 0.026 ± .03  0.007 ± .00 0.101 ± .10
+                 Norm Rew
+                 Norm Cost  0.94         0.92        0.95                  0.93
+
+                            0.02         0.02        0.03                  0.10
+
+Table 9. Comparison between Safe-VPL, Safe-VPL (Pref only), and Safe-CPL under equal data size
+
+Environment      Stats      Safe-VPL     Safe-VPL                  Safe-CPL
+Reach                                    (Pref only)
+Run              Norm Rew   1.00 ± .03                             1.00 ± .01
+Circle           Norm Cost  0.141 ± .02   0.94 ± .04               0.059 ± .01
+Ant-vel                                  0.234 ± .10
+Swimmer-vel      Norm Rew   0.99 ± .00                             0.96 ± .01
+HalfCheetah-vel  Norm Cost  0.000 ± .00   0.99 ± .00               0.000 ± .00
+Average                                  0.000 ± .00
+                 Norm Rew   0.90 ± .01                             0.93 ± .03
+                 Norm Cost  0.000 ± .00   0.89 ± .00               0.000 ± .00
+                                         0.000 ± .00
+                 Norm Rew   0.91 ± .01                             0.74 ± .10
+                 Norm Cost  0.002 ± .00   0.82 ± .01               0.008 ± .00
+                                         0.002 ± .00
+                 Norm Rew   0.88 ± .01                             1.01 ± .03
+                 Norm Cost  0.001 ± .00   0.79 ± .14               0.008 ± .01
+                                         0.000 ± .00
+                 Norm Rew   0.96 ± .02                             0.91 ± .01
+                 Norm Cost  0.005 ± .00   0.89 ± .06               0.026 ± .03
+                 Norm Rew                0.001 ± .00
+                 Norm Cost     0.94                                   0.92
+                               0.02         0.88                      0.02
+                                            0.04
+
+                            28
+                            Implicit Safety Alignment from Crowd Preferences
+
+Table 10. Offline downstream performance comparison under balanced and imbalanced preference settings. RC is the RC's performance
+averaged on all   {0.1, 0.2, ..., 1.0}
+
+Environment      Stats          RC        Balance     Safe-CPL         RC       Imbalance    Safe-CPL
+Reach
+Run              Norm Rew   0.88 ± .11   Safe-VPL     1.00 ± .01   1.04 ± .00   Safe-VPL     0.98 ± .01
+Circle           Norm Cost  0.299 ± .15               0.059 ± .01  0.434 ± .06               0.067 ± .05
+Ant-vel                                  1.00 ± .03                             0.97 ± .01
+Swimmer-vel      Norm Rew   0.99 ± .00   0.141 ± .02  0.96 ± .01   0.91 ± .01   0.182 ± .02  0.97 ± .01
+HalfCheetah-vel  Norm Cost  0.030 ± .03               0.000 ± .00  0.473 ± .47               0.000 ± .00
+Average                                  0.99 ± .00                             0.98 ± .01
+                 Norm Rew   0.96 ± .01   0.000 ± .00  0.93 ± .03   0.82 ± .03   0.000 ± .00  0.92 ± .05
+                 Norm Cost  0.128 ± .01               0.000 ± .00  0.144 ± .04               0.000 ± .00
+                                         0.90 ± .01                             0.87 ± .03
+                 Norm Rew   0.90 ± .03   0.000 ± .00  0.74 ± .10   0.85 ± .08   0.000 ± .00  0.73 ± .10
+                 Norm Cost  0.371 ± .08               0.008 ± .00  0.335 ± .02               0.018 ± .01
+                                         0.91 ± .01                             0.86 ± .04
+                 Norm Rew   1.29 ± .08   0.002 ± .00  1.01 ± .03   0.61 ± .07   0.002 ± .00  1.02 ± .00
+                 Norm Cost  0.121 ± .01               0.008 ± .01  0.137 ± .01               0.032 ± .02
+                                         0.88 ± .01                             0.85 ± .05
+                 Norm Rew   1.41 ± .34   0.001 ± .00  0.91 ± .01   1.35 ± .18   0.000 ± .00  0.84 ± .05
+                 Norm Cost  1.169 ± .14               0.026 ± .03  1.190 ± .20               0.136 ± .13
+                 Norm Rew                0.96 ± .02                             0.97 ± .01
+                 Norm Cost     1.07      0.005 ± .00     0.92         0.93      0.010 ± .00     0.91
+                               0.35                      0.02         0.45                      0.04
+                                            0.94                                   0.92
+                                            0.02                                   0.03
+
+Table 11. Online downstream performance comparison under balanced and imbalanced preference settings. RC is the RC's performance
+averaged on all   {0.1, 0.2, ..., 0.9}
+
+Environment      Stats          RC        Balance     Safe-CPL         RC       Imbalance    Safe-CPL
+Reach
+Run              Norm Rew   0.53 ± .12   Safe-VPL     0.88 ± .01   0.53 ± .11   Safe-VPL     0.91 ± .03
+Circle           Norm Cost  0.230 ± .03               0.041 ± .01  0.191 ± .07               0.112 ± .09
+Ant-vel                                  0.91 ± .01                             0.91 ± .01
+Swimmer-vel      Norm Rew   0.97 ± .01   0.119 ± .04  0.99 ± .01   0.78 ± .16   0.170 ± .04  1.00 ± .00
+HalfCheetah-vel  Norm Cost  0.010 ± .01               0.000 ± .00  0.009 ± .01               0.000 ± .00
+Average                                  1.00 ± .00                             1.00 ± .00
+                 Norm Rew   0.96 ± .07   0.000 ± .00  0.92 ± .08   0.44 ± .58   0.000 ± .00  0.94 ± .10
+                 Norm Cost  0.211 ± .14               0.000 ± .00  0.175 ± .17               0.000 ± .00
+                                         0.98 ± .03                             1.00 ± .00
+                 Norm Rew   0.92 ± .09   0.000 ± .00  0.82 ± .01   0.80 ± .21   0.000 ± .00  0.86 ± .02
+                 Norm Cost  0.696 ± .29               0.018 ± .01  0.695 ± .30               0.019 ± .01
+                                         0.93 ± .03                             0.81 ± .06
+                 Norm Rew   1.27 ± .20   0.001 ± .00  1.03 ± .13   0.34 ± .01   0.002 ± .00  0.95 ± .00
+                 Norm Cost  0.058 ± .05               0.030 ± .03  0.009 ± .01               0.043 ± .00
+                                         0.91 ± .03                             0.88 ± .01
+                 Norm Rew   2.27 ± .17   0.000 ± .00  0.89 ± .05   2.10 ± .07   0.000 ± .00  0.85 ± .00
+                 Norm Cost  0.847 ± .01               0.001 ± .00  0.845 ± .01               0.002 ± .00
+                 Norm Rew                0.95 ± .02                             0.97 ± .01
+                 Norm Cost     1.15      0.003 ± .00     0.92         0.83      0.003 ± .00     0.92
+                               0.34                      0.02         0.32                      0.03
+                                            0.95                                   0.93
+                                            0.02                                   0.03
+
+                                         29
+                    Implicit Safety Alignment from Crowd Preferences
+
+           1.0         Circle                                 1.0       Swimmer-vel
+           0.5
+Norm Reward0.0 2                                              0.5
+           1.0
+           0.5      4                   8  16                 0.0 4     8  16                                32
+           0.0 2                                              1.0
+
+Norm Cost                                                     0.5
+
+                    4User Number8          16                 0.0  4    8User Number16                       32
+
+                                           Safe-VPL           Safe-CPL
+
+Figure 10. Performance of our methods under different crowd sizes.
+
+Norm Reward                     Circle                        1.0           Swimmer-vel
+           1.0                                                0.5       500 1000 2500 5000
+                                                              0.0 250
+           0.5                                                1.0
+
+           0.0 250  500 1000 2500 5000
+
+Norm Cost1.0                                                  0.5
+         0.5
+         0.0                                                  0.0 250   N5u0m0ber of 1p0re0f0erence2s5e0t0s  5000
+
+            250 N5u0m0ber of 1p0re0f0erence2s5e0t0s 5000
+
+                                           Safe-VPL           Safe-CPL
+
+Figure 11. Performance of our methods under different number of preference sets Npref.
+
+E. LLM Evaluation Details
+
+Task Description The environment consists of one query, "Please talk about one kind of pets", together with three
+categories of responses: bird-related, dog-related, and cat-related responses. Each category contains both safe responses and
+unsafe responses. Safe responses consist only of normal pet-related descriptions (e.g., "Dogs are our friends"), while unsafe
+responses are created by appending toxic or offensive statements to otherwise normal pet-related descriptions (e.g., "Dogs
+are our friends. [harmful statement encouraging animal abuse]").
+
+The task can be formulated as a single-step MDP, where each state is a pair s = (y1, y2) of candidate responses and the
+action space is a  {0, 1}, indicating whether the agent selects y1 or y2. The underlying reward is decomposed as
+
+                                                  r(s, a, z) = ruser(s, a, z) + rshare(s, a).
+
+Here, ruser(s, a, z) is a user-specific reward induced by a preference ranking over response categories (e.g., A > B > C),
+assigning reward 1 if the selected response matches the user ranking and 0 otherwise. The shared component rshare(s, a)
+captures the implicit safety objective of preferring safe responses over unsafe ones:
+
+                    -K, if the selected response contains harmful content,
+rshare(s, a) = 0,
+                       otherwise,
+
+where K  1. As in the main paper, neither reward component is directly observable and both are only reflected implicitly
+through crowd preference data.
+
+Data Generation We construct a synthetic pet-safety dataset with imbalanced crowd preferences. Each preference pair is
+generated by sampling two safe responses from different response categories and injecting harmful content into one response
+with probability 0.5. The final dataset contains 5000 preference pairs. To generate preference labels, we consider two users.
+User 1 contributes 80% of the data and follows the ranking A > B > C, while User 2 contributes the remaining 20% and
+follows C > B > A. Both users consistently prefer safe responses over harmful ones regardless of response category.
+
+Downstream Tasks We consider two downstream tasks with new rankings B > A > C and C > A > B. These
+rankings do not match the preference ordering of either crowd user, meaning that simply following the majority preference
+
+                                                          30
+                                                        Implicit Safety Alignment from Crowd Preferences
+
+                         Reach  1.0                Run              Circle                      1.0            Ant-vel               Swimmer-vel  1.5 HalfCheetah-vel
+
+Norm Reward  1.0                                        1.0                                                                 1.0                   1.0
+                                                        0.5                                                                 0.5                   0.5
+             0.5                0.5                                                             0.5
+
+             0.0 1  4  8 16 32 0.0 1  4               8 16 32 0.0 1  4  8 16 32 0.0 1                4                         0.0  4    8 16 32 0.0 1  4  8 16 32
+                                                        1.5                                                    8 16 32 1
+                                2                       1.0                                                                 1.0
+Norm Cost    1.5                1                       0.5                                     1.0                         0.5                   1.0
+             1.0                                                                                0.5                                               0.5
+             0.5
+             0.0 1 4Pref S8et Siz1e6 32 0 1 4Pref S8et Siz1e6 32 0.0 1 4Pref S8et Siz1e6 32 0.0 1 4Pref S8et Siz1e6 32 0.0 1 4Pref S8et Siz1e6 32 0.0 1 4Pref S8et Siz1e6 32
+
+                                                                        Safe-VPL                     Safe-CPL
+
+                                Figure 12. Performance of our methods under different size of the preference set Sz.
+
+                                                 1.0    Circle                                  1.0            Swimmer-vel
+
+                                      Norm Reward0.5                                            0.5
+
+                                                 0.0 1e3 5e3 1e4 5e4 1e5 5e5                    0.0 1e3 5e3 1e4 5e4 1e5 5e5
+                                                 1.0                                            1.0
+
+                                      Norm Cost0.5                                              0.5
+
+                                               0.0 1e3 5e3 T1rea4ining S5tee4p 1e5 5e5          0.0 1e3 5e3 T1rea4ining S5tee4p 1e5 5e5
+                                                                                      Safe-VPL     Safe-CPL
+
+                                Figure 13. Performance of our methods under different low-level policy training steps.
+
+or imitating a single user cannot maximize downstream reward. Instead, successful performance requires composing crowd
+preferences and generalizing beyond those directly observed in the crowd data.
+
+Importantly, downstream training only provides the safety-agnostic reward rnew, without access to the shared safety objective.
+As a result, directly maximizing rnew can encourage the selection of harmful responses whenever they belong to highly
+ranked categories.
+
+Evaluation The test set contains all three category combinations among A, B, and C, where half of the pairs consist of
+two safe responses (Safe­Safe) and the other half consist of one safe and one unsafe response (Safe­Unsafe). We define
+the downstream task reward rnew as 1 if the selected response matches the task ranking and 0 otherwise. The safety cost is
+defined as 1 if the selected response contains harmful content and 0 otherwise. Finally, we report the average downstream
+task reward and safety cost over all test samples.
+
+Implementation Task-only trains a policy that takes the embeddings of two candidate responses as input and outputs a
+Bernoulli distribution over actions, optimized via REINFORCE using only rnew. RC first learns a unimodal reward model
+runi from crowd preference data, then optimizes (1 - )rnew + runi using the same policy architecture as Task-only. Our
+method learns a latent-conditioned reward r(y, z) from crowd preferences and trains a high-level policy h(z | s) via
+REINFORCE to adaptively select the latent reward used for response comparison. Specifically, the action distribution is
+produced through
+
+                                        p(a = 1) = (r(y1, z) - r(y2, z)), z = h(z | s).
+
+                                                                            31
+                                                 Implicit Safety Alignment from Crowd Preferences
+
+F. Extension to General Safety Constraints
+
+Our work primarily focuses on hard constraint violations, as they provide a clear and verifiable definition of shared safety
+consensus across users, which is particularly important given the limited prior work and the inherent difficulty of defining
+shared structure from preferences. Specifically, our formulation relies on two key assumptions: (1) a sufficiently large
+safety penalty K, and (2) a binary cost function defined as c(s, a) = -rshare(s, a) = K if (s, a) is unsafe, and c(s, a) = 0
+otherwise. Under these assumptions, the shared safety consensus can be formalized as:
+
+Definition (Hard-constraint safety consensus). Avoid unsafe state­action pairs, i.e., c(st, at) = 0 for all t.
+
+While this setting provides a clean starting point, we next discuss how our framework can be extended to more general forms
+of safety constraints.
+
+F.1. General Cost Functions
+
+We first consider the case where the cost function is non-binary and varies across state­action pairs, i.e., c(s, a)  0. In this
+setting, state­action pairs with sufficiently large penalties (e.g., exceeding a threshold as in Theorem 1) are consistently
+dispreferred by all users. This induces the following relaxed notion of safety consensus:
+
+Definition (High-cost avoidance consensus). Avoid highly unsafe state­action pairs, i.e., c(st, at) = 0 for all t and all
+(st, at) such that c(st, at) > K, where K is a sufficiently large constant.
+
+Our proposed method naturally satisfies this form of consensus, as highly penalized behaviors are consistently filtered out
+during skill discovery.
+
+F.2. Threshold-based Safety Constraints
+
+We next consider a more general setting where safety is expressed via cumulative cost constraints. In this case, each user z
+generates preference labels according to the utility:
+
+   ruser(st, at, z) + rshare(st, at) = ruser(st, at, z) - c(st, at).
+
+t            t                     t      t
+
+Under a Lagrangian formulation, the policy aligned with user z's preferences can be characterized as the solution to the
+following constrained optimization problem:
+
+   max E     ruser(st, at, z)  s.t. E     c(st, at)  z,
+
+          t                            t
+
+where z is a user-specific threshold on cumulative cost.
+
+In this framework, users share the same cost function but differ in their tolerance levels. Since all users disprefer trajectories
+that violate the most permissive constraint, this induces a generalized notion of safety consensus:
+
+Definition (Threshold-based safety consensus). Satisfy the most permissive constraint, i.e., t c(st, at)  maxz z.
+This formulation generalizes the previous settings. In particular, the hard-constraint and high-cost avoidance consensus can
+be viewed as special cases where all or a subset of unsafe state­action pairs incur sufficiently large penalties, leading all
+users to effectively enforce a zero-tolerance constraint on these pairs.
+
+F.3. Approximate Satisfaction via Extended Skill Duration
+
+Unlike prior skill learning methods that adopt fixed switching intervals (Ajay et al., 2020) or explicitly learn switching
+policies (Shankar & Gupta, 2020), our implementation allows the high-level policy to select a skill at every time step. This
+design is sufficient to satisfy the hard-constraint safety consensus: if each low-level policy avoids unsafe state­action pairs,
+any per-step composition preserves safety. However, this property does not extend to satisfying the threshold-based safety
+consensus. For example, consider a two-step MDP with two low-level policies: one incurs a cost of 1 at the first step, and
+the other incurs a cost of 1 at the second step. While each policy individually satisfies t ct  1, alternating between them
+results in a cumulative cost of 2, violating the constraint.
+
+                               32
+                                                 Implicit Safety Alignment from Crowd Preferences
+
+A simple solution is to increase the skill duration by fixing a switching interval T . In the extreme case of T  = T
+(episode-level switching), the threshold-based safety consensus is satisfied, but at the cost of reduced expressiveness. More
+generally, varying T   [1, T ] induces a trade-off between safety constraint satisfaction and task performance.
+
+F.4. Adapting the Framework to Longer Switching Intervals
+
+Under the online downstream setting, our method can be naturally extended to a fixed switching interval T . The high-level
+
+policy samples a latent variable zi every T  steps based on state si·T  . Instead of storing primitive transitions (st, at, rt, st+1),
+                                                                                              i·T +T 
+we construct a replay buffer containing aggregated transitions of the form (si·T  , zi, ri =  t=i·T    rt,  si·T +T  ).  which  are
+
+used to estimate Q(si·T  , zi) and update (zi | si·T  ).
+
+Extending this approach to the offline downstream setting is less straightforward, as the latent variable z associated with each
+
+trajectory segment is not observed, and thus the original dataset D = {(st, at, rt, st+1)} cannot be directly transformed
+into the aggregated form D . One possible solution is to train an auxiliary encoder q~(z |  ) that maps trajectory segments
+
+to latent variables by solving
+
+                                                                                              
+
+                                                                t+k
+
+max    E   ={st,at,...,st+k,at+k}D , zq~(z| )                        log l(aj | sj, z) ,
+
+   q~                                                           j=t
+
+with the low-level policy l fixed. By segmenting D into length-T  trajectories and inferring the corresponding zi via
+q~(z |  ), one can construct D and apply standard offline RL algorithms to train a high-level policy (zi | si·T  ), which
+can be used for T -interval control.
+
+G. Limitations and Future Directions
+
+In this work, we assume that the preference-aligned behaviors learned from crowd preference data are sufficiently expressive
+to solve the downstream task and share the same implicit objectives with it. However, this assumption may not always
+hold. One potential direction to address this limitation is to expand the diversity of annotation rewards by incorporating
+feedback from a larger set of users, while explicitly selecting crowd preference data whose goals are aligned with those of
+the downstream task. This could ensure that the distribution of preference-aligned trajectories is sufficiently diverse and
+better covers the optimal trajectory distribution for the downstream task.
+
+In addition, while we focus on state­action safety constraints as the shared objective encoded in crowd preferences, real-
+world scenarios may involve more complex and harder-to-specify shared objectives. An important extension is to consider
+cumulative cost constraints or, more generally, arbitrary shared objectives. Understanding how skill composition influences
+broader classes of shared objectives remains an open question; we provide a heuristic discussion in Appendix F. Another
+challenge lies in evaluating performance on the shared objective. Although we report cost as a proxy for the hidden objective,
+in real-world scenarios where the implicit objective is unknown, assessing performance becomes nontrivial. One potential
+direction is to solicit additional human preferences to evaluate performance with respect to these implicit objectives.
+
+Furthermore, in practical settings, crowd preferences may involve a larger and more diverse set of users. Notably, our
+method captures latent task rewards rather than user identities, so its scalability depends primarily on the number of distinct
+preference modes rather than the number of users, which is often much smaller in practice. However, when the number
+of distinct latent rewards becomes large, performance may be limited by model capacity and potential mode collapse,
+suggesting an important direction for future work (e.g., exploring mixture or hierarchical latent models). In addition, as
+the number of users increases, it becomes more likely that some users exhibit inconsistent safety criteria (e.g., violating
+constraints). These challenges further motivate improving the robustness and scalability of the proposed method as an
+important direction for future work. Finally, our experiments rely on synthetically annotated preferences generated from
+ground-truth reward functions, rather than real human feedback. Whether the shared safety structure assumed in our
+framework faithfully emerges from naturalistic human annotations--which may be noisier, more subjective, and less
+consistent--remains an open empirical question and an important direction for future validation.
+
+                                                          33
+

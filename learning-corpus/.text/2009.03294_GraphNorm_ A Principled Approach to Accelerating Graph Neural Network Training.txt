@@ -1,0 +1,1699 @@
+                                        GraphNorm: A Principled Approach to Accelerating
+                                                     Graph Neural Network Training
+
+                                        Tianle Cai * 1 2 Shengjie Luo * 3 4 5 Keyulu Xu 6 Di He 7 Tie-Yan Liu 7 Liwei Wang 3 4
+
+arXiv:2009.03294v3 [cs.LG] 11 Jun 2021                          Abstract                                  2017). Empirically, GNNs have succeeded in a variety of
+                                                                                                          tasks such as computational chemistry (Stokes et al., 2020),
+                                              Normalization is known to help the optimization             recommendation systems (Ying et al., 2018), and visual
+                                              of deep neural networks. Curiously, different               question answering (Santoro et al., 2017). Theoretically,
+                                              architectures require specialized normalization             existing works have studied GNNs through the lens of ex-
+                                              methods. In this paper, we study what normal-               pressive power (Keriven & Peyre´, 2019; Xu et al., 2019;
+                                              ization is effective for Graph Neural Networks              Sato et al., 2019; Loukas, 2020; Ying et al., 2021), gener-
+                                              (GNNs). First, we adapt and evaluate the existing           alization (Scarselli et al., 2018; Du et al., 2019b; Xu et al.,
+                                              methods from other domains to GNNs. Faster                  2020), and extrapolation (Xu et al., 2021). However, the op-
+                                              convergence is achieved with InstanceNorm com-              timization of GNNs is less well understood, and in practice,
+                                              pared to BatchNorm and LayerNorm. We provide                the training of GNNs is often unstable and the convergence
+                                              an explanation by showing that InstanceNorm                 is slow (Xu et al., 2019).
+                                              serves as a preconditioner for GNNs, but such
+                                              preconditioning effect is weaker with BatchNorm             In this paper, we study how to improve the training of GNNs
+                                              due to the heavy batch noise in graph datasets.             via normalization. Normalization methods shift and scale
+                                              Second, we show that the shift operation in In-             the hidden representations and are shown to help the opti-
+                                              stanceNorm results in an expressiveness degra-              mization for deep neural networks (Ioffe & Szegedy, 2015;
+                                              dation of GNNs for highly regular graphs. We                Ulyanov et al., 2016; Ba et al., 2016; Salimans & Kingma,
+                                              address this issue by proposing GraphNorm with              2016; Xiong et al., 2020; Salimans et al., 2016; Miyato et al.,
+                                              a learnable shift. Empirically, GNNs with Graph-            2018; Wu & He, 2018; Santurkar et al., 2018). Curiously, no
+                                              Norm converge faster compared to GNNs using                 single normalization helps in every domain, and different ar-
+                                              other normalization. GraphNorm also improves                chitectures require specialized methods. For example, Batch
+                                              the generalization of GNNs, achieving better per-           normalization (BatchNorm) is a standard component in com-
+                                              formance on graph classification benchmarks.                puter vision (Ioffe & Szegedy, 2015); Layer normalization
+                                                                                                          (LayerNorm) is popular in natural language processing (Ba
+                                        1. Introduction                                                   et al., 2016; Xiong et al., 2020); Instance normalization
+                                                                                                          (InstanceNorm) has been found effective for style transfer
+                                        Recently, there has been a surge of interest in Graph Neu-        tasks (Ulyanov et al., 2016) . This motivates the question:
+                                        ral Networks (GNNs) for learning with graphs (Gori et al.,        What normalization methods are effective for GNNs?
+                                        2005; Scarselli et al., 2008; Hamilton et al., 2017; Kipf
+                                        & Welling, 2017; Velickovic et al., 2018; Xu et al., 2018;        We take an initial step towards answering the question above.
+                                        Ying et al., 2021). GNNs learn node and graph represen-           First, we adapt the existing methods from other domains,
+                                        tations by recursively aggregating and updating the node          including BatchNorm, LayerNorm, and InstanceNorm, to
+                                        representations from neighbor representations (Gilmer et al.,     GNNs and evaluate their performance with extensive ex-
+                                                                                                          periments on graph classification tasks. We observe that
+                                           *Equal contribution 1Department of Electrical and Computer     our adaptation of InstanceNorm to GNNs, which for each
+                                        Engineering, Princeton University 2Zhongguancun Haihua Insti-     individual graph normalizes its node hidden representations,
+                                        tute for Frontier Information Technology 3Key Laboratory of       obtains much faster convergence compared to BatchNorm
+                                        Machine Perception, MOE, School of EECS, Peking University        and LayerNorm. We provide an explanation for the suc-
+                                        4Center for Data Science, Peking University 5Pazhou Lab 6CSAIL,   cess of InstanceNorm by showing that the shift operation
+                                        Massachusetts Institute of Technology (MIT) 7Microsoft Research.  in InstanceNorm serves as a preconditioner of the graph
+                                        Correspondence to: Liwei Wang <wanglw@pku.edu.cn>, Di He          aggregation operation. Empirically, such preconditioning
+                                        <dihe@microsoft.com>.                                             makes the optimization curvature smoother and makes the
+                                                                                                          training more efficient. We also explain why the widely used
+                                        Proceedings of the 38 th International Conference on Machine
+                                        Learning, PMLR 139, 2021. Copyright 2021 by the author(s).
+GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+                        (2) Learnable                                     Divide std
+                             mean                                            Affine
+
+Subtract graph mean                                             Divide std
+(1a) Preconditioning                                              Affine
+
+   Feature              Subtract                                        Divide std
+Aggregation             feature                                             Affine
+                         mean
+                                                                    Divide std
+Subtract batch mean                                                   Affine
+(1b) Heavy batch noise
+
+Figure 1. Overview. We evaluate and understand BatchNorm, LayerNorm, and InstanceNorm, when adapted to GNNs. InstanceNorm
+trains faster than LayerNorm and BatchNorm on most datasets (Section 3.1), as it serves as a preconditioner of the aggregation of GNNs
+(1a, Section 3.2). The preconditioning effect is weaker for BatchNorm due to heavy batch noise in graphs (1b, Section 3.3). We propose
+GraphNorm with a learnable shift to address the limitation of InstanceNorm. GraphNorm outperforms other normalization methods for
+both training speed (Figure 2) and generalization (Table 1, 2).
+
+BatchNorm does not bring the same level of acceleration.        most benchmarks.
+The variance of the batch-level statistics on graph datasets
+is much larger if we apply the normalization across graphs      1.1. Related Work
+in a batch instead of across individual graphs. The noisy
+statistics during training may lead to unstable optimization.   Closely related to our work, InstanceNorm (Ulyanov et al.,
+                                                                2016) is originally proposed for real-time image generation.
+Second, we show that the adaptation of InstanceNorm to          Variants of InstanceNorm are also studied in permutation
+GNNs, while being helpful in general, has limitations. The      equivalent data processing (Yi et al., 2018; Sun et al., 2020).
+shift operation in InstanceNorm, which subtracts the mean       We instead adapt InstanceNorm to GNNs and find it help-
+statistics from node hidden representations, may lead to        ful for the training of GNNs. Our proposed GraphNorm
+an expressiveness degradation for GNNs. Specifically, for       builds on and improves InstanceNorm by addressing its
+highly regular graphs, the mean statistics contain graph        expressiveness degradation with a learnable shift.
+structural information, and thus removing them could hurt
+the performance. Based on our analysis, we propose Graph-       Few works have studied normalization in the GNN literature.
+Norm to address the issue of InstanceNorm with a learnable      Xu et al. (2019) adapts BatchNorm to GIN as a plug-in
+shift (Step 2 in Figure 1). The learnable shift could learn to  component. A preliminary version of Dwivedi et al. (2020)
+control the ideal amount of information to preserve for mean    normalizes the node features with respect to the graph size.
+statistics. Together, GraphNorm normalizes the hidden rep-      Our GraphNorm is size-agnostic and significantly differs
+resentations across nodes in each individual graph with a       from the graph size normalization. More discussions on
+learnable shift to avoid the expressiveness degradation while   other normalization methods are in Appendix E.
+inheriting the acceleration effect of the shift operation.
+                                                                The reason behind the effectiveness of normalization has
+We validate the effectiveness of GraphNorm on eight popu-       been intensively studied. While scale and shift are the main
+lar graph classification benchmarks. Empirical results con-     components of normalization, most existing works focus
+firm that GraphNorm consistently improves the speed of          on the scale operation and the "scale-invariant" property:
+converge and stability of training for GNNs compared to         With a normalization layer after a linear (or convolutional)
+those with BatchNorm, InstanceNorm, LayerNorm, and              layer, the output values remain the same as the weights are
+those without normalization. Furthermore, GraphNorm             scaled. Hence, normalization decouples the optimization of
+helps GNNs achieve better generalization performance on         direction and length of the parameters (Kohler et al., 2019),
+                                                                implicitly tunes the learning rate (Ioffe & Szegedy, 2015;
+                       GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+Hoffer et al., 2018; Arora et al., 2018b; Li & Arora, 2019),                       graph classification tasks, we can apply a READOUT
+and smooths the optimization landscape (Santurkar et al.,
+2018). Our work offers a different view by instead showing                         function, e.g., summation, to aggregate node features
+specific shift operation has the preconditioning effect and                        h(iK) to obtain the entire graph's representation hG =
+can accelerate the training of GNNs.                                               READOUT h(iK) vi  V . A classifier can be ap-
+                                                                                   plied upon hG to predict the labels.
+
+2. Preliminaries                                                                   Normalization. Generally, given a set of values
+
+                                                                                   {x1, x2, · · · , xm}, a normalization operation first shifts
+
+We begin by introducing our notations and the basics of                            each xi by the mean µ, and then scales them down by
+                                                                                                                       xi -µ
+GNNs. Let G = (V, E) denote a graph where V =                                      standard deviation :  xi                   + , where  and
+
+{v1, v2, · · · , vn}, n is the number of nodes. Let the feature                       are learnable parameters, µ    =  1     m    xi  and 2  =
+                                                                                                                        m     i=1
+                                                                                      m            µ)2.
+vector of node vi be Xi. We denote the adjacency matrix of                         1  i=1  (xi  -        The  major  difference  among  different
+a graph as A  Rn×n with Aij = 1 if (vi, vj)  E and 0                               m
+
+                                                                                   existing normalization methods is which set of feature val-
+
+otherwise. The degree matrix associated with A is defined                          ues the normalization is applied to. For example, in com-
+
+as D = diag (d1, d2, . . . , dn) where di =                      n    Aij  .       puter vision, BatchNorm normalizes the feature values in the
+                                                                 j=1
+
+Graph Neural Networks. GNNs use the graph structure                                same channel across different samples in a batch. In NLP,
+
+and node features to learn the representations of nodes and                        LayerNorm normalizes the feature values at each position
+
+graphs. Modern GNNs follow a neighborhood aggregation                              in a sequence separately.
+
+strategy (Sukhbaatar et al., 2016; Kipf & Welling, 2017;                           3. Evaluating and Understanding
+                                                                                      Normalization for GNNs
+Hamilton et al., 2017; Velickovic et al., 2018; Monti et al.,
+                                                                                   In this section, we first adapt and evaluate existing normal-
+2017; Ying et al., 2021), where the representation of a node                       ization methods to GNNs. Then we give an explanation of
+                                                                                   the effectiveness of the variant of InstanceNorm, and show
+is iteratively updated by aggregating the representation of                        why the widely used BatchNorm fails to have such effec-
+its neighbors. To be concrete, we denote hi(k) as the repre-                       tiveness. The understanding inspires us to develop better
+sentation of vi at the k-th layer and define h(i0) = Xi. We                        normalization methods, e.g., GraphNorm.
+use AGGREGATE to denote the aggregation function in the
+k-th layer:
+
+h(ik) = AGGREGATE(k) hi(k-1), hj(k-1) : vj  N (vi) ,                               3.1. Adapting and Evaluating Normalization for GNNs
+                                                                   (1)
+
+where N (vi) is the set of nodes adjacent to vi. Different                         To investigate what normalization methods are effective for
+GNNs can be obtained by choosing different AGGREGATE                               GNNs, we first adapt three typical normalization methods,
+functions. Graph Convolutional Networks (GCN) (Kipf &                              i.e., BatchNorm, LayerNorm, and InstanceNorm, developed
+Welling, 2017) can be defined in matrix form as:                                   in other domain to GNNs. We apply the normalization
+                                                                                   after the linear transformation as in previous works (Ioffe
+         H(k) = ReLU W (k)H(k-1)QGCN ,                                        (2)  & Szegedy, 2015; Xiong et al., 2020; Xu et al., 2019). The
+                                                                                   general GNN structure equipped with a normalization layer
+where ReLU stands for rectified linear unit, H(k) =                                can be represented as:
+
+h1(k), h2(k), · · · , h(nk)  Rd(k)×n is the feature matrix at                         H(k) = F (k) Norm W (k)H(k-1)Q ,                        (4)
+
+the k-th layer where d(k) denotes the feature dimension,
+
+and W (k) is the parameter matrix in layer k. QGCN =                               where F (k) is a function that applies to each node separately,
+D^ -  1  A^D^ -  1            A^                    D^                             Q is an n × n matrix representing the neighbor aggregation,
+      2          2  ,  where      =  A  +  In  and      is  the  degree    matrix  and W (k) is the weight/parameter matrix in layer k. We can
+                                                                                   instantiate Eq. (4) as GCN and GIN, by setting proper F (k)
+of A^. In is the identity matrix.                                                  and matrix Q. For example, if we set F (k) to be ReLU and
+                                                                                   set Q to be QGCN (Eq. (2)), then Eq. (4) becomes GCN with
+Graph Isomorphism Network (GIN) (Xu et al., 2019) is                               normalization; Similarly, by setting F (k) to be MLP(k) and
+defined in matrix form as                                                          Q to be QGIN (Eq. (3)), we recover GIN with normalization.
+
+         H (k) = MLP(k) W (k)H (k-1)QGIN ,                                    (3)  We then describe the concrete operations of the adaptations
+                                                                                   of the normalization methods. Consider a batch of graphs
+where MLP stands for multilayer perceptron, (k) is a learn-                        {G1, · · · , Gb} where b is the batch size. Let ng be the
+able parameter and QGIN = A + In + (k)In.                                          number of nodes in graph Gg. We generally denote h^i,j,g
+
+For a K-layer GNN, the outputs of the final layer, i.e.,
+hi(K),i = 1, · · · , n, will be used for prediction. For
+                                 GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+Training Accuracy           PROTEINS             Training Accuracy            NCI1                Training Accuracy                PTC                        Training Accuracy            MUTAG
+
+                   1.0                                              1.0                                              1.0                                                         1.0
+                   0.9                                              0.9                                              0.9                                                         0.9
+                   0.8                                              0.8                                              0.8                                                         0.8
+                   0.7                                              0.7                                              0.7                                                         0.7
+                   0.6                                              0.6                                              0.6                                                         0.6
+
+                        0  1500            3000                            0        5000   10000                            0            500            1000                            0  500         1000
+                                                                                                                     0.9
+                           Iterations                               1.0        Iterations                                             Iterations                                           Iterations
+                                                                    0.9
+Training Accuracy       REDDITBINARY             Training Accuracy  0.8       COLLAB              Training Accuracy            IMDBBINARY
+                                                                    0.7
+                   1.0                                              0.6                                                                                                                    NoNorm+GIN
+                                                                                                                                                                                           LayerNorm+GIN
+                   0.9                                                     0                                         0.8                                                                   BatchNorm+GIN
+                                                                                                                                                                                           InstanceNorm+GIN
+                   0.8                                                                                                                                                                     GraphNorm+GIN
+
+                   0.7                                                                                               0.7
+
+                   0.6                                                                                               0.6
+
+                        0  3000            6000                                   7500     15000                          0              1500           3000
+
+                           Iterations                                         Iterations                                              Iterations
+
+Figure 2. Training performance of GIN with different normalization methods and GIN without normalization in graph classification
+tasks. The convergence speed of our adaptation of InstanceNorm dominates BatchNorm and LayerNorm in most tasks. GraphNorm
+further improves the training over InstanceNorm especially on tasks with highly regular graphs, e.g., IMDB-BINARY (See Figure 5 for
+detailed illustration). Overall, GraphNorm converges faster than all other methods.
+
+as the inputs to the normalization module, e.g., the j-th                                         3.2. Shift in InstanceNorm as a Preconditioner
+feature value of node vi of graph Gg, i = 1, · · · , ng, j =
+1, · · · , d, g = 1, · · · , b. The adaptations take the general                                  As mentioned in Section 1.1, the scale-invariant property of
+form:                                                                                             the normalization has been investigated and considered as
+                                                                                                  one of the ingredients that make the optimization efficient.
+                           Norm  h^ i,j,g  =  · h^i,j,g - µ + ,                            (5)    In our analysis of normalizations for GNNs, we instead
+                                                                                                  take a closer look at the shift operation in the normalization.
+                                                                                                  Compared to the image and sequential data, the graph is
+where the scopes of mean µ, standard deviation , and affine                                       explicitly structured, and the neural networks exploit the
+parameters ,  differ for different normalization methods.                                         structural information directly in the aggregation of the
+For BatchNorm, normalization and the computation of µ                                             neighbors, see Eq. (1). Such uniqueness of GNNs makes it
+and  are applied to all values in the same feature dimension                                      possible to study how the shift operation interplays with the
+across the nodes of all graphs in the batch as in Xu et al.                                       graph data in detail.
+(2019), i.e., over dimensions g, i of h^i,j,g. To adapt Layer-
+Norm to GNNs, we view each node as a basic component,                                             We show that the shift operation in our adaptation of In-
+resembling words in a sentence, and apply normalization                                           stanceNorm serves as a preconditioner of the aggregation
+to all feature values across different dimensions of each                                         in GNNs and hypothesize this preconditioning effect can
+node, i.e., over dimension j of h^i,j,g. For InstanceNorm,                                        boost the training of GNNs. Though the current theory of
+we regard each graph as an instance. The normalization is                                         deep learning has not been able to prove and compare the
+then applied to the feature values across all nodes for each                                      convergence rate in the real settings, we calculate the con-
+individual graph, i.e., over dimension i of h^i,j,g.                                              vergence rate of GNNs on a simple but fully characterizable
+                                                                                                  setting to give insights on the benefit of the shift operation.
+In Figure 2 we show training curves of different normal-
+ization methods in graph classification tasks. We find that                                       fWe first formulate our adaptation of InstanceNorm in the
+LayerNorm hardly improves the training process in most
+tasks, while our adaptation of InstanceNorm can largely                                           matrix form. Mathematically, for a graph of n nodes, denote
+boost the training speed compared to other normalization
+methods. The test performances have similar trends. We                                            N                       =    In  -  1  11   . N is the matrix form of the shift operation,
+summarize the final test accuracies in Table 1. In the follow-                                                                        n
+ing subsections, we provide an explanation for the success
+of InstanceNorm and its benefits compared to BatchNorm,                                           i.e., for any vector z = [z1, z2, · · · , zn]  Rn, z N =
+which is currently adapted in many GNNs.                                                                                                 n
+                                                                                                  z                       -    1         i=1  zi  1  .  Then the normalization together
+                                                                                                                               n
+                GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+with the aggregation can be represented as1                                    PROTEINS                           NCI1                                                        MUTAG
+  Norm W (k)H(k-1)Q = S W (k)H(k-1)Q N, (6)
+                                                                                                               4                                                    3
+                                                                       4
+                                                                                                                                                                    2
+                                                                                                               2
+                                                                       2                                                                                            1
+                                                                       Singular Value
+where S = diag  1  ,  1  ,  ·  ·  ·  ,     1  is the scaling, and Q                                          Singular Value                                         0
+                1     2                 d(k)                                                                                                        Singular Value
+                                                                                                                                                                    singular value of QN
+                                                                       0  0
+
+is the GNN aggregation matrix. Each i is the standard                     singular value of Q
+
+deviation of the values of the i-th features among the nodes
+
+in the graph we consider. We can see that, in the matrix               Figure 3. Singular value distribution of Q and QN for sampled
+                                                                       graphs in different datasets using GIN. More visualizations can be
+form, shifting feature values on a single graph is equivalent          found in Appendix D.1
+
+to multiplying N as in Eq. (6). Therefore, we further check
+
+how this operation affects optimization. In particular, we
+
+examine the singular value distribution of QN . The follow-            randomness of data generation, the parameter wtShift of the
+                                                                       model with shift at step t converges to the optimal parameter
+ing theorem shows that QN has a smoother singular value                wShift linearly:
+
+distribution than Q, i.e., N serves as a preconditioner of Q.                            wtShift - wShift 2 = O 1t ,
+
+Theorem 3.1 (Shift Serves as a Preconditioner of Q). Let               where 1 is the convergence rate.
+Q, N be defined as in Eq. (6), 0  1  · · ·  n be
+the singular values of Q. We have µn = 0 is one of the                 Similarly, the parameter wtVanilla of the vanilla model con-
+singular values of QN , and let other singular values of QN            verges linearly, but with a slower rate:
+be 0  µ1  µ2  · · ·  µn-1. Then we have
+                                                                              wtVanilla - wVanilla 2 = O t2 and 1 < 2,
+1  µ1  2  · · ·  n-1  µn-1  n, (7)
+                                                                       which indicates that the model with shift converges faster
+where i = µi or i = µi-1 only if there exists one of the               than the vanilla model.
+right singular vectors i of Q associated with i satisfying
+1 i = 0.                                                               The proof can be found in Appendix A.2. To check how
+                                                                       much the matrix N improves the distribution of the spec-
+The proof can be found in Appendix A.1.                                trum of matrix Q in real practice, we sample graphs from
+                                                                       different datasets for illustration, as showed in Figure 3
+We hypothesize that precoditioning Q can help the optimiza-            (more visualizations for different types of graph can be
+tion. In the case of optimizing the weight matrix W (k), we            found in Appendix D.1). We can see that the singular value
+can see from Eq. (6) that after applying normalization, the            distribution of QN is much smoother, and the condition
+term Q in the gradient of W (k) will become QN which                   number is improved. Note that for a multi-layer GNN, the
+makes the optimization curvature of W (k) smoother, see                normalization will be applied in each layer. Therefore, the
+Appendix A.5 for more discussions. Similar precondition-               overall improvement of such preconditioning can be more
+ing effects are believed to improve the training of deep               significant.
+learning models (Duchi et al., 2011; Kingma & Ba, 2015),
+and classic wisdom in optimization has also shown that                 3.3. Heavy Batch Noise in Graphs Makes BatchNorm
+preconditioning can accelerate the convergence of iterative                 Less Effective
+methods (Axelsson, 1985; Demmel, 1997). Unfortunately,
+current theoretical toolbox only has a limited power on the            The above analysis shows the adaptation of InstanceNorm
+optimization of deep learning models. Global convergence               has the effect of preconditioning the aggregation of GNNs.
+rates have only been proved for either simple models, e.g.,            Then a natural question is whether a batch-level normaliza-
+linear models (Arora et al., 2018a), or extremely overparam-           tion for GNNs (Xu et al., 2019) has similar advantages. We
+eterized models (Du et al., 2018; Allen-Zhu et al., 2019; Du           show that BatchNorm is less effective in GNNs due to heavy
+et al., 2019a; Cai et al., 2019; Du et al., 2019b; Zou et al.,         batch noise on graph data.
+2020). To support our hypothesis that preconditioning may
+suggest better training, we investigate a simple but charac-           In BatchNorm, the mean µB and standard deviation B are
+terizable setting of training a linear GNN using gradient              calculated in a sampled batch during training, which can be
+descent in Appendix A.2. In this setting, we prove that:               viewed as random variables by the randomness of sampling.
+                                                                       During testing, the estimated dataset-level statistics (running
+Proposition 3.1 (Concrete Example Showing Shift can Ac-                mean µD and standard deviation D) are used instead of the
+celerate Training (Informal)). With high probability over              batch-level statistics (Ioffe & Szegedy, 2015). To apply The-
+                                                                       orem 3.1 to BatchNorm for the preconditioning effect, one
+    1Standard normalization has an additional affine operation after
+shifting and scaling. Here we omit it in Eq. 6 for better demonstra-
+tion. Adding this operation will not affect the theoretical analysis.
+                         GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+                     PROTEINS-layer-0                          PROTEINS-layer-3                           PROTEINS-layer-0                         PROTEINS-layer-3
+
+            2.0                                         4                                        1.6
+
+Mean value  1.5                             Mean value                                Std value  1.4                             Std value  20
+
+                                                        2
+
+            1.0                                                                                  1.2
+
+                                                        0                                                                                   0
+
+                 0  200                400                  0  200               400                  0  200                400                 0  200               400
+
+                    Epochs                                     Epochs                                    Epochs                                    Epochs
+
+                    CIFAR10-layer-0                            CIFAR10-layer-3                           CIFAR10-layer-0                           CIFAR10-layer-3
+
+                                                        0                                        4
+
+Mean value  1.0                             Mean value                                Std value                                  Std value
+
+            0.5                                         -1                                       2                                          5
+
+            0.0
+
+                                                                                                 0                                          0
+
+                 0  50                 100                  0  50                100                  0  50                 100                 0  50                100
+
+                    Epochs                                     Epochs                                    Epochs                                    Epochs
+
+                                       dataset-level                                                                      dataset-level 
+
+                    batch-level  (max)                  batch-level  (min)                               batch-level  (max)                 batch-level  (min)
+
+Figure 4. Batch-level statistics are noisy for GNNs. We plot the batch-level/dataset-level mean/standard deviation of models trained
+on PROTEINS (graph classification) and CIFAR10 (image classification). We observe that the deviation of batch-level statistics from
+dataset-level statistics is rather large for the graph task, while being negligible in image task.
+
+could potentially view all graphs in a dataset as subgraphs in                        4. Graph Normalization
+a super graph. Hence, Theorem 3.1 applies to BatchNorm
+if the batch-level statistics are well-concentrated around                            Although we provide evidence on the indispensability and
+dataset-level statistics, i.e., µB  µD and B  D. How-                                 advantages of our adaptation of InstanceNorm, simply nor-
+ever, the concentration of batch-level statistics is heavily                          malizing the values in each feature dimension within a graph
+domain-specific. While Shen et al. (2020) find the varia-                             does not consistently lead to improvement. We show that in
+tion of batch-level statistics in typical networks is small for                       some situations, e.g., for regular graphs, the standard shift
+computer vision, the concentration of batch-level statistics                          (e.g., shifting by subtracting the mean) may cause informa-
+is still unknown for GNNs.                                                            tion loss on graph structures.
+
+We study how the batch-level statistics µB, B deviate from                            We consider r-regular graphs, i.e., each node has a degree
+the dataset-level statistics µD, D. For comparison, we train                          r. We first look into the case that there are no available
+a 5-layer GIN with BatchNorm on the PROTEINS dataset                                  node features, then Xi is set to be the one-hot encoding
+and train a ResNet18 (He et al., 2016) on the CIFAR10                                 of the node degree (Xu et al., 2019). In a r-regular graph,
+dataset. We set batch size to 128. For each epoch, we record                          all nodes have the same encoding, and thus the columns
+the batch-level max/min mean and standard deviation for the                           of H(0) are the same. We study the output of the standard
+first and the last BatchNorm layer on a randomly selected                             shift operation in the first layer, i.e., k = 1 in Eq. (6).
+dimension across batches. In Figure 4, pink line denotes                              From the following proposition, we can see that when the
+the dataset-level statistics, and green/blue line denotes the                         standard shift operation is applied to GIN for a r-regular
+max/min value of the batch-level statistics. We observe that                          graph described above, the information of degree is lost:
+for image tasks, the maximal deviation of the batch-level
+statistics from the dataset-level statistics is negligible (Fig-                      Proposition 4.1. For a r-regular graph with one-hot en-
+ure 4) after a few epochs. In contrast, for the graph tasks, the                      codings as its features described above, we have for GIN,
+variation of batch-level statistics stays large during training.                      Norm W (1)H(0)QGIN = S W (1)H(0)QGIN N = 0,
+Intuitively, the graph structure can be quite diverse and the a                       i.e., the output of normalization layer is a zero matrix with-
+single batch cannot well represent the entire dataset. Hence,                         out any information of the graph structure.
+the preconditioning property also may not hold for Batch-
+Norm. In fact, the heavy batch noise may bring instabilities                          Such information loss not only happens when there are
+to the training. More results may be found in Appendix D.2.                           no node features. For complete graphs, we can further
+                                                                                      show that even each node has different features, the graph
+                                                                                      structural information, i.e., adjacency matrix A, will always
+                                                                                      be ignored after the standard shift operation in GIN:
+
+                                                                                      Proposition 4.2. For a complete graph (r = n - 1), we
+                                                                                      have for GIN, QGINN = (k)N , i.e., graph structural in-
+                 GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+PROTEINS (Tree-type Graphs) IMDBBINARY (Regular-type Graphs)                                                         By introducing the learnable parameter j for each feature
+                                                                                                                     dimension j, we are able to learn how much the information
+                                                                                                                     we need to keep in the mean. It is easy to see that Graph-
+                                                                                                                     Norm has stronger expressive power than InstanceNorm.
+                                                                                                                     Formally, we have the following fact:
+
+                                                                                                                     Fact 1 (GraphNorm is strictly more expressive than
+
+                                                                                                                     InstanceNorm). If j = 1, j = 0, then there
+                                                                                                                                                                           h^i,j n
+                                                                                                                     does not exist j, j such that for any
+                                                                                                                                                                                    i=1
+                                                                                                                     that the normalization is applied to, for any i,
+
+                                                                                                                     GraphNorm{j,j,j} h^i,j  =             · h^i,j -j ·µjj + j  =     j ·
+                                                                                                                                                                   ^j
+
+1.0         PROTEINS                                                       1.0        IMDBBINARY                     h^i,j -µj                                     h^ i,j
+0.8                                                                                                                      j
+0.6Training Accuracy                                                                                                            +j       =  InstanceNorm{j ,j }            , where µj =
+0.4 0                                                   Training Accuracy
+                                                                                                                                            h^i,j -j ·µj  2                h^i,j -µj  2
+                                                                                                                     n    h^ i,j            n                              n
+                                                                           0.8                                       i=1          , ^j2                         2
+                                                                                                                                            ( ) i=1                        ( ) i=1
+                                                                                                                                         =  ,  n                   =       . n
+                                                                                                                     n                                          j
+
+                 GraphNorm+GIN                                             0.6                     GraphNorm+GIN     To validate our theory and the proposed GraphNorm in real-
+                 GraphNorm+GCN                                             0.4 0                   GraphNorm+GCN     world data, we conduct an ablation study on two typical
+                 InstanceNorm+GIN                                                                  InstanceNorm+GIN  datasets, PROTEINS and IMDB-BINARY. As shown in
+                 InstanceNorm+GCN                                                                  InstanceNorm+GCN  Figure 5, the graphs from PROTEINS and IMDB-BINARY
+                                                                                                                     exhibit irregular-type and regular-type graphs, respectively.
+               1500             3000                                                       1500            3000      We train GIN/GCN using our adaptation of InstanceNorm
+            Iterations                                                                  Iterations                   and GraphNorm under the same setting in Section 5. The
+                                                                                                                     training curves are presented in Figure 5. The curves show
+Figure 5. Comparison of GraphNorm and InstanceNorm on                                                                that using a learnable  slightly improves the convergence
+different types of graphs. Top: Sampled graphs with different                                                        on PROTEINS, while significantly boost the training on
+topological structures. Bottom: Training curves of GIN/GCN                                                           IMDB-BINARY. This observation verify that shifting the
+using GraphNorm and InstanceNorm.                                                                                    feature values by subtracting the mean may lose informa-
+                                                                                                                     tion, especially for regular graphs. And the introduction of
+formation in Q will be removed after multiplying N .                                                                 learnable shift in GraphNorm can effectively mitigate the
+                                                                                                                     expressive degradation.
+The proof of these two propositions can be found in Ap-
+pendix A. Similar results can be easily derived for other ar-                                                        5. Experiments
+chitectures like GCN by substituting QGIN with QGCN. As
+we can see from the above analysis, in graph data, the mean                                                          In this section, we evaluate and compare both the training
+statistics after the aggregation sometimes contain structural                                                        and test performance of GraphNorm with other normaliza-
+information. Discarding the mean will degrade the expres-                                                            tion methods on graph classification benchmarks.
+siveness of the neural networks. Note that the problem
+may not happen in image domain. The mean statistics of                                                               Settings. We use eight popularly used benchmark datasets
+image data contains global information such as brightness.                                                           of different scales in the experiments (Yanardag & Vish-
+Removing such information in images will not change the                                                              wanathan, 2015; Xu et al., 2019), including four medium-
+semantics of the objects and thus will not hurt the classifica-                                                      scale bioinformatics datasets (MUTAG, PTC, PROTEINS,
+tion performance.                                                                                                    NCI1), three medium-scale social network datasets (IMDB-
+                                                                                                                     BINARY, COLLAB, REDDIT-BINARY), and one large-
+This analysis inspires us to modify the current normaliza-                                                           scale bioinformatics dataset ogbg-molhiv, which is recently
+tion method with a learnable parameter to automatically                                                              released on Open Graph Benchmark (OGB) (Hu et al.,
+control how much the mean to preserve in the shift oper-                                                             2020). Dataset statistics are summarized in Table 1. We use
+ation. Combined with the graph-wise normalization, we                                                                two typical graph neural networks GIN (Xu et al., 2019) and
+name our new method Graph Normalization, i.e., Graph-                                                                GCN (Kipf & Welling, 2017) for our evaluations. Specifi-
+Norm. For each graph G, we generally denote value h^i,j                                                              cally, we use a five-layer GCN/GIN. For GIN, the number
+as the inputs to GraphNorm, e.g., the j-th feature value of                                                          of sub-layers in MLP is set to 2. Normalization is applied
+node vi, i = 1, · · · , n, j = 1, · · · , d. GraphNorm takes the                                                     to each layer. To aggregate global features on top of the
+following form:                                                                                                      network, we use SUM readout for MUTAG, PTC, PRO-
+                                                                                                                     TEINS and NCI1 datasets, and use MEAN readout for other
+GraphNorm h^i,j          =      j     ·                                    h^ i,j  - j  · µj    +     j ,  (8)       datasets, as in Xu et al. (2019). Details of the experimental
+                                                                                    ^j
+
+                                                                                  h^i,j -j ·µj  2
+            n    h^ i,j                                                    ( ) n
+where µj =  i=1          , ^j2  =                                                                  ,  and  j ,  j
+                                                                           i=1
+
+            n                                                                      n
+
+are the affine parameters as in other normalization methods.
+             GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+Table 1. Test performance of GIN/GCN with various normalization methods on graph classification tasks.
+
+Datasets                                MUTAG       PTC PROTEINS NCI1 IMDB-B RDT-B COLLAB
+# graphs                                   188
+# classes                                   2       344          1113        4110        1000        2000        5000
+Avg # nodes                                17.9
+                                                    2            2           2           2           2           2
+
+                                                    25.5         39.1        29.8        19.8        429.6       74.5
+
+WL SUBTREE (SHERVASHIDZE ET AL., 2011)  90.4 ± 5.7  59.9 ± 4.3   75.0 ± 3.1  86.0 ± 1.8  73.8 ± 3.9  81.0 ± 3.1  78.9 ± 1.9
+DCNN (ATWOOD & TOWSLEY, 2016)              67.0        56.6         61.3        62.6        49.1          -         52.1
+DGCNN (ZHANG ET AL., 2018)                 85.8        58.6         75.5        74.4        70.0          -         73.7
+AWL (IVANOV & BURNAEV, 2018)                             -            -           -
+                                        87.9 ± 9.8                                       74.5 ± 5.9  87.9 ± 2.5  73.9 ± 1.9
+
+GIN+LAYERNORM                           82.4 ± 6.4  62.8 ± 9.3   76.2 ± 3.0  78.3 ± 1,7  74.5 ± 4,4  82.8 ± 7.7  80.1 ± 0.8
+GIN+BATCHNORM ((XU ET AL., 2019))       89.4 ± 5.6  64.6 ± 7.0   76.2 ± 2.8  82.7 ± 1.7  75.1 ± 5.1  92.4 ± 2.5  80.2 ± 1.9
+GIN+INSTANCENORM                        90.5 ± 7.8  64.7 ± 5.9   76.5 ± 3.9  81.2 ± 1.8  74.8 ± 5.0  93.2 ± 1.7  80.0 ± 2.1
+GIN+GraphNorm                           91.6 ± 6.5  64.9 ± 7.5   77.4 ± 4.9  81.4 ± 2.4  76.0 ± 3.7  93.5 ± 2.1  80.2 ± 1.0
+
+Table 2. Test performance on OGB.                                performance and report the test accuracy in Table 1,2. The
+                                                                 results show that GraphNorm also improves the generaliza-
+Datasets          OGBG-MOLHIV                                    tion on most benchmarks.
+# graphs               41,127
+# classes                 2                                      For reference, we explain the possible reasons of higher test
+Avg # nodes              25.5                                    accuracy in two folds. First, as shown in Figure 2, using
+                                                                 proper normalization helps the model find a minimum with
+GCN (Hu et al., 2020) 76.06 ± 0.97                               a higher training accuracy. Second, as suggested by Hardt
+GIN (Hu et al., 2020) 75.58 ± 1.40                               et al. (2016), faster training leads to smaller generalization
+                                                                 gap. Since the test accuracy equals the training accuracy
+GCN+LayerNorm     75.04 ± 0.48                                   plus the generalization, these two views together suggest
+GCN+BatchNorm     76.22 ± 0.95                                   better normalization leads to better test performance.
+GCN+InstanceNorm  78.18 ± 0.42
+GCN+GraphNorm     78.30 ± 0.69                                   5.1. Ablation Study
+
+GIN+LayerNorm     74.79 ± 0.92                                   In this subsection, we summarize the results of some ab-
+GIN+BatchNorm     76.61 ± 0.97                                   lation studies, including BatchNorm with learnable shift,
+GIN+InstanceNorm  77.54 ± 1.27                                   BatchNorm with running statistics and the effect of batch
+GIN+GraphNorm     77.73 ± 1.29                                   size. Due to the space limitation, the detailed results can be
+                                                                 found in Appendix D.
+settings are presented in Appendix C.
+                                                                 BatchNorm with learnable shift. We conduct experi-
+Results. We plot the training curves of GIN with Graph-          ments on BatchNorm to investigate whether simply intro-
+Norm and other normalization methods2 on different tasks         ducing a learnable shift can already improve the existing
+in Figure 2. The results on GCN show similar trends, and         normalization methods without concrete motivation of over-
+are provided in Appendix D.3. As shown in Figure 2, Graph-       coming expressiveness degradation. Specifically, we equip
+Norm enjoys the fastest convergence on all tasks. Compared       BatchNorm with a similar learnable shift as GraphNorm and
+to BatchNorm used in Xu et al. (2019), GraphNorm con-            evaluate its performance. We find that the learnable shift
+verges in roughly 5000/500 iterations on NCI1 and PTC            cannot further improve upon BatchNorm (See Appendix
+datasets, while the model using BatchNorm does not even          D), which suggests the introduction of learnable shift in
+converge in 10000/1000 iterations. Remarkably, though In-        GraphNorm is critical.
+stanceNorm does not outperform other normalization meth-
+ods on IMDB-BINARY, GraphNorm with learnable shift               BatchNorm with running statistics. We study the vari-
+significantly boosts the training upon InstanceNorm and          ant of BatchNorm which uses running statistics to replace
+achieves the fastest convergence. We also validate the test      the batch-level mean and standard deviation (Similar idea
+                                                                 is also proposed in Yan et al. (2019)). At first glance, this
+    2The graph size normalization in the preliminary version of  method may seem to be able to mitigate the problem of
+Dwivedi et al. (2020) does not show significant improvement on   large batch noise. However, the running statistics change
+the training and test performance, so we do not report it.
+GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+a lot during training, and using running statistics disables    References
+the model to back-propagate the gradients through mean
+and standard deviation. Results in Appendix D show this         Allen-Zhu, Z., Li, Y., and Song, Z. A convergence theory for
+variant has even worse performance than BatchNorm.                 deep learning via over-parameterization. In International
+                                                                  Conference on Machine Learning, pp. 242­252. PMLR,
+                                                                   2019.
+
+The effect of batch size. We further compare the Graph-         Arora, S., Cohen, N., Golowich, N., and Hu, W. A conver-
+Norm with BatchNorm with different batch sizes (8, 16, 32,         gence analysis of gradient descent for deep linear neural
+64). As shown in Appendix D, our GraphNorm consistently            networks. In International Conference on Learning Rep-
+outperforms the BatchNorm on all the settings.                     resentations, 2018a.
+
+6. Conclusion and Future Work                                   Arora, S., Li, Z., and Lyu, K. Theoretical analysis of
+                                                                   auto rate-tuning by batch normalization. arXiv preprint
+In this paper, we adapt and evaluate three well-used normal-       arXiv:1812.03981, 2018b.
+ization methods, i.e., BatchNorm, LayerNorm, and Instan-
+ceNorm to GNNs. We give explanations for the successes          Atwood, J. and Towsley, D. Diffusion-convolutional neural
+and failures of these adaptations. Based on our understand-        networks. In Advances in neural information processing
+ing of the strengths and limitations of existing adaptations,      systems, pp. 1993­2001, 2016.
+we propose Graph Normalization, that builds upon the adap-
+tation of InstanceNorm with a learnable shift to overcome       Axelsson, O. A survey of preconditioned iterative methods
+the expressive degradation of the original InstanceNorm.           for linear systems of algebraic equations. BIT Numerical
+Experimental results show GNNs with GraphNorm not only            Mathematics, 25(1):165­187, 1985.
+converge faster, but also achieve better generalization per-
+formance on several benchmark datasets.                         Ba, J. L., Kiros, J. R., and Hinton, G. E. Layer normalization.
+                                                                   arXiv preprint arXiv:1607.06450, 2016.
+Though seeking theoretical understanding of normalization
+methods in deep learning is challenging (Arora et al., 2018b)   Bruna, J., Zaremba, W., Szlam, A., and LeCun, Y. Spec-
+due to limited understanding on the optimization of deep           tral networks and locally connected networks on graphs.
+learning models and characterization of real world data, we        arXiv preprint arXiv:1312.6203, 2013.
+take an initial step towards finding effective normalization
+methods for GNNs with theoretical guidance in this paper.       Cai, T., Gao, R., Hou, J., Chen, S., Wang, D., He, D., Zhang,
+The proposed theories and hypotheses are motivated by              Z., and Wang, L. A gram-gauss-newton method learning
+several simple models. And we are not able to give concrete        overparameterized deep neural networks for regression
+theoretical results to problems such as: the convergence rate      problems. arXiv preprint arXiv:1905.11675, 2019.
+of general GNNs with normalization, the spectrum of Q
+normalized by learnable shift, etc. We believe the analyses     Chen, Y., Tang, X., Qi, X., Li, C.-G., and Xiao, R. Learning
+of more realistic but complicated settings, e.g., the dynamics     graph normalization for graph neural networks, 2020.
+of GraphNorm on deep GNNs, are good future directions.
+                                                                Defferrard, M., Bresson, X., and Vandergheynst, P. Con-
+Acknowledgements                                                  volutional neural networks on graphs with fast localized
+                                                                   spectral filtering. In Advances in neural information pro-
+We thank Mozhi Zhang and Ruosong Wang for helpful                  cessing systems, pp. 3844­3852, 2016.
+suggestions on the paper; Zhiyuan Li and Kaifeng Lyu
+for helpful discussion on the literature of normalization       Demmel, J. W. Applied numerical linear algebra, vol-
+methods; and Prof. Yang Yuan for support of computational          ume 56. Siam, 1997.
+resources. This work was supported by National Key R&D
+Program of China (2018YFB1402600), Key-Area Research            Du, S., Lee, J., Li, H., Wang, L., and Zhai, X. Gradient
+and Development Program of Guangdong Province (No.                 descent finds global minima of deep neural networks.
+2019B121204008), BJNSF (L172037), Beijing Academy                  In International Conference on Machine Learning, pp.
+of Artificial Intelligence, Project 2020BD006 supported by        1675­1685. PMLR, 2019a.
+PKU-Baidu Fund, NSF CAREER award (1553284) and
+NSF III (1900933).                                              Du, S. S., Zhai, X., Poczos, B., and Singh, A. Gradient
+                                                                   descent provably optimizes over-parameterized neural
+                                                                   networks. In International Conference on Learning Rep-
+                                                                   resentations, 2018.
+GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+Du, S. S., Hou, K., Salakhutdinov, R. R., Poczos, B., Wang,       Ivanov, S. and Burnaev, E. Anonymous walk embeddings.
+   R., and Xu, K. Graph neural tangent kernel: Fusing                In International Conference on Machine Learning, pp.
+   graph neural networks with graph kernels. In Advances in          2191­2200, 2018.
+  Neural Information Processing Systems, pp. 5724­5734,
+   2019b.                                                         Keriven, N. and Peyre´, G. Universal invariant and equiv-
+                                                                     ariant graph neural networks. In Advances in Neural
+Duchi, J., Hazan, E., and Singer, Y. Adaptive subgradi-             Information Processing Systems, pp. 7092­7101, 2019.
+   ent methods for online learning and stochastic optimiza-
+   tion. Journal of machine learning research, 12(Jul):2121­      Kingma, D. P. and Ba, J. Adam: A method for stochastic
+   2159, 2011.                                                       optimization. In International Conference on Learning
+                                                                    Representations, 2015.
+Dwivedi, V. P., Joshi, C. K., Laurent, T., Bengio, Y., and
+   Bresson, X. Benchmarking graph neural networks. arXiv          Kipf, T. N. and Welling, M. Semi-supervised classifica-
+   preprint arXiv:2003.00982, 2020.                                  tion with graph convolutional networks. In International
+                                                                    Conference on Learning Representations, 2017.
+Gilmer, J., Schoenholz, S. S., Riley, P. F., Vinyals, O., and
+   Dahl, G. E. Neural message passing for quantum chem-           Kohler, J., Daneshmand, H., Lucchi, A., Hofmann, T., Zhou,
+   istry. In International Conference on Machine Learning,           M., and Neymeyr, K. Exponential convergence rates
+   pp. 1273­1272, 2017.                                              for batch normalization: The power of length-direction
+                                                                     decoupling in non-convex optimization. In The 22nd
+Gori, M., Monfardini, G., and Scarselli, F. A new model             International Conference on Artificial Intelligence and
+   for learning in graph domains. In Proceedings. 2005              Statistics, pp. 806­815, 2019.
+  IEEE International Joint Conference on Neural Networks,
+  2005., volume 2, pp. 729­734. IEEE, 2005.                       Li, G., Xiong, C., Thabet, A., and Ghanem, B. Deep-
+                                                                     ergcn: All you need to train deeper gcns. arXiv preprint
+Hamilton, W., Ying, Z., and Leskovec, J. Inductive repre-            arXiv:2006.07739, 2020.
+   sentation learning on large graphs. In Advances in neural
+   information processing systems, pp. 1024­1034, 2017.           Li, Z. and Arora, S. An exponential learning rate sched-
+                                                                     ule for deep learning. arXiv preprint arXiv:1910.07454,
+Hardt, M., Recht, B., and Singer, Y. Train faster, generalize        2019.
+   better: Stability of stochastic gradient descent. In Interna-
+   tional Conference on Machine Learning, pp. 1225­1234.          Loukas, A. How hard is to distinguish graphs with graph
+   PMLR, 2016.                                                       neural networks? In Advances in neural information
+                                                                     processing systems, 2020.
+He, K., Zhang, X., Ren, S., and Sun, J. Deep residual learn-
+   ing for image recognition. In Proceedings of the IEEE          Miyato, T., Kataoka, T., Koyama, M., and Yoshida, Y. Spec-
+   conference on computer vision and pattern recognition,            tral normalization for generative adversarial networks. In
+   pp. 770­778, 2016.                                               International Conference on Learning Representations,
+                                                                     2018. URL https://openreview.net/forum?
+Hoffer, E., Banner, R., Golan, I., and Soudry, D. Norm               id=B1QRgziT-.
+   matters: efficient and accurate normalization schemes
+   in deep networks. In Advances in Neural Information            Monti, F., Boscaini, D., Masci, J., Rodola, E., Svoboda, J.,
+  Processing Systems, pp. 2160­2170, 2018.                           and Bronstein, M. M. Geometric deep learning on graphs
+                                                                     and manifolds using mixture model cnns. In Proceedings
+Horn, R. A. and Johnson, C. R. Matrix analysis. Cambridge            of the IEEE Conference on Computer Vision and Pattern
+   university press, 2012.                                          Recognition, pp. 5115­5124, 2017.
+
+Hu, W., Fey, M., Zitnik, M., Dong, Y., Ren, H., Liu, B.,          Salimans, T. and Kingma, D. P. Weight normalization: A
+   Catasta, M., and Leskovec, J. Open graph benchmark:               simple reparameterization to accelerate training of deep
+   Datasets for machine learning on graphs. arXiv preprint           neural networks. In Advances in neural information pro-
+   arXiv:2005.00687, 2020.                                           cessing systems, pp. 901­909, 2016.
+
+Ioffe, S. and Szegedy, C. Batch normalization: Accelerating       Salimans, T., Goodfellow, I., Zaremba, W., Cheung, V.,
+   deep network training by reducing internal covariate shift.       Radford, A., and Chen, X. Improved techniques for train-
+   In International Conference on Machine Learning, pp.              ing gans. In Advances in neural information processing
+  448­456, 2015.                                                     systems, pp. 2234­2242, 2016.
+GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+Santoro, A., Raposo, D., Barrett, D. G., Malinowski, M.,        Wu, Y. and He, K. Group normalization. In Proceedings of
+   Pascanu, R., Battaglia, P., and Lillicrap, T. A simple neu-     the European Conference on Computer Vision (ECCV),
+   ral network module for relational reasoning. In Advances        pp. 3­19, 2018.
+   in neural information processing systems, pp. 4967­4976,
+   2017.                                                        Wu, Z., Ramsundar, B., Feinberg, E. N., Gomes, J., Ge-
+                                                                   niesse, C., Pappu, A. S., Leswing, K., and Pande,
+Santurkar, S., Tsipras, D., Ilyas, A., and Madry, A. How          V. S. Moleculenet: A benchmark for molecular ma-
+   does batch normalization help optimization? In Ad-              chine learning. CoRR, abs/1703.00564, 2017. URL
+   vances in Neural Information Processing Systems, pp.            http://arxiv.org/abs/1703.00564.
+   2483­2493, 2018.
+                                                                Wu, Z., Pan, S., Chen, F., Long, G., Zhang, C., and Philip,
+Sato, R., Yamada, M., and Kashima, H. Approximation ra-            S. Y. A comprehensive survey on graph neural networks.
+   tios of graph neural networks for combinatorial problems.      IEEE Transactions on Neural Networks and Learning
+   In Advances in Neural Information Processing Systems,          Systems, 2020.
+   pp. 4083­4092, 2019.
+                                                                Xiong, R., Yang, Y., He, D., Zheng, K., Zheng, S., Xing,
+Scarselli, F., Gori, M., Tsoi, A. C., Hagenbuchner, M., and        C., Zhang, H., Lan, Y., Wang, L., and Liu, T.-Y. On
+   Monfardini, G. The graph neural network model. IEEE             layer normalization in the transformer architecture. arXiv
+  Transactions on Neural Networks, 20(1):61­80, 2008.              preprint arXiv:2002.04745, 2020.
+
+Scarselli, F., Tsoi, A. C., and Hagenbuchner, M. The vapnik­    Xu, K., Li, C., Tian, Y., Sonobe, T., Kawarabayashi, K.-i.,
+   chervonenkis dimension of graph and recursive neural            and Jegelka, S. Representation learning on graphs with
+   networks. Neural Networks, 108:248­259, 2018.                   jumping knowledge networks. In International Confer-
+                                                                   ence on Machine Learning, pp. 5453­5462, 2018.
+Shen, S., Yao, Z., Gholami, A., Mahoney, M. W., and
+   Keutzer, K. Powernorm: Rethinking batch normaliza-           Xu, K., Hu, W., Leskovec, J., and Jegelka, S. How powerful
+   tion in transformers, 2020.                                     are graph neural networks? In International Conference
+                                                                   on Learning Representations, 2019. URL https://
+Shervashidze, N., Schweitzer, P., Leeuwen, E. J. v.,               openreview.net/forum?id=ryGs6iA5Km.
+   Mehlhorn, K., and Borgwardt, K. M. Weisfeiler-lehman
+   graph kernels. Journal of Machine Learning Research,         Xu, K., Li, J., Zhang, M., Du, S. S., ichi Kawarabayashi, K.,
+  12(Sep):2539­2561, 2011.                                         and Jegelka, S. What can neural networks reason about?
+                                                                   In International Conference on Learning Representations,
+Stokes, J. M., Yang, K., Swanson, K., Jin, W., Cubillos-Ruiz,      2020. URL https://openreview.net/forum?
+  A., Donghia, N. M., MacNair, C. R., French, S., Carfrae,         id=rJxbJeHFPS.
+   L. A., Bloom-Ackerman, Z., et al. A deep learning ap-
+   proach to antibiotic discovery. Cell, 180(4):688­702,        Xu, K., Zhang, M., Li, J., Du, S. S., Kawarabayashi, K.-I.,
+   2020.                                                           and Jegelka, S. How neural networks extrapolate: From
+                                                                   feedforward to graph neural networks. In International
+Sukhbaatar, S., Fergus, R., et al. Learning multiagent com-       Conference on Learning Representations, 2021.
+   munication with backpropagation. In Advances in neural
+   information processing systems, pp. 2244­2252, 2016.         Yan, J., Wan, R., Zhang, X., Zhang, W., Wei, Y., and Sun, J.
+                                                                  Towards stabilizing batch statistics in backward propaga-
+Sun, W., Jiang, W., Trulls, E., Tagliasacchi, A., and Yi,          tion of batch normalization. In International Conference
+   K. M. Acne: Attentive context normalization for robust          on Learning Representations, 2019.
+   permutation-equivariant learning. In Proceedings of the
+  IEEE/CVF Conference on Computer Vision and Pattern            Yanardag, P. and Vishwanathan, S. Deep graph kernels.
+  Recognition, pp. 11286­11295, 2020.                              In Proceedings of the 21th ACM SIGKDD International
+                                                                  Conference on Knowledge Discovery and Data Mining,
+Ulyanov, D., Vedaldi, A., and Lempitsky, V. Instance nor-          pp. 1365­1374, 2015.
+   malization: The missing ingredient for fast stylization.
+   arXiv preprint arXiv:1607.08022, 2016.                       Yang, C., Wang, R., Yao, S., Liu, S., and Abdelzaher, T.
+                                                                   Revisiting" over-smoothing" in deep gcns. arXiv preprint
+Velickovic, P., Cucurull, G., Casanova, A., Romero, A., Lio,       arXiv:2003.13663, 2020.
+   P., and Bengio, Y. Graph attention networks. 2018.
+                                                                Yi, K. M., Trulls, E., Ono, Y., Lepetit, V., Salzmann, M.,
+Wainwright, M. J. High-dimensional statistics: A non-              and Fua, P. Learning to find good correspondences. In
+   asymptotic viewpoint, volume 48. Cambridge University          Proceedings of the IEEE conference on computer vision
+   Press, 2019.                                                    and pattern recognition, pp. 2666­2674, 2018.
+                          GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+Ying, C., Cai, T., Luo, S., Zheng, S., Ke, G., He, D., Shen,
+  Y., and Liu, T.-Y. Do transformers really perform bad for
+   graph representation?, 2021.
+
+Ying, R., He, R., Chen, K., Eksombatchai, P., Hamilton,
+  W. L., and Leskovec, J. Graph convolutional neural net-
+  works for web-scale recommender systems. In kdd, pp.
+   974­983, 2018.
+
+Zhang, M., Cui, Z., Neumann, M., and Chen, Y. An end-
+   to-end deep learning architecture for graph classification.
+   pp. 4438­4445, 2018.
+
+Zhang, Z., Cui, P., and Zhu, W. Deep learning on graphs:
+  A survey. IEEE Transactions on Knowledge and Data
+  Engineering, 2020.
+
+Zhao, L. and Akoglu, L. Pairnorm: Tackling oversmooth-
+   ing in gnns. In International Conference on Learning
+  Representations, 2020. URL https://openreview.
+   net/forum?id=rkecl1rtwB.
+
+Zhou, J., Cui, G., Zhang, Z., Yang, C., Liu, Z., Wang,
+   L., Li, C., and Sun, M. Graph neural networks: A
+   review of methods and applications. arXiv preprint
+   arXiv:1812.08434, 2018.
+
+Zhou, K., Dong, Y., Lee, W. S., Hooi, B., Xu, H., and Feng,
+  J. Effective training strategies for deep graph neural
+   networks, 2020a.
+
+Zhou, K., Huang, X., Li, Y., Zha, D., Chen, R., and Hu, X.
+  Towards deeper graph neural networks with differentiable
+   group normalization. arXiv preprint arXiv:2006.06972,
+   2020b.
+
+Zou, D., Hu, Z., Wang, Y., Jiang, S., Sun, Y., and Gu, Q.
+   Layer-dependent importance sampling for training deep
+   and large graph convolutional networks. In Advances
+   in Neural Information Processing Systems, pp. 11249­
+  11259, 2019.
+
+Zou, D., Cao, Y., Zhou, D., and Gu, Q. Gradient descent op-
+   timizes over-parameterized deep relu networks. Machine
+  Learning, 109(3):467­492, 2020.
+                 GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+A. Proofs                                                             We have
+
+A.1. Proof of Theorem 3.1                                             N Q QN  DU C¯U D                                           (14)
+
+We first introduce the Cauchy interlace theorem:                               =D  U1       C¯ U1          1    1    D           (15)
+                                                                                                             n
+Lemma A.1 (Cauchy interlace theorem (Theorem 4.3.17                                1    1
+                                                                                     n
+
+in Horn & Johnson (2012))). Let S  R(n-1)×(n-1) be                             =D  U1 C¯U1           1     U1   C¯1     D        (16)
+symmetric, y  Rn and a  R be given, and let R =                                                        n
+                                                                                            C¯U1              C¯1
+S     y                                                                            1    1               1  1
+y     a                                                                              n                  n
+
+              Rn×n. Let 1  2  · · ·  n be the                                        B         U1 C¯U1             1    U1  C¯1        0
+                                                                                   00                                n                 0
+eigenvalues of R and µ1  µ2  · · ·  µn-1 be the                                =                        C¯U1               C¯1   B
+                                                                                               1     1               1  1
+                                                                                                 n                   n
+eigenvalues of S. Then
+                                                                                                                                 (17)
+
+        1  µ1  2  · · ·  n-1  µn-1  n, (9)                                     =   U1 C¯U1  0     .                              (18)
+                                                                                      0     0
+where i = µi only when there is a nonzero z  Rn-1 such
+that Sz = µiz and y z = 0; if i = µi-1 then there is a                Using Lemma A.1 and taking R = U C¯U and S =
+nonzero z  Rn-1 such that Sz = µi-1z, y z = 0.                        U1 C¯U1, we have the eigenvalues of U1 C¯U1 are interlacing
+                                                                      between the eigenvalues of U C¯U . Note that the eigenval-
+Using Lemma A.1, the theorem can be proved as below.                  ues of DU C¯U D are µ21  µ22  · · ·  µ2n-1 and µn2 = 0,
+                                                                      and by Eq. (18), the eigenvalues of DU C¯U D contain the
+Proof. For any matrices P, R  Rn×n, we use P  R to                    eigenvalues of U1 C¯U1 and 0. Since the eigenvalues of
+denote that the matrix P is similar to the matrix R. Note             U C¯U are 21  22  · · ·  2n (By similarity of U C¯U
+                                                                      and C¯), we then have
+that if P  R, the eigenvalues of P and R are the same. As
+
+the singular values of P are equal to the square root of the          21  µ21  22  · · ·  2n-1  µ2n-1  n2 . (19)
+
+eigenvalues of P P , we have the eigenvalues of Q Q and
+                             n                 n
+that of N Q  QN are     2i   i=1  and     µ2i  i=1  ,  respectively.  Moreover, the equality holds only when there is a nonzero
+                                                                      z  Rn-1 that satisfies
+Note that N is a projection operator onto the orthogonal
+
+complement space of the subspace spanned by 1, and N can                           U1 C¯U1z = µz,
+
+                                                                                                                                 (20)
+
+be decomposed as N = U diag 1, · · · , 1, 0 U where                                        1 C¯U1z = 0,                          (21)
+
+                                                              ×n-1    where µ is one of µi2s.
+
+U is an orthogonal matrix. Since 1 is the eigenvector of N            Since U1 forms an orthogonal basis of the orthogonal com-
+                                                                      plement space of 1 and Eq. (21) is equivalent to "C¯U1z lies
+associated with eigenvalue 0, we have                                 in the orthogonal complement space", we have that there is
+                                                                      a vector y  Rn-1 such that
+                 U = U1           1    1  ,                  (10)
+                                    n
+
+where U1  Rn×(n-1) satisfies U11 = 0 and U1 U1 =                                        C¯U1z = U1y.                             (22)
+In-1.
+
+Then         we        have       N Q QN                     =        Substituting this into Eq. (20), we have
+
+U diag (1, · · · , 1, 0) U Q QU diag (1, · · · , 1, 0) U 
+
+diag (1, · · · , 1, 0) U Q QU diag (1, · · · , 1, 0).                                   U1 U1y = µz.                             (23)
+
+Let                                                                   Since U1 U1 = In-1, the equation above is equivalent to
+
+         D = diag (1, · · · , 1, 0) =     In-1         0  ,  (11)                           y = µz,                              (24)
+                                           0           0
+
+         B=      In-1    ,                                   (12)     which means
+                  0
+                                                                                   C¯U1z = U1y = µU1z,
+         C¯ = Q Q,                                           (13)                                                                (25)
+
+                                                                      i.e., U1z is the eigenvector of C¯ associated with µ. By
+                                                                      noticing U1z lies in the orthogonal complement space of 1
+where 0 = 0, · · · , 0 .                                              and the eigenvector of C¯ is right singular vector of Q, we
+                                                                      complete the proof.
+               ×n-1
+GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+A.2. Concrete example of the acceleration                       Remark 1. A few remarks are in order, firstly, the assump-
+                                                                tion that each graph has the same number of nodes and the
+To get more intuition on how the preconditioning effect of      number n is equal to feature dimension d can be achieved by
+the shift can accelerate the training of GNNs, we provide      "padding", i.e., adding dummy points or features to the graph
+a concrete example showing that shift indeed improves the       or the feature matrix. The assumption that 1 Y -1XQ = 0
+convergence rate. Note that the global convergence rate         is used to guarantee that there is no information loss caused
+of widely-used deep GNNs on general data remains highly         by shift (1 Y -1Y N Y = 0). Though we make this strong
+unexplored, and the existing works mainly focus on some         assumption to ensure no information loss in theoretical part,
+simplified case, e.g., GNTK (Du et al., 2019b). To make         we introduce "learnable shift" to mitigate this problem in
+things clear without loss of intuition, we focus on a simple    the practical setting. The theory taking learnable shift into
+linear GNN applied to a well-specified task where we are        account is an interesting future direction.
+able to explicitly compare the convergence rates.
+                                                               Assumption 3 (Boundness). We make the technical assump-
+A.2.1. SETTINGS
+                                                               tion that there is a constant b such that the distributions of
+Data. We describe each sample, i.e., graph, with n nodes
+by a tuple G = {X, Q, p, y}, where                             Xi, Qi, pi ensures                           
+
+                                                                                   Xi Qi pi  b.                              (26)
+
+· X  Rd×n is the feature matrix of the graph, where d is       Model. We consider a simple linear graph neural network
+  the dimension of the of each feature vector.                 with parameter w  Rd×1:
+
+· Q  Rn×n representing the matrix representing the neigh-                   fwVanilla(X, Q, p) = w XQp.                      (27)
+  bor aggregation as Eq. (4). Note that this matrix depends
+  on the aggregation scheme used by the chosen architec-       Then, the model with shift can be represented as:
+  ture, but for simplicity, we model this as a part of data
+  structure.                                                                fwShift(X, Q, p) = w XQN p,                      (28)
+
+                                                               where  N  =  In  -  1  11  .
+                                                                                   n
+
+· p  Rn×1 is a weight vector representing the impor-           Criterion. We consider using square loss as training ob-
+  tance of each node. This will be used to calculate the       jective, i.e.,
+  READOUT step. Note that this vector is not provided in
+  many real-world datasets, so the READOUT step usually                               m   1
+  takes operations such as summation.                                                     2
+                                                                         L(f ) =             (f  (Xi,  Qi,  pi)  -  yi)2  .  (29)
+
+                                                                                   i=1
+
+· y  R is the label.                                           Algorithm. We consider using gradient descent to op-
+                                                               timize the objective function. Let the initial parameter
+The whole dataset S = {G1, · · · , Gm} consists of m           w0 = 0. The update rule of w from step t to t + 1 can
+graphs where Gi = {Xi, Qi, pi, yi}. We make the fol-           be described as:
+lowing assumptions on the data generation process:
+                                                                                wt+1 = wt - wL(fwt ),                        (30)
+
+Assumption 1 (Independency). We assume Xi, Qi, pi are          where  is the learning rate.
+drawn from three independent distributions in an i.i.d. man-
+ner, e.g., X1, · · · , Xm are i.i.d..                          Theorem A.1. Under Assumption 1,2,3, for any > 0 there
+
+Assumption 2 (Structure of data distributions). For clear-     exists constants C1, C2, such that for 1 < C1, m > C2,
+                                                               with probability 1 - , the parameter wtVanilla of vanilla
+ness and simplicity of statement, we assume the number of      model converges to the optimal parameter wVanilla linearly:
+
+nodes in each graph Gi are the same, we will use n to de-                   wtVanilla - wVanilla 2  O t1 ,                   (31)
+
+note this number and we further assume n = d. We assume
+
+that the distribution of pi satisfies E pp = In, Ep = 0,       while the parameter wtShfit of the shifted model converges
+                                                               to the optimal parameter wShfit linearly:
+which means the importance vector is non-degenerate. Let
+
+EXQ = Y , we assume that Y is full ranl. We make the                            wtShift - wShfit 2  O t2 ,                   (32)
+following assumptions on XQ: 1 Y -1XQ = 0, which
+
+ensures that there is no information in the direction 1 Y -1;  where
+
+there is a constant 1 such that E(XQ - Y )(XQ - Y )                                       1 > 1 > 2,                         (33)
+
+1Id and E(XQ - Y )N (XQ - Y )  1Id, where 1
+
+characterizes the noise level; none of the eigenvectors of     which indicates the shifted model has a faster convergence
+                                                               rate.
+Y Y is orthogonal to 1.
+                     GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+Proof. We firstly reformulate the optimization problem in          Follwing the same argument, we can show the convergence
+matrix form.
+                                                                   rate of the optimization problem with shifted model de-
+
+Notice that in our linear model, the representation and            pends on     ( min ZShiftZShfit    )  .   We then aim to bound this
+
+structure of a graph Gi = {Xi, Qi, pi, yi} can be en-                           max (Z Shift Z Shfit  )
+coded as a whole in a single vector, i.e., ziVanilla =
+XiQipi  Rd×1 for vanilla model in Eq. (27), and                    term, which we call effective condition number.
+ziShift = XiQiN pi  Rd×1 for shifted model in
+Eq. (28). We call zi and zSi hift "combined features". Let         Similarly, we investigate the effective condition number for
+ZVanilla = zV1 anilla, · · · , zVmanilla  Rd×m and ZShift =        ZZ first, and the analysis of ZShiftZShift follows the
+ z1Shift, · · · , zSmhift  Rd×m be the matrix of combined
+features of valinna linear model and shifted linear model          same manner. As multiplying a constant does not affect the
+
+respectively. For clearness of the proof, we may abuse the         effective condition number, we first scale ZZ                  by     1  and
+notations and use Z to represent ZVanilla. Then the objec-                                                                               m
+
+tive in Eq. (29) for vanilla linear model can be reformulated      expand it as:
+
+as:                                                                                     1      ZZ =         1m       zizi ,                 (42)
+
+                                                                                   m                     m      i=1
+
+                       1  Z         w-y      2  ,       (34)       which is the empirical estimation of the covariance matrix
+           L(fw) = 2                         2                     of the combined feature. By concentration inequality, we
+                                                                   know this quantity is concentrated to the covariance matrix,
+                                                                   i.e.,
+
+where y = [y1, · · · , ym]  Rm×1.                                      Ezzz     = EX,Q,pXQp (XQp)
+                                                                                = EX,QXQ E pp (XQ)
+Then the gradient descent update can be explicitly writen                       = EX,QXQ(XQ) (By Assumption 1)
+as:                                                                             = Y Y + EX,Q(XQ - Y )(XQ - Y ) .
+
+           wt+1 = wt -  ZZ wt - Zy                      (35)
+
+                     = (Id - ZZ )wt + Zy,               (36)       Noticing that 0 EX,Q(XQ - Y )(XQ - Y ) 1Id
+                                                                   by Assumption 2, and Y is full rank, we can conclude that
+which converges to w = ZZ  Zy according to classic                 max Y Y  max Ezzz  max Y Y + 1, and
+                                                                   min Y Y  min Ezzz  min Y Y + 1 by
+theory of least square problem (Horn & Johnson, 2012),             Weyl's inequality.
+where ZZ  is the Moore­Penrose inverse of ZZ .
+
+                                                                   By  similar  argument,      we  have      that  1  Z  ShiftZ   Shift  concen-
+                                                                                                                   m
+By simultaneously subtracting w in the update rule, we
+have                                                               trates to
+
+    wt+1 - w = Id - ZZ (wt - w) .                       (37)                EzShift zShiftzShift
+                                                                          =EX,Q(XQ)N 2(XQ)
+So the residual of wt is                                                  =EX,Q(XQ)N (XQ)                          (N 2 = N )
+
+           wt - w = Id - ZZ t w                         (38)              =Y N Y + EX,Q(XQ - Y )N (XQ - Y ) .
+
+                      Id - ZZ                t     w .  (39)       By Assumption 2, we have
+
+                                                                   0 =1      Y  E -1           zShiftzShift
+
+Let max(A) and min(A) be the maximal and mininal                                       zShift
+
+positive eigenvalues of A, respectively. Then the optimial         =1 Y -1 Y N Y + EX,Q(XQ - Y )N (XQ - Y )
+
+learning rate (the largest learning rate that ensures Id -         =1 Y -1EX,Q(XQ - Y )N (XQ - Y ) ,
+
+ZZ  is     positive  semidefinite)  is    =          1  ) . Under  which means EX,Q(XQ - Y )N (XQ - Y ) has the
+                                             max (Z Z
+
+this learning rate we have the convergence rate following          same eigenspace as Y N Y with respect to eigen-
+
+Eq. (39):                                                          value 0. Combining with 0                                      EX,Q(XQ -
+
+    wt - w  Id - ZZ t w                                 (40)       Y )N (XQ - Y )              1Id, we have max Y N Y 
+
+            1 - min ZZ                          t                  max EzShift zShiftzShift                   max Y N Y + 1,
+                      max (ZZ )
+                                                   w .  (41)       and min Y N Y                min EzShift zShiftzShift                    
+
+                                                                   min Y N Y + 1.
+
+For now, we show that the convergence rate of the optimiza-        It remains to bound the finite sample error, i.e.,
+
+                                                                   1   Z  Z     - Ezzz         2 and         1  Z  ShiftZ  Shfit  - Ezzz    2.
+                                                                   m                                         m
+                                                   ( min ZZ  )
+tion problem with vanilla model depends on                      .  These bounds can be obtained by the following lemma:
+                                                   max (Z Z  )
+                          GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+Lemma A.2 (Corollary 6.1 in Wainwright (2019)). Let                 min Y N Y - O               log(1/ )
+                                                                                                   m
+z1, · · · , zm be i.i.d. zero-mean random vectors with covari-
+ance matrix  such that z 2  b almost surely. Then for
+         0, the sample covariance matrix ^           m                     1 ZShiftZShift
+all   >                                     =  1     i=1  zizi      min    m
+                                               m
+
+satisfies
+
+   Pr ^ -     2d exp -                         2          .         min Y N Y + 1 + O                     log(1/ )
+                                                                                                                       .
+
+                                                                                                             m
+
+                    2                2b (  2 + )
+
+                                                          (43)
+
+                                                                By now, we have transfered the analysis of ZZ and
+
+By this lemma, we further have                                  ZShiftZShfit to the analysis of Y Y and Y N Y . And
+
+                                                                the positive eigenvalues of Y N Y is interlaced between
+
+Lemma A.3 (Bound on the sample covariance matrix). Let          the positive eigenvalues of Y Y by the same argument
+
+z1, · · · , zm be i.i.d. zero-mean randomvectors with co-       as Theorem 3.1. Concretely, we have min Y Y 
+
+variance matrix  such that z 2  b almost surely.                min Y N Y       max Y N Y                  max Y Y .
+
+Then with probability 1 - , the sample covariance matrix        Noticing that none of the eigenvectors of Y Y is orthog-
+
+^  =  1    m    zi  zi    satisfies                             onal to 1, the first and last equalies can not be achieved,
+      m    i=1
+
+                                                                so min Y Y < min Y N Y  max Y N Y <
+
+                ^ -   O              log(1/ )             (44)  max Y Y . Finally, we can conclude for small enough
+                                                  ,
+                                     m                          1 and large enough m, with probability ,
+                          2
+
+where we hide constants b,  2 , d in the big-O notation             min        1
+and highlight the dependence on the number of samples m.                          ZZ
+                                                                               m
+
+Combining with previous results, we conclude that:                  min Y Y + 1 + O                log(1/ )
+                                                                                                      m
+
+           max Y Y - O               log(1/ )                       <min Y N Y - O                 log(1/ )
+                                        m                                                             m
+
+         max           1                                            min        1 ZShiftZShift
+                       ZZ                                           max        m
+                    m                                                           1 ZShiftZShift
+                                                                               m
+         max Y Y + 1 + O             log(1/ )
+                                                  ;
+
+                                        m
+
+                                                                    max Y N Y + 1 + O                     log(1/ )
+                                                                                                             m
+
+           min Y Y - O               log(1/ )                       <max Y Y - O                log(1/ )
+                                        m                                                          m
+
+                       1
+           min         ZZ                                                      1
+                    m                                               max           ZZ    .
+                                                                               m
+
+           min Y Y + 1 + O           log(1/ )
+                                                     ;
+                                            m                   So
+
+                                     log(1/ )                              2   =  1  -  min  Z Shift Z Shift   )
+                                        m                                               max  (Z Shift Z Shift
+           max Y N Y - O
+
+                    1 ZShiftZShift                                         <1  =  1  -  min  ZZ     ,
+                    m                                                                   max  (Z Z  )
+         max
+
+         max Y N Y + 1 + O              log(1/ )                where 1, 2 are the constants in the statement of the the-
+                                           m                    orem. This inequality means the shifted model has better
+                                                                convergence speed by Eq. (41).
+         GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+A.3. Proof of Proposition 4.1                                 is an edge between two nodes if they are neighbors in the
+                                                              amino-acid sequence or in 3D space. It has 3 discrete labels,
+Proof. For r-regular graph, A = r · In and QGIN =             representing helix, sheet or turn. NCI1 is a dataset made
+ r + 1 + (1) In. Since H(0) is given by one-hot encod-        publicly available by the National Cancer Institute (NCI)
+ings of node degrees, the row of H(0) can be represented      and is a subset of balanced datasets of chemical compounds
+                                                              screened for ability to suppress or inhibit the growth of a
+as c · 1 where c = 1 for the r-th row and c = 0 for other     panel of human tumor cell lines, having 37 discrete labels.
+                                                              MUTAG is a dataset of 188 mutagenic aromatic and het-
+rows. By the associative property of matrix multiplication,   eroaromatic nitro compounds with 7 discrete labels. PTC is
+we only need to show H(0)QGINN = 0. This is because,          a dataset of 344 chemical compounds that reports the car-
+for each row                                                  cinogenicity for male and female rats and it has 19 discrete
+                                                              labels.
+c · 1 QGINN = c · 1 (r + 1 + (1))In         1
+                                     In  -    11
+                                            n
+
+                                                  (45)
+
+        = c r + 1 + (1)        1     -1     1
+                                         · 11       = 0.      Social networks datasets. IMDB-BINARY is a movie
+                                          n       (46)        collaboration dataset. Each graph corresponds to an ego-
+                                                              network for each actor/actress, where nodes correspond
+
+                                                              to actors/actresses and an edge is drawn betwen two ac-
+
+                                                              tors/actresses if they appear in the same movie. Each graph
+
+A.4. Proof of Proposition 4.2                                 is derived from a pre-specified genre of movies, and the task
+                                                              is to classify the genre graph it is derived from. REDDIT-
+
+Proof.                                                        BINARY is a balanced dataset where each graph corre-
+
+QGINN = (A + In + (k)In)N == (11     +   (k)In )N  =          (k)Nstop,ounsdesrst.oAann  online discussion thread and nodes correspond
+                                                                                         edge was drawn between two nodes if at least
+                                                  (47) one of them responded to another's comment. The task is to
+
+                                                              classify each graph to a community or a subreddit it belongs
+
+                                                              to. COLLAB is a scientific collaboration dataset, derived
+
+A.5. Gradient of W (k)                                        from 3 public collaboration datasets, namely, High Energy
+                                                              Physics, Condensed Matter Physics and Astro Physics. Each
+We first calculate the gradient of W (k) when using normal-   graph corresponds to an ego-network of different researchers
+ization. Denote Z(k) = Norm W (k)H(k-1)Q and L as             from each field. The task is to classify each graph to a field
+
+the loss. Then the gradient of L w.r.t. the weight matrix the corresponding researcher belongs to.
+W (k) is
+
+  L      H (k-1) QN                     L         (48)        Large-scale Open Graph Benchmark: ogbg-molhiv.
+W (k) =                         S Z(k) ,                      Ogbg-molhiv is a molecular property prediction dataset,
+                                                              which is adopted from the the MOLECULENET (Wu et al.,
+where  represents the Kronecker product, and thus             2017). Each graph represents a molecule, where nodes
+ H(k-1)QN  S is an operator on matrices.                      are atoms and edges are chemical bonds. Both nodes and
+                                                              edges have associated diverse features. Node features are
+Analogously, the gradient of W (k) without normalization      9-dimensional, containing atomic number and chirality, as
+                                                              well as other additional atom features. Edge features are
+consists a H(k-1)Q  In term. As suggested by The-             3-dimensional, containing bond type, stereochemistry as
+orem 3.1, QN has a smoother distribution of spectrum          well as an additional bond feature indicating whether the
+than Q, so that the gradient of W (k) with normalization      bond is conjugated.
+enjoys better optimization curvature than that without nor-
+malizaiton.
+
+B. Datasets                                                   C. The Experimental Setup
+
+Detailed of the datasets used in our experiments are pre-     Network architecture. For the medium-scale bioinfor-
+sented in this section. Brief statistics of the datasets are  matics and social network datasets, we use 5-layer
+summarized in Table 3. Those information can be also          GIN/GCN with a linear output head for prediction followed
+found in Xu et al. (2019) and Hu et al. (2020).               Xu et al. (2019) with residual connection. The hidden di-
+                                                              mension of GIN/GCN is set to be 64. For the large-scale
+Bioinformatics datasets. PROTEINS is a dataset where          ogbg-molhiv dataset, we also use 5-layer GIN/GCN(Xu
+nodes are secondary structure elements (SSEs) and there       et al., 2019) architecture with residual connection. Follow-
+                                                              ing Hu et al. (2020), we set the hidden dimension as 300.
+               GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+                    Table 3. Summary of statistics of benchmark datasets.
+
+Datasets       MUTAG PTC PROTEINS NCI1 IMDB-B RDT-B COLLAB OGBG-MOLHIV
+
+# graphs       188 344    1113                                    4110  1000    2000    5000   41127
+# classes                   2                                       2     2       2       2       2
+Avg # nodes    2    2
+Avg # edges               39.1                                    29.8  19.8   429.6    74.5    25.5
+Avg # degrees  17.9 25.5  184.7                                   94.5  212.8  1425.1  4989.5   27.5
+                           4.7                                     3.1  10.7                    2.1
+               57.5 72.5                                                         3.3    66.9
+
+               3.2  3.0
+
+Baselines. For the medium-scale bioinformatics and so-            D. Additional Experimental Results
+cial network datasets, we compare several competitive base-
+lines as in Xu et al. (2019), including the WL subtree kernel     D.1. Visualization of the singular value distributions
+model (Shervashidze et al., 2011), diffusion-convolutional
+neural networks (DCNN) (Atwood & Towsley, 2016), Deep             As stated in Theorem 3.1, the shift operation N serves as
+Graph CNN (DGCNN) (Zhang et al., 2018) and Anonymous              a preconditioner of Q which makes the singular value dis-
+Walk Embeddings (AWL) (Ivanov & Burnaev, 2018). We                tribution of Q smoother. To check the improvements, we
+report the accuracies reported in the original paper (Xu et al.,  sample graphs from 6 median-scale datasets (PROTEINS,
+2019). For the large-scale ogbg-molhiv dataset, we use the        NCI1, MUTAG, PTC, IMDB-BINARY, COLLAB) for visu-
+baselines in Hu et al. (2020), including the Graph-agnostic       alization, as in Figure 7.
+MLP model, GCN (Kipf & Welling, 2017) and GIN (Xu
+et al., 2019). We also report the roc-auc values reported in      D.2. Visualization of noise in the batch statistics
+the original paper (Hu et al., 2020).
+                                                                  We show the noise of the batch statistics on the PROTEINS
+Hyper-parameter configurations. We use Adam                       task in the main body. Here we provide more experiment
+(Kingma & Ba, 2015) optimizer with a linear learning              details and results.
+rate decay schedule. We follow previous work Xu et al.
+(2019) and Hu et al. (2020) to use hyper-parameter search         For graph tasks (PROTEINS, PTC, NCI1, MUTAG, IMDB-
+(grid search) to select the best hyper-parameter based on         BINARY datasets), we train a 5-layer GIN with BatchNorm
+validation performance. In particular, we select the batch        as in Xu et al. (2019) and the number of sub-layers in MLP
+size  {64, 128}, the dropout ratio  {0, 0.5}, weight              is set to 2. For image task (CIFAR10 dataset), we train a
+decay  {5e - 2, 5e - 3, 5e - 4, 5e - 5}  {0.0}, the               ResNet18 (He et al., 2016). Note that for a 5-layer GIN
+learning rate  {1e - 4, 1e - 3, 1e - 2}. For the drawing          model, it has four graph convolution layers (indexed from 0
+of the training curves in Figure 2, for simplicity, we set        to 3) and each graph convolution layer has two BatchNorm
+batch size to be 128, dropout ratio to be 0.5, weight decay       layers; for a ResNet18 model, except for the first 3×3 con-
+to be 0.0, learning rate to be 1e-2, and train the models for     volution layer and the final linear prediction layer, it has four
+400 epochs for all settings.                                      basic layers (indexed from 0 to 3) and each layer consists
+                                                                  of two basic blocks (each block has two BatchNorm layers).
+Evaluation. Using the chosen hyper-parameter, we re-              For image task, we set the batch size as 128, epoch as 100,
+port the averaged test performance over different random          learning rate as 0.1 with momentum 0.9 and weight decay
+seeds (or cross-validation). In detail, for the medium-scale      as 5e-4. For graph tasks, we follow the setting of Figure 2
+datasets, following Xu et al. (2019), we perform a 10-fold        (described in Appendix C).
+cross-validation as these datasets do not have a clear train-
+validate-test splitting format. The mean and standard de-         The visualization of the noise in the batch statistics is ob-
+viation of the validation accuracies across the 10 folds are      tained as follows. We first train the models and dump the
+reported. For the ogbg-molhiv dataset, we follow the official     model checkpoints at the end of each epoch; Then we ran-
+setting (Hu et al., 2020). We repeat the training process with    domly sample one feature dimension and fix it. For each
+10 different random seeds.                                        model checkpoint, we feed different batches to the model
+                                                                  and record the maximum/minimum batch-level statistics
+For all experiments, we select the best model checkpoint          (mean and standard deviation) of the feature dimension
+with the best validation accuracy and record the correspond-      across different batches. We also calculate dataset-level
+ing test performance.                                             statistics.
+
+                                                                  As Figure 4 in the main body, pink line denotes the
+GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+dataset-level statistics, and green/blue line denotes the max-  deviation (DT-BatchNorm for short). As shown in Figure
+imum/minimum value of the batch-level statistics respec-        12, both the MS-BatchNorm and DT-BatchNorm underper-
+tively. First, we provide more results on PTC, NCI1, MU-        form the BatchNorm by a large margin, which shows that
+TAG, IMDB-BINARY tasks, as in Figure 8. We visualize            the problem of the heavy batch noise cannot be mitigated
+the statistics from the first (layer-0) and the last (layer-3)  by simply using the running statistics.
+BatchNorm layers in GIN for comparison. Second, we fur-
+ther visualize the statistics from different BatchNorm layers   The effect of batch size. We further compare the Graph-
+(layer 0 to layer 3) in GIN on PROTEINS and ResNet18 in         Norm and BatchNorm with different batch sizes (8, 16, 32,
+CIFAR10, as in Figure 9. Third, we conduct experiments to       64). As shown in Figure 11, our GraphNorm consistently
+investigate the influence of the batch size. We visualize the   outperforms the BatchNorm on all the settings.
+statistics from BatchNorm layers under different settings of
+batch sizes [8, 16, 32, 64], as in Figure 10. We can see that   E. Other Related Works
+the observations are consistent and the batch statistics on
+graph data are noisy, as in Figure 4 in the main body.          Due to space limitations, we add some more related works
+                                                                on normalization and graph neural networks here. Zou et al.
+D.3. Training Curves on GCN                                     (2019) used normalization to stabilize the training process
+                                                                of GNNs. Zhao & Akoglu (2020) introduced PAIRNORM
+As Figure 2 in the main body, we train GCNs with different      to prevent node embeddings from over-smoothing on the
+normalization methods (GraphNorm, InstanceNorm, Batch-          node classification task. Our GraphNorm focuses on ac-
+Norm and LayerNorm) and GCN without normalization               celerating the training and has faster convergence speed on
+in graph classification tasks and plot the training curves      graph classification tasks. Yang et al. (2020) interpreted
+in Figure 6. It is obvious that the GraphNorm also enjoys       the effect of mean subtraction on GCN as approximating
+the fastest convergence on all tasks. Remarkably, GCN           the Fiedler vector. We analyze more general aggregation
+with InstanceNorm even underperforms GCNs with other            schemes, e.g., those in GIN, and understand the effect of the
+normalizations, while our GraphNorm with learnable shift        shift through the distribution of spectrum. Some concurrent
+significantly boosts the training upon InstanceNorm and         and independent works (Li et al., 2020; Chen et al., 2020;
+achieves the fastest convergence.                               Zhou et al., 2020b;a) also seek to incorporate normalization
+                                                                schemes in GNNs, which show the urgency of developing
+D.4. Further Results of Ablation Study                          normalization schemes for GNNs. In this paper, we provide
+                                                                several insights on how to design a proper normalization
+BatchNorm with learnable shift. We conduct experi-              for GNNs. Before the surge of deep learning, there are also
+ments on BatchNorm to investigate whether simply introduc-      many classic architectures of GNNs such as Scarselli et al.
+ing a learnable shift can already improve the existing normal-  (2008); Bruna et al. (2013); Defferrard et al. (2016) that are
+ization methods without concrete motivation of overcoming       not mentioned in the main body of the paper. We refer the
+expressiveness degradation. Specifically, we equip Batch-       readers to Zhou et al. (2018); Wu et al. (2020); Zhang et al.
+Norm with a similar learnable shift (-BatchNorm for short)      (2020) for surveys of graph representation learning.
+as GraphNorm and evaluate its performance. As shown in
+Figure 12, the -BatchNorm cannot outperform the Batch-
+Norm on the three datasets. Moreover, as shown in Figure 5
+in the main body, the learnable shift significantly improve
+upon GraphNorm on IMDB-BINARY dataset, while it can-
+not further improve upon BatchNorm, which suggests the
+introduction of learnable shift in GraphNorm is critical.
+
+BatchNorm with running statistics. We study the vari-
+ant of BatchNorm which uses running statistics (MS-
+BatchNorm for short) to replace the batch-level mean and
+standard deviation (similar idea is also proposed in Yan
+et al. (2019)). At first glance, this method may seem to be
+able to mitigate the problem of large batch noise. However,
+the running statistics change a lot during training, and us-
+ing running statistics disables the model to back-propagate
+the gradients through mean and standard deviation. Thus,
+we also train GIN with BatchNorm which stops the back-
+propagation of the graidients through mean and standard
+                        GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+7UDLQLQJ$FFXUDF\         3527(,16    7UDLQLQJ$FFXUDF\         1&,           7UDLQLQJ$FFXUDF\      37&             7UDLQLQJ$FFXUDF\      087$*
+                                                       
+                                                                                                                                    
+                                                       
+                                                                                                                                    
+                  
+                                                                                                                                    
+
+                                                                                                                                    
+                                                       
+                                                                                                                                                    
+                      ,WHUDWLRQV                              ,WHUDWLRQV                          ,WHUDWLRQV                            ,WHUDWLRQV
+                                                       
+7UDLQLQJ$FFXUDF\      5('',7%,1$5<   7UDLQLQJ$FFXUDF\         &2//$%        7UDLQLQJ$FFXUDF\        ,0'%%,1$5<
+                                                            
+                                                                                                                                        1R1RUP*&1
+                                                                                                                                        /D\HU1RUP*&1
+                                                                                                                                        %DWFK1RUP*&1
+                                                                                                                                        ,QVWDQFH1RUP*&1
+                                                                                                                                        *UDSK1RUP*&1
+
+                                                                                              
+
+                                                                                              
+
+                                                                                                                
+                      ,WHUDWLRQV                              ,WHUDWLRQV                          ,WHUDWLRQV
+
+Figure 6. Training performance of GCN with different normalization methods and GCN without normalization in graph classification
+tasks.
+                 GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+6LQJXODU9DOXH  3527(,16VDPSOH  6LQJXODU9DOXH  3527(,16VDPSOH      6LQJXODU9DOXH  3527(,16VDPSOH       6LQJXODU9DOXH  3527(,16VDPSOH
+
+6LQJXODU9DOXH                  6LQJXODU9DOXH                      6LQJXODU9DOXH                       6LQJXODU9DOXH  
+                                                                                                                     
+                                                                                                                     
+                                                                                                                     
+                                                                                                                     
+                                                                                                                     
+                                                                                    1&,VDPSOH
+                  1&,VDPSOH                      1&,VDPSOH                                                              1&,VDPSOH
+                                                                                 
+                                                                                                                     
+                                                                                 
+                                                                                                                     
+
+                                                                                                                     
+
+6LQJXODU9DOXH                  6LQJXODU9DOXH                      6LQJXODU9DOXH                       6LQJXODU9DOXH  
+
+                087$*VDPSOH                    087$*VDPSOH                        087$*VDPSOH                         087$*VDPSOH
+
+                                                                                                                     
+
+                                                                                                                     
+
+                                                                                                                     
+
+6LQJXODU9DOXH                  6LQJXODU9DOXH                      6LQJXODU9DOXH                       6LQJXODU9DOXH  
+
+                  37&VDPSOH                      37&VDPSOH                          37&VDPSOH                           37&VDPSOH
+
+                                                                                                                     
+
+                                                                                                                     
+
+                                                                                                                     
+
+6LQJXODU9DOXH                  6LQJXODU9DOXH                      6LQJXODU9DOXH                       6LQJXODU9DOXH  
+
+                 ,0'%%VDPSOH                    ,0'%%VDPSOH                        ,0'%%VDPSOH                         ,0'%%VDPSOH
+
+                                                                                                                     
+                                                                                                                     
+                                                                                                                     
+                                                                                                                     
+                                                                                 
+
+                                                                                 
+
+6LQJXODU9DOXH                  6LQJXODU9DOXH                  6LQJXODU9DOXH                     6LQJXODU9DOXH     
+
+                                                &2//$%VDPSOH                    &2//$%VDPSOH                      &2//$%VDPSOH
+
+                 &2//$%VDPSOH                                                                                  
+                                                                                                               
+                                                                                                               
+                                                                                                                
+                                                                                                                
+                                                                                                                
+                                                                                                                
+                
+                
+
+                                                VLQJXODUYDOXHRIQ                   VLQJXODUYDOXHRIQN
+
+Figure 7. Singular value distribution of Q and QN . Graph samples from PROTEINS, NCI1, MUTAG, PTC, IMDB-BINARY, COLLAB
+are presented.
+                   GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+                   37&OD\HU                                              37&OD\HU                              37&OD\HU                        37&OD\HU
+                                                          
+                                                                                                                                      
+                                                          
+                                                                                                                                      
+                                                          
+0HDQYDOXH                           0HDQYDOXH                                             6WGYDOXH                          6WGYDOXH  
+                                                                
+                                                                                                                                      
+                                                           
+                                                                                                                                      
+                 
+                                                                                                                                                                     
+                                                                                                         
+                   (SRFKV                                                (SRFKV                            (SRFKV                                        (SRFKV
+
+                   1&,OD\HU                                              1&,OD\HU                          1&,OD\HU                                      1&,OD\HU
+
+                                                                                                                                        
+                                                                                                                                        
+0HDQYDOXH                           0HDQYDOXH                                             6WGYDOXH                          6WGYDOXH    
+                                                                                                                                        
+                                                                                                                                        
+                                                                                                                                        
+                                                                                                    
+                                                                                                                                           
+                                                                                                    
+                                                                                                                                      
+
+                                                                                                                                                                     
+                   (SRFKV                                                (SRFKV                            (SRFKV                                        (SRFKV
+
+                   087$*OD\HU                                            087$*OD\HU                        087$*OD\HU                                    087$*OD\HU
+
+                                                          
+
+                                                                                                    
+
+0HDQYDOXH                           0HDQYDOXH                                             6WGYDOXH                          6WGYDOXH  
+
+                                                                                                    
+
+                                                                                                                                      
+           
+                                                                                                    
+                                                             
+
+                                                                                                                                      
+
+                                                          
+
+                                                                                                                                                                     
+                   (SRFKV                                                (SRFKV                            (SRFKV                                        (SRFKV
+
+                   ,0'%%,1$5<OD\HU                                       ,0'%%,1$5<OD\HU                   ,0'%%,1$5<OD\HU                               ,0'%%,1$5<OD\HU
+
+           
+
+                                                                                                                                      
+
+0HDQYDOXH                                                 0HDQYDOXH                       6WGYDOXH                          6WGYDOXH  
+                                                          
+                                                                                                    
+           
+                                                                                                                                                     
+                                                                                                    
+
+           
+
+                                                                                                                                      
+
+                                                                                                                                                                     
+                   (SRFKV                                                (SRFKV                            (SRFKV                                        (SRFKV
+
+                               GDWDVHWOHYHO                                                                              GDWDVHWOHYHO
+
+                   EDWFKOHYHO PD[                                   EDWFKOHYHO PLQ                       EDWFKOHYHO PD[            EDWFKOHYHO PLQ
+
+Figure 8. Batch-level statistics are noisy for GNNs (Examples from PTC, NCI1, MUTAG, IMDB-BINARY datasets). We plot the
+batch-level mean/standard deviation and dataset-level mean/standard deviation of the first (layer 0) and the last (layer 3) BatchNorm
+layers in different checkpoints. GIN with 5 layers is employed.
+                 GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+               3527(,16OD\HU                     3527(,16OD\HU                     3527(,16OD\HU                    3527(,16OD\HU
+
+                                                                                                               
+                                                                                                               
+0HDQYDOXH                       0HDQYDOXH                         0HDQYDOXH                         0HDQYDOXH
+                                           
+                                                                             
+                                           
+                                                                                                               
+
+                                                                                                               
+
+                                                                                                                                   
+               (SRFKV                          (SRFKV                            (SRFKV                            (SRFKV
+
+               3527(,16OD\HU                   3527(,16OD\HU                  3527(,16OD\HU                        3527(,16OD\HU
+
+                                                                                                               
+
+                                                                                                               
+
+6WGYDOXH                        6WGYDOXH                          6WGYDOXH                          6WGYDOXH   
+
+                                                                                                               
+
+                                                                                                               
+
+                                                                             
+
+                                                                                                               
+
+                                                                                                               
+
+                                                                                                                                   
+               (SRFKV                          (SRFKV                            (SRFKV                            (SRFKV
+
+               &,)$5OD\HU                      &,)$5OD\HU                        &,)$5OD\HU                            &,)$5OD\HU
+
+                                                                                                               
+
+                                                                                                               
+
+0HDQYDOXH                       0HDQYDOXH                         0HDQYDOXH                         0HDQYDOXH  
+
+                                                                                                               
+
+                                                                                                               
+
+                                                                                                               
+
+                                                                                                               
+
+                                                                                                                                   
+               (SRFKV                          (SRFKV                            (SRFKV                            (SRFKV
+
+               &,)$5OD\HU                      &,)$5OD\HU                        &,)$5OD\HU                        &,)$5OD\HU
+
+                                                                                                               
+
+6WGYDOXH                        6WGYDOXH                          6WGYDOXH                          6WGYDOXH   
+                                           
+                                                                                                               
+
+                                                                             
+
+                                                                                                               
+
+                                                                                                               
+
+                                                                                                                                   
+               (SRFKV                          (SRFKV                            (SRFKV                            (SRFKV
+
+                           GDWDVHWOHYHO                                                      GDWDVHWOHYHO
+
+               EDWFKOHYHO PD[             EDWFKOHYHO PLQ                       EDWFKOHYHO PD[               EDWFKOHYHO PLQ
+
+Figure 9. Batch-level statistics are noisy for GNNs of different depth. We plot the batch-level mean/standard deviation and dataset-
+level mean/standard deviation of different BatchNorm layers (from layer 0 to layer 3) in different checkpoints. We use a five-layer GIN on
+PROTEINS and ResNet18 on CIFAR10 for comparison.
+                 GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+             3527(,16%6OD\HU                 3527(,16%6OD\HU                             3527(,16%6OD\HU                   3527(,16%6OD\HU
+
+                                                                                                                      
+                                                                                                                      
+                                                                                                                      
+                                                                                                                       
+0HDQYDOXH                       0HDQYDOXH                                    6WGYDOXH                       6WGYDOXH
+           
+                                           
+
+                                           
+
+                                                                                                                      
+
+                                                                                                                                       
+               (SRFKV                                         (SRFKV                       (SRFKV                         (SRFKV
+
+             3527(,16%6OD\HU                                3527(,16%6OD\HU              3527(,16%6OD\HU                3527(,16%6OD\HU
+
+                                                                                                                      
+
+                                                                                       
+
+0HDQYDOXH                       0HDQYDOXH                                                                             
+
+                                                                             6WGYDOXH                       6WGYDOXH  
+
+                                                                                                                      
+
+                                                                                                                      
+
+                                                                                                                      
+
+                                                                                                                                       
+               (SRFKV                                         (SRFKV                       (SRFKV                         (SRFKV
+
+             3527(,16%6OD\HU                  3527(,16%6OD\HU                            3527(,16%6OD\HU                3527(,16%6OD\HU
+
+                                                                                                                      
+
+                                           
+
+0HDQYDOXH                       0HDQYDOXH                                                                             
+
+                                                                             6WGYDOXH                       6WGYDOXH
+
+                                                                                                                      
+
+                                                                                                                      
+
+                                                                                       
+
+                                                                                                                      
+
+                                                                                                                                       
+               (SRFKV                                         (SRFKV                       (SRFKV                         (SRFKV
+
+            3527(,16%6OD\HU                                 3527(,16%6OD\HU              3527(,16%6OD\HU               3527(,16%6OD\HU
+
+                                           
+
+                                                                                                                      
+
+0HDQYDOXH                       0HDQYDOXH                                    6WGYDOXH                       6WGYDOXH  
+
+                                                                                                                      
+
+                                                                                       
+
+                                                                                                                      
+
+                                                                                       
+           
+                                                                                                                      
+
+                                                                                                                                       
+               (SRFKV                                         (SRFKV                       (SRFKV                         (SRFKV
+
+                       GDWDVHWOHYHO                                                                GDWDVHWOHYHO
+
+               EDWFKOHYHO PD[             EDWFKOHYHO PLQ                                 EDWFKOHYHO PD[            EDWFKOHYHO PLQ
+
+Figure 10. Batch-level statistics are noisy for GNNs of different batch sizes. We plot the batch-level mean/standard deviation and
+dataset-level mean/standard deviation of different BatchNorm layers (layer 0 and layer 3) in different checkpoints. Specifically, different
+batch sizes (8, 16, 32, 64) are chosed for comparison. GIN with 5 layers is employed.
+                           GraphNorm: A Principled Approach to Accelerating Graph Neural Network Training
+
+7UDLQLQJ$FFXUDF\     3527(,16%6        7UDLQLQJ$FFXUDF\    3527(,16%6         7UDLQLQJ$FFXUDF\    3527(,16%6              7UDLQLQJ$FFXUDF\    3527(,16%6
+
+                                                                                                                                            
+
+                                                                                                                                            
+
+                                                                                                                                            
+
+                                                                                                                                                               
+                         ,WHUDWLRQV                             ,WHUDWLRQV                             ,WHUDWLRQV                                  ,WHUDWLRQV
+
+7UDLQLQJ$FFXUDF\  5('',7%,1$5<%6       7UDLQLQJ$FFXUDF\  5('',7%,1$5<%6       7UDLQLQJ$FFXUDF\  5('',7%,1$5<%6            7UDLQLQJ$FFXUDF\  5('',7%,1$5<%6
+
+                                                                                                                                            
+
+                                                                                                                                            
+
+                                                                                                                                            
+
+                                                                                                                                                               
+                         ,WHUDWLRQV                             ,WHUDWLRQV                             ,WHUDWLRQV                                  ,WHUDWLRQV
+
+                                                                *UDSK1RUP*,1                           %DWFK1RUP*,1
+                                                                *UDSK1RUP*&1                           %DWFK1RUP*&1
+
+Figure 11. Training performance of GIN/GCN with GraphNorm and BatchNorm with batch sizes of (8, 16, 32, 64) on PROTEINS and
+REDDITBINARY datasets.
+
+                         3527(,16                                             37&                                                             ,0'%%,1$5<
+
+7UDLQLQJ$FFXUDF\                                                                                                       
+                                              7UDLQLQJ$FFXUDF\
+                                                                                             7UDLQLQJ$FFXUDF\          
+                                       *UDSK1RUP*,1                                                    *UDSK1RUP*,1                                            *UDSK1RUP*,1
+                                       %DWFK1RUP*,1                                                    %DWFK1RUP*,1                                            %DWFK1RUP*,1
+                           ,WHUDWLRQV                                         ,WHUDWLRQV                                                           ,WHUDWLRQV
+                                        %DWFK1RUP*,1                                                    %DWFK1RUP*,1                                            %DWFK1RUP*,1
+                                       06%DWFK1RUP*,1                                                  06%DWFK1RUP*,1                                          06%DWFK1RUP*,1
+                                       '7%DWFK1RUP*,1                                                  '7%DWFK1RUP*,1                                          '7%DWFK1RUP*,1
+
+                                                                                                                                                                      
+
+Figure 12. Training performance of GIN with GraphNorm and variant BatchNorms (-BatchNorm, MS-BatchNorm and DT-BatchNorm)
+on PROTEINS, PTC and IMDB-BINARY datasets.
+

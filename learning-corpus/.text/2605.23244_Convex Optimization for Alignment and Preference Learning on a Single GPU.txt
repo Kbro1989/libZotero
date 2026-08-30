@@ -1,0 +1,1727 @@
+                                        Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+                                        Miria Feng 1 Mert Pilanci 1
+
+arXiv:2605.23244v1 [cs.LG] 22 May 2026                          Abstract                                    terns and scale to solve more complex problems. The main
+                                                                                                            paradigm combines pre-training and fine-tuning LLMs to
+                                              Fine-tuning large language models (LLMs) to                   achieve aligned user-preferable responses, and train per-
+                                              align with human preferences has driven the suc-              sonalized Language Model (LM) assistants for widespread
+                                              cess of systems such as Gemini and ChatGPT.                   applications (Google DeepMind, 2023; OpenAI, 2022; An-
+                                              However, approaches like Reinforcement Learn-                 thropic, 2023). Reinforcement Learning from Human Feed-
+                                              ing from Human Feedback (RLHF) remain com-                    back (RLHF) (Stiennon et al., 2020; Ouyang et al., 2022;
+                                              putationally expensive and complex. Direct Pref-              Christiano et al., 2017; Wang et al., 2023) demonstrates
+                                              erence Optimization (DPO) offers a simpler al-                impressive results for preference alignment, and utilizes a
+                                              ternative but has limitations such as inconsis-               three-step approach of Supervised Fine-Tuning (SFT), re-
+                                              tent ranking accuracy, high dependence on GPU                 ward model training, and policy optimization. However,
+                                              resources, and expensive hyperparameter tun-                  its complex multi-stage methodology presents several op-
+                                              ing. We propose the Convex Optimization for                   timization challenges, requires humans in the loop, and is
+                                              Alignment and Preference Learning Algorithm                   notably compute resource-intensive. This has driven timely
+                                              (COALA): a novel lightweight strategy with                    and significant research on resource-efficient preference
+                                              strong theoretical guarantees. By leveraging the              learning strategies, especially as energy demands outpace
+                                              convex optimization reformulation of neural net-              infrastructure (Chen et al., 2025).
+                                              works, COALA eliminates the need for a ref-
+                                              erence model and obtains significant reduction                The Direct Preference Optimization (DPO) (Rafailov et al.,
+                                              in both training time and VRAM consumption,                   2024) algorithm proposes a simpler and more computa-
+                                              thus enabling efficient training on a single GPU.             tionally lightweight alternative to aligning LLMs for user-
+                                              Experiments across four datasets--including a                 preferred responses. DPO parametrizes the reward function
+                                              26 621-sample synthetic Educational Feedback                  instead of learning an explicit reward model and incorpo-
+                                              dataset--and six models (including Llama-3.1-                 rates this into the Bradley-Terry ranking objective (Bradley
+                                              8B) demonstrate COALA's competitive perfor-                   & Terry, 1952). Although simpler, this also yields certain
+                                              mance and efficiency while utilizing as little as             drawbacks: requiring a reference model to stabilize training
+                                              17.6% of DPO's total TFLOPs. COALA ex-                        incurs additional memory costs to host two models in or-
+                                              hibits stable, monotonically increasing rewards               der to train a single model, the approximately 10× smaller
+                                              and reaches peak margins in significantly shorter             learning rate (versus SFT) (HuggingFace Alignment Team,
+                                              time in comparison to traditional methods such as             2023) slows optimization, while a mismatch between the re-
+                                              DPO and ORPO. To the best of our knowledge,                   ward optimized in training and the log-likelihood optimized
+                                              this is the first time convex optimization has been           during inference can lead to unstable reward margin gains
+                                              effectively applied to preference fine-tuning of              (Meng et al., 2024).
+                                              LLMs.
+                                                                                                            To address these issues, recent studies have proposed elim-
+                                        1. Introduction                                                     inating the reference model to reduce memory overhead
+                                                                                                            (Jung et al., 2025; Meng et al., 2024), advanced deeper the-
+                                        Large Language Models (LLMs) have been trained on in-               oretical understanding on the behavior of RLHF and DPO
+                                        creasing amounts of data to capture semantic language pat-          with in-depth analysis (Azar et al., 2024; Ethayarajh et al.,
+                                                                                                            2024; Swamy et al., 2025), and reduced dependence on
+                                            1Department of Electrical Engineering, Stanford University,     the prerequisite SFT stage, which is typically imperative to
+                                        California, United States. Correspondence to: Miria Feng            convergence (Hong et al., 2024; Xu et al., 2024). However,
+                                        <miria00@stanford.edu>.                                             these techniques also introduce additional brittle hyperpa-
+                                                                                                            rameters, which the authors note are crucial to achieving
+                                        Proceedings of the 43 rd International Conference on Machine        good performance, or require small learning rates on the or-
+                                        Learning, Seoul, South Korea. PMLR 306, 2026. Copyright 2026        der of 1×10-9 for stable convergence. The large reliance on
+                                        by the author(s).
+
+                                                                                                         1
+Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+heuristic-driven methods may also result in random model                of reproducibility for ongoing research, as well as prac-
+ranking accuracy even after time-extensive training (Chen               tical on-premises single GPU use cases.
+et al., 2024).
+                                                                  2. Related Work
+We present COALA, a fast and lightweight framework
+for effective preference alignment of LLMs on a single            Preference fine-tuning LLMs can be classified as three dis-
+GPU. COALA leverages a convex two-layer neural net-               tinct strategies. (1) Initial algorithms of zero-shot and few-
+work (cvxNN) on top of a pre-trained model for fast con-          shot in-context learning (Brown et al., 2020) rely on prompt
+vergence with theoretical guarantees, and thus mitigates          engineering. This method does not require extensive com-
+the instability of offline alignment via consistent reward        pute, but is unable to tackle complex tasks due to reliability
+margin increments. Unlike existing DPO style objectives,          issues. (2) More sophisticated algorithms use reinforcement
+COALA utilizes an Alternating Direction Method of Mul-            learning to align model output with user preferences. Suc-
+tipliers (ADMM) (Boyd et al., 2011) approach to enable            cessful algorithms in this class (such as RLHF and RLAIF
+scalable, near-hyperparameter-free optimization. We imple-        (Lee et al., 2023)) have been able to create conversational
+ment COALA in JAX (Bradbury et al., 2018) and efficiently         LLMs such as Google Gemini (Google DeepMind, 2023)
+execute Just-In-Time (JIT) compilation to maximize VRAM           and ChatGPT (OpenAI, 2022). However, despite their im-
+throughput. As a result, COALA fine-tunes models such as          pressive performance, the high computational costs of these
+Llama-3.1-8B on a single RTX-4090 GPU (NVIDIA Cor-                methods pose a substantial barrier to entry for many applica-
+poration, 2025) and demonstrates competitive performance          tions. (3) DPO-style methods leverage the Bradley & Terry
+on multiple benchmarks, including AlpacaEval2 (Li et al.,         (1952) model to provide simple yet often performant learn-
+2023), ArenaHard (Li et al., 2024), and MT-Bench (Zheng           ing algorithms that do not require explicit reward modeling.
+et al., 2023). Comprehensive experiments span six models          Yet good results based on these methods consistently rely on
+× four datasets × four methods. Results presented total over      extensive hyperparameter grid-search (Meng et al., 2024),
+216 training runs, and TFLOPs metrics further validate            and are largely heuristics-driven.
+COALA's substantial compute and power efficiency. Since
+auto-run benchmarks are ultimately surrogate for measuring        As LLMs become more widely adopted, there is also esca-
+real human preference, we conduct fair double-blind evalu-        lating awareness that scaling compute alone is increasingly
+ation with 107 real human samples to assess the validity          unsustainable economically, environmentally, and in terms
+of benchmark scores against actual human feedback, and            of diminishing returns (Singh et al., 2025). This has moti-
+establish COALA's practical effectiveness in a real world         vated recent work to make progress through avenues such
+scenario. Our main contributions are summarized as fol-           as repeated sampling (Brown et al., 2024), creative chain-of-
+lows:                                                             thought reasoning (Wei et al., 2022), and theoretically inter-
+                                                                  pretable techniques (Singh et al., 2023). Single GPU meth-
+   · We introduce COALA: a more interpretable and theory-         ods are a timely and practical direction for preference fine-
+      backed convex framework that leverages principled op-       tuning, especially as local accelerators become increasingly
+      timization to enable effective, single-GPU preference       powerful (Apple Inc., 2025). Targeting a single device im-
+      alignment.                                                  proves robustness (fewer distributed failure modes), latency
+                                                                  (no cross-node synchronization), and data locality/security
+   · We prove COALA's convergence guarantees. This the-           (privacy-sensitive deployment with on-premises options).
+      oretical analysis supports COALA's exhibited stable         This trend is reflected in recent systems that deliver machine
+      convergence, while mitigating reliance on hyperparam-       learning applications in text, vision, and multimodal settings
+      eter tuning and broad heuristics.                           (Sheng et al., 2023; Geiping & Goldstein, 2023; Ning et al.,
+                                                                  2024; Kwon et al., 2020; Tragakis et al., 2024). Human
+   · We present EduFeedback1: the open-source dataset             preference alignment is ideally positioned in this emerging
+      comprised of 26 621 student-tutor conversations. We         paradigm, which seeks low-latency, resource-aware algo-
+      additionally introduce the "Alternating Population          rithms without sacrificing generative quality.
+      Strategy", to uniquely derive 65 606 preference train-
+      ing pairs, eliminating the need for external re-ranking     Bengio et al. (2005) have previously shown that it is possible
+      models and establishing a more efficient paradigm for       to characterize the optimization problem for neural networks
+      preference dataset synthesis.                               as a convex program. Pilanci & Ergen (2020) further devel-
+                                                                  oped exact convex reformulations for training a two-layer
+   · Our modular open-source JAX codebase2 ensures ease           ReLU neural network. The reformulation uses semi-infinite
+                                                                  duality theory to show that two-layer neural networks (NNs)
+    1https://huggingface.co/datasets/miria0/E                     with ReLU activations and weight decay regularization may
+duFeedback                                                        be expressed as a linear model with group lasso penalty
+
+    2https://github.com/pilancilab/COALA
+
+                                                               2
+                       Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+and polyhedral cone constraints. This yields both practi-            3.2. Convex reformulation
+cal benefits in implementation and theoretical advantages
+in analyzing the optimization of non-convex landscapes in            Pilanci & Ergen (2020) have shown (2) admits a convex
+NNs. Bai et al. (2023) and Feng et al. (2024) have recently          reformulation, thus alleviating the inherent difficulties of
+proposed cvxNN methods based on ADMM techniques to                   the non-convex landscape in deep learning. When condition
+solve high-dimensional deep learning tasks. ADMM offers              m  m is satisfied for some m  n + 1, the reformula-
+several advantages, such as its robustness against hyperpa-          tion has the same optimal value as the original non-convex
+rameter selection, linear decomposability for distributed op-        problem and no information is lost.
+timization, and immunity to vanishing/exploding gradients.
+Its natural parallelization ability makes ADMM particularly          The convex reformulation is based on enumerating the ac-
+suitable for optimization in deep learning, where scalability        tions of all possible ReLU activation patterns on the data
+is crucial. The COALA algorithm combines these features              matrix X. These activation patterns act as separating hy-
+to effectively preference fine-tune LLMs faster with less            perplanes, which essentially multiply the rows of X by 0
+memory and compute while demonstrating competitive per-              or 1 and can be represented by diagonal matrices. For fixed
+formance.                                                            X, the set of all possible ReLU activation patterns may be
+                                                                     expressed as
+
+3. Convex Neural Networks                                                     DX = D = diag (1(Xv  0)) : v  Rd .
+
+This section provides background on convex neural net-               The cardinality of DX grows as |DX | = O (r(n/r)r),
+works (cvxNN), which is the basis for our introduction               where r := rank(X) (Pilanci & Ergen, 2020). Given
+of the COALA algorithm. Our approach is motivated by                 Di  DX , the set of vectors v for which (Xv)+ = DiXv,
+defining a principled preference fine-tuning objective with          is given by the following convex cone: Ki = {v  Rd :
+interpretable convergence guarantees.                                (2Di - I)Xv  0}.
+
+3.1. Two-layer ReLU Networks                                         The exponential size of DX make its complete enumera-
+                                                                     tion impractical. Instead, we work with a subset based on
+Given input x  Rd, the classic two-layer ReLU network is             sampling P patterns from DX for tractability:
+
+given by:                                                                              P                             P
+
+                           m                                         min                      DiX(vi - wi), y +  ||vi||2 + ||wi||2
+
+               f (x) = (1jx)+2j,                             (1)     (vi ,wi )iP=1     i=1                           i=1
+
+                           j=1                                                      s.t. vi, wi  Ki i  [P ].
+                                                                                                                                            (3)
+where 1  Rm×d, 2  Rm are weights of the first and
+last layer respectively, and (·)+ = max{·, 0} is the ReLU            Although (3) is based on subsampling patterns in the convex
+activation function.
+                                                                     reformulation, it can be shown under mild conditions that
+Given targets y  Rn, the network in (1) is trained by
+minimizing the following non-convex loss function:                   (3) still has the same optimal solution as (2) (Mishkin et al.,
+
+                                                                     2022). The recent work of Kim & Pilanci (2024) also prove
+
+                                                                     that the difference is negligible even when they are not equal.
+
+                                                                     Therefore we can confidently work with the convex program
+
+min     (f1,2  (X  ),  y)  +  m       ||1j ||22 + (2j )2  ,  (2)     in (3).
+
+1 ,2                          2  j=1                                 In this paper we denote  to be the mean-square error loss.
+                                                                     Recent work (Bai et al., 2018) has shown that by adding
+where  : Rn  R is the loss function, X  Rn×d is the                  slack variables, (3) can be written as:
+data matrix, and   0 is the regularization strength. The
+non-convex nature of (2) makes its solution challenging,             min    ||F  u  -  y||22  +  ||v||2,1  +  I0(s)  s.t. u = v, Gu = s
+since the optimizer typically needs meticulous tuning of
+hyperparameters to ensure successful training. This requires         v,s,u
+many expensive iterations of running the optimizer across
+multiple hyperparameter configurations in a grid search                                                                   (4)
+to obtain good performance. This dramatically contrasts
+with the convex optimization framework, where algorithms             The matrix F  Rn×2dP is block-wise constructed by DiX
+have strong convergence guarantees and involve minimal
+hyperparameters. It is desirable to maintain the expressive          terms.
+capabilities of such neural networks while still preserving
+the computational advantages of convex optimization.                 4. COALA
+
+                                                                     In this section, we introduce comprehensive methodol-
+                                                                     ogy of the Convex Optimization for Alignment Preference
+                                                                     Learning Algorithm (COALA). Appendix B gives a more
+                                                                     explicit step-by-step through the COALA method.
+
+                                                                  3
+                        Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+4.1. Convex Preference Optimization Framework                                                                                  Proposition 4.1 (COALA Loss is Convex). The optimiza-
+                                                                                                                               tion problem in (8) may be written as
+In standard DPO, the goal is to obtain a good policy that is
+aligned with human preferences. The policy network  is                                                                         min  E     log  1 + exp  -yw2T (1fpre (x))+ +   .
+first initialized with the weights of a pre-trained network.
+It then aligns the policy model by solving the optimization                                                                     2
+problem
+                                                                                                                                                                               (9)
+
+                                                                                                                               This objective is convex as (9) is a logistic regression prob-
+
+                                                                                                                               lem in 2.
+
+LDPO(; ref) =                                             (5)                                                                  The proof of Theorem 4.1 is provided in Section A. Theo-
+                                                                                                                               rem 4.1 shows that LCOALA is convex. Thus, we can solve it
+- E log             log (yw|x) -  log (yl|x)              .                                                                    to global optimality in polynomial time using more efficient
+                   ref (yw |x)            ref(yl|x)                                                                            gradient-based optimizers. Since we only have to train the
+                                                                                                                               weights of the final layer of the convex model, COALA re-
+The DPO objective in (5) is a large-scale non-convex opti-                                                                     quires significantly less computation than existing methods
+mization, which is challenging to solve. We first reformu-                                                                     and provides the second major reason why COALA can
+late this learning problem using cvxNN, in order to admit                                                                      quickly train on one GPU.
+more elegant optimization techniques. We adopt a modified
+Bradley-Terry model with an offset parameter  > 0.
+
+p(yw  yl|x) = (r(x, yw) - r(x, yl) - ), (6)                                                                                    In summary, throughout our theoretical development the
+                                                                                                                               probability object induced by COALA is the pairwise pref-
+COALA then uses the un-normalized log-likelihood as its                                                                        erence probability used in the Bradley­Terry model, rather
+rewards function.                                                                                                              than the full autoregressive language-model sequence prob-
+                                                                                                                               ability. More precisely, COALA models the Bernoulli event
+                   r(x, y) =  log (y|x).                  (7)                                                                  that a preferred response yw is ranked above a rejected re-
+                                                                                                                               sponse yl conditioned on the prompt x, and the correspond-
+Instead of taking  in (7) to be a traditional neural network                                                                   ing logistic form is derived only in this pairwise-comparison
+                                                                                                                               setting. The notation cvx(y | x) is therefore shorthand for
+(NN) model, we replace it with a cvxNN. Specifically, we                                                                       a preference score/probability over a comparison outcome,
+                                                                                                                               not for the frozen base model's sequence distribution over
+take a pre-trained model fpre (x) and stack a two-layer con-                                                                   complete text responses.
+vex neural network gcv1x,2 on top to serve as a binary prefer-
+ence classifier. gcv1x,2 is then trained by solving the convex                                                                 4.2. COALA Algorithm
+optimization problem in (4). Letting  = (pre, 1, 2), the
+                                                                                                                               We formally present the pseudocode for COALA in Algo-
+resulting policy is then given by:                                                                                             rithm 1. Stage one of COALA first trains a cvxNN on top of
+                                                                                                                               a standard pre-trained model. In stage two, the final policy
+cvx(y|x) :=                        1                                                                                           model is obtained by solving a convex logistic regression
+                                                       .                                                                       problem in a fine-tuning step.
+
+                   1 + exp -ygcv1x,2 fpre (x)                                                                                  The key to maximizing COALA's efficiency in this frame-
+                                                                                                                               work is using the recently introduced CRONOS algorithm
+Instead of executing preference optimization with the                                                                          (Feng et al., 2024) to train cvx, which we now discuss in
+                                                                                                                               detail.
+weights   of the   earnenptdilraferceemedzoebdyel1gcivcnvx1x(,gyc2|vx1x,),2fy.ipIerenl,dsewsrtethinefgrCe(eO7z)eAiLnthtAoe
+weights
+(6) with  of fpre
+          (y|x)
+
+objective:
+
+min       LCOALA(cv2x)  :=                                 (8)
+                                                          ,
+ 2
+
+- E(x,yw,yl)D log             log  cv2x (yw |x)  -                                                                             4.2.1. EFFICIENTLY TRAINING THE CONVEX POLICY
+                                   cv2x(yl|x)                                                                                          NETWORK VIA CRONOS
+
+Notably, (8) is reference-free in comparison to (5) yet does                                                                   CRONOS (Feng et al., 2024) is a specialized version of
+not incur additional scaling hyperparameters for stability.                                                                    the Alternating Direction Method of Multipliers (ADMM)
+This is supported in recent work (Hong et al., 2024; Meng                                                                      (Boyd et al., 2011), for solving the optimization problem
+et al., 2024; Gupta et al., 2024), where we find the reference                                                                 in (4). The choice of ADMM for solving (4) in Feng et al.
+model unnecessary.                                                                                                             (2024) is predicated on three key properties: (1) It possesses
+                                                                                                                               a robust convergence guarantee as shown in Section 4.3, (2)
+In addition to improved stability and memory efficiency by                                                                     it lifts memory constraints in LLM classification problems,
+removing dependence on the reference model, the advan-                                                                         and (3) it is highly optimized for GPU acceleration and
+tage of solving (8) over (5) also gives higher computational                                                                   parallelism in JAX.
+tractability. The following proposition shows (8) is convex.
+                                                                                                                               Algorithm 2 formally presents using CRONOS for solving
+
+                                                                                                                            4
+                   Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+Algorithm 1 Convex Preference Optimization (COALA)                to convergence guarantees for each aspect of the COALA
+                                                                  pipeline and robustness to hyperparameter tuning. The fol-
+input Dataset (x, yw, yl), Pre-trained model fpre (x), offset     lowing result (Feng et al., 2024) shows CRONOS converges
+   parameter , penalty parameter  > 0                             ergodically at an O(1/k)-rate.
+   Phase I: Train the policy network
+   Train cvx to obtain (1, 2) by solving (4) using                Theorem 4.2 (Convergence of ADMM for (4)). Let
+   CRONOS() (Algorithm 2).                                        {k}k1 be some summable sequence. Run Algorithm 2
+   Phase II: Finetuning                                           and suppose at each iteration the computed uk+1 satisfies:
+   Freeze weights of the first layer 1.
+   Finetune weights of second layer 2 by solving the convex             uk+1 - argminu       1 F u - y2
+   minimization problem (9):                                                                 2
+          min2 LCOALA(cv2x) {Solve via AdamW}
+                                                                                    +     u  -  vk  +  k 22
+output (1, 2).                                                                         2
+                                                                               +  Gu - sk + k2
+                                                                                  2                           k.
+
+Algorithm 2 CRONOS with Preconditioned Conjugate Gra-             Then after K iterations, the output of CRONOS Algorithm 2
+dient (PCG)                                                       satisfies:
+
+input penalty parameter 
+
+repeat                                                            F u¯K - y2 + v¯K 2,1 + 1(s¯K  0) - p = O(1/K),
+
+u2 k+G1u=-asrgkm+inuk{&2}12  F u-y2 +      u-vk   +k  22  +       I2dP         v¯K
+                             {Use PCG}  2                          G           s¯K
+
+                                                                        u¯K -       = O(1/K).
+
+vk+1      = argminv,s{v2,1 + 1(s  0) +
+sk+1
+
+   uk+1   - v + k2} {Primal update}                               This guarantee holds for any  > 0 and when the u-
+2                                                                 subproblem is solved inexactly. Consequently, CRONOS'
+k+1       k        (uk+1        vk+1)                             convergence is robust, making it an ideal subroutine for
+             +               -         {Dual    update}           training the cvxNN in COALA. This ensures efficient and
+                                                                  successful training of the policy network.
+ k+1      k  +     (Guk+1    -  sk+1)   {Dual     update}
+                 
+
+until convergence
+
+Equation (4). Two subproblems must first be solved effi-          The COALA fine-tuning step also has strong guarantees,
+ciently, then the algorithm only requires vector addition         since the minimization objective in (9) is smooth, convex,
+and one matrix-vector product. The structure of these sub-        and has a Lipschitz continuous gradient. The latter prop-
+problems makes CRONOS readily compatible with local               erty follows as the logistic loss has a Lipschitz continuous
+hardware accelerators and JAX.                                    gradient. Thus, if we apply Accelerated Gradient Descent
+                                                                  (AGD) (Nesterov, 1983; d'Aspremont et al., 2021), which
+What COALA optimizes. COALA does not perform                      has the worst-case optimal convergence rate, to solve (9),
+gradient-based updates to the pretrained language model           we obtain the following result.
+weights. Instead, it freezes the base LLM and learns a
+convex neural network (cvxNN) head on top of frozen pre-          Theorem 4.3 (Efficient minimization of COALA loss Equa-
+trained features. This design is deliberate: by restricting       tion (9)). Suppose we run AGD to solve (9). Then after k
+optimization to the convex head, we obtain global opti-           iterations, the output 2k satisfies:
+mality guarantees for the trained preference module, sub-
+stantially reduce memory and compute requirements, and            LCOALA(cv2kx)  -  min   LCOALA(cv2x)  =    O(1/k2).
+preserve a practical single-GPU training regime. Conse-
+quently, COALA should be interpreted as a preference align-                          2
+ment framework built on top of frozen LLM representations,
+rather than as full-model policy optimization in the style of     Theorem 4.3 shows we can train the COALA loss to global
+standard DPO fine-tuning.                                         optimality in polynomial time. This contrasts greatly with
+                                                                  DPO variants, which are non-convex and lack convergence
+4.3. COALA Convergence Guarantees                                 guarantees. In addition, optimizer methods in DPO-based
+                                                                  approaches are typically non-trivial, sensitive to hyperpa-
+Since COALA interprets the preference alignment task as           rameter tuning, and typically require dramatically smaller
+a convex optimization problem application, it also immedi-        learning rates than their respective SFT methods.
+ately inherits the rich convergence theory associated with
+convex algorithms. In particular, we show that this leads         5. Experiments
+
+                                                                  We experiment with six models: DistilGPT-2 (Sanh et al.,
+                                                                  2019), GPT-2 (Radford et al., 2019), Mistral-7B (Jiang et al.,
+
+                                                               5
+                Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+2023a), Dolphin-2.6-7B (Cognitive Computations, 2024),               sentiment. HelpSteer (Wang et al., 2024) is the open-source
+Llama-3.2-3B (Grattafiori et al., 2024), and Llama-3.1-8B            helpfulness dataset used in developing SteerLM (Dong et al.,
+(Grattafiori et al., 2024) × four datasets across four prefer-       2023). It contains real human annotations along five at-
+ence alignment algorithms. In order to ensure fair compari-          tributes (helpfulness, correctness, coherence, complexity,
+son, we run each individual experiment configuration on a            verbosity) on a 0-4 scale.
+single A100 GPU with 40GB VRAM, with the exception
+of COALA experiments which run on a single RTX-4090                  Dataset        Pref. Pairs Train (90%) Eval (10%)
+GPU with 24GB VRAM. This ablation is necessary, since
+methods such as DPO and ORPO require more memory                     EduFeedback    65,606  59,045  6,561
+on the same datasets (Appendix E.1). We also perform                 UltraFeedback  60,917  54,825  6,092
+controlled initialization study with SFT baselines (versus           IMDb           25,000  22,500  2,500
+non-SFT init). All subsequent numerical results are pre-             HelpSteer               6,937
+sented after averaging over three runs in each setting, final                        7,708            771
+evaluations are performed on held-out prompts. Tables 1
+and 2 summarize main model and dataset features.                     Table 2. Preference dataset statistics with train/eval splits.
+
+Model           Parameters  Feature                                  5.2. Model Details
+
+DistilGPT-2     82M         Mini                                     Baseline Models. The six models in Table 1 are SFT fine-
+GPT-2           124M        Seminal                                  tuned for one epoch on each of the four datasets to create a
+Llama-3.2-3B    3B          Modern                                   total of twenty-four SFT-initialized baselines. Each method
+Mistral-7B      7B          Performant and Balanced                  is then evaluated across each preference extracted dataset,
+Dolphin-2.6-7B  7B          Instruction Fine-tuned                   in "prompt", "chosen", and "rejected" triplet format. Our
+Llama-3.1-8B    8B          Largest                                  comprehensive studies also include directly starting from an
+                                                                     off-the-shelf model baseline that has not been SFT trained
+Table 1. Model sizes and characteristics evaluated in our study.     to be in distribution with the task. In all cases we meticu-
+                                                                     lously ensure fair comparisons between runs: by ensuring
+5.1. Datasets                                                        all experimental setups utilize the same amount of data and
+                                                                     average three runs per setting across all results.
+This section briefly introduces the four main datasets of
+Table 2, with additional preference data extraction details          Preference Fine-tuned Models. Preference fine-tuning uti-
+presented in Appendix E.2.                                           lizes the EduFeedback-Alternate, UltraFeedback-Binarized,
+                                                                     IMDb, and HelpSteer datasets. These are respective chosen-
+EduFeedback is our synthetically generated conversational            rejected training samples extracted from their matching con-
+dataset inspired by UltraChat (Ding et al., 2023), but clearly       versational datasets (Appendix E.2 provides details). Ap-
+constrained within an educational setting. EduFeedback               pendix E.1 provides more details on each of the bench-
+contains 26 621 conversations generated with GPT-4o (Ope-            marked methods, and Table 10 summarizes sensitive hy-
+nAI, 2024). We vary t = 0.2 - 0.9, utterances range from             perparameters and objective functions for some additional
+4-8 alternating turns between two agents. We randomly                methods of interest.
+vary mood of agents to simulate realistic human conversa-
+tion, and encompass eleven diverse topics in fields of study         6. Main Results and Discussion
+such as science and philosophy. We introduce the novel
+Alternating Population Strategy to extract 65 606 preference         We present main experimental results demonstrating the
+training samples dataset. Detailed discussion and qualitative        stable and monotonically increasing reward margins of
+examples are presented in Appendix F.                                COALA. This section summarizes comprehensive ablation
+                                                                     studies on the impact of SFT-initialization, and quantita-
+UltraFeedback (Cui et al., 2023) is selected as a seminal            tively assess the effectiveness of preference alignment meth-
+dataset to be consistent with prior work. Each of its training       ods on AlpacaEval2. Additional performance plots, MT-
+samples comprise four model-generated completions from               Bench scores, ArenaHard, TFLOPs visuals and further re-
+a variety of open-source models. GPT-4 (OpenAI, 2023)                sults are presented in Appendices C and D. We evaluate with
+was used to assign "preference scores" to each completion.           107 real human participants to validate the effectiveness of
+The IMDb (Maas et al., 2011) positive-negative sentiment             COALA, since auto-run metrics are ultimately proxies for
+dataset is selected to be consistent with the prior work of          modeling real human preference. Details on our real world
+Rafailov et al. (2024). In each instance the "prompt" is             human study is presented in Appendix G, and numerical
+either negative or positive, and generation quality is graded        results are summarized in Table 4.
+on the adherence and cogency of the output with regards to
+
+                                                                  6
+                      Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+                                                                                                                                                            1.00
+0.90
+
+0.88
+                                                                                                                                                            0.80
+
+0.85
+Reward Margin
+                                                                              Reward Margin0.830.60
+
+0.80
+                                                                                                                                                            0.40
+
+0.78
+
+0.75        LLaMA-8B       Mistral7B        Dolphin2.6-7B                                    0.20                                                                       LLaMA-8B       Mistral7B       Dolphin2.6-7B
+            LLaMA-8B-SFT Mistral-7B-SFT Dolphin2.6-7B-SFT                                                                                                               LLaMA-8B-SFT   Mistral-7B-SFT  Dolphin2.6-7B-SFT
+                                                                                                                                                                                      Step 300
+        10        20       S3t0ep     40    50             60                                                                                                     100         200                               400
+
+                      (a) COALA                                                                                                                                               (b) DPO
+
+Figure 1. COALA shows stable reward margin gains across all models. This is attributed to its theoretically grounded foundation which
+alleviates fine-tuning reliance on hyperparameter tuning and general heuristics, as well as stability derived through the convex program.
+
+METHOD                             LC WR %                                                                                                                        WR %                    AVG LENGTH
+
+                      EDU          IMDB     ULTRA              EDU                                                                                                IMDB        ULTRA       EDU IMDB ULTRA
+
+Mistral-7B Model  24.61±0.30  24.88±1.46    20.84±1.35     23.82±1.38                                                                                             23.11±1.96  20.91±1.65  592±37       418±30  459±35
+  COALA           17.01±2.82  17.58±2.32    16.04±2.30     14.67±2.87                                                                                             15.62±2.48  12.28±2.34  561±30       368±39  350±31
+  ORPO            24.19±1.19  24.30±1.26    17.68±1.67     22.45±1.50                                                                                             22.74±1.26  15.56±2.11  492±37       502±55  453±34
+  DPO             6.80±0.51   8.42±1.16     6.18±1.31      10.30±1.03                                                                                             1.77±1.73   6.11±1.59   515±20       428±31  463±34
+  SFT
+
+Dolphin-7B Model  40.81±0.22  39.72±0.36    31.58±0.34     39.05±0.29                                                                                             38.46±0.41  30.21±0.38  439±38       454±33  445±37
+  COALA           25.06±1.93  24.90±1.23    22.94±1.26     23.59±1.18                                                                                             22.92±1.77  25.93±2.51  526±9        448±37  452±45
+  ORPO            34.73±0.80  33.86±0.72    26.41±0.68     32.46±1.09                                                                                             31.58±1.52  24.86±1.02  494±34       511±49  476±35
+  DPO             17.36±0.38  16.21±0.23    14.88±0.46     15.30±0.10                                                                                             15.47±0.44  12.76±1.08  404±39       423±25  459±24
+  SFT
+
+Llama-8B Model    40.90±0.09  27.64±0.27    20.64±0.08     38.20±0.11                                                                                             25.68±0.36  18.32±0.23  562±12       415±33  552±20
+  COALA           23.87±0.60  12.10±0.71    12.91±0.50     20.58±0.68                                                                                             12.05±0.55  10.95±0.55  599±70       610±33  354±41
+  ORPO            40.68±0.10  21.79±0.29    18.89±0.31     38.53±0.47                                                                                             20.18±0.49  15.81±0.30  539±24       449±98  503±39
+  DPO             10.92±0.20  8.16±0.11     7.41±0.30      10.75±0.39                                                                                             8.11±0.66   5.62±0.78   384±55       435±49  546±15
+  SFT
+
+Table 3. AlpacaEval2 metrics (mean ± std over 3 runs) by alignment method for three models across three datasets. Abbreviations:
+Length Controlled Win Rate (LC WR%), Win Rate (WR%), Average Length (Avg Length), Llama-8B (refers to Llama-3.1-8B).
+
+6.1. Stable Increase in Rewards                                   ality constraints to permit effective preference alignment on
+                                                                  a single GPU.
+COALA leverages its convex program for stable increase
+in reward margin gains (Figure 1a). Preference fine-tuning        6.2. Effect of SFT Baseline Initialization
+LLMs is well known to be noisy and unstable during training
+(Figure 1b), especially in offline settings. While the addi-      Training an SFT baseline adds additional complexity and
+tional reference model in traditional DPO seeks to mitigate       cost to preference fine-tuning, but in most cases is a benefi-
+this, it also becomes immensely VRAM expensive. Ap-               cial preliminary starting point. Table 3 shows that SFT train-
+pendix C.2 presents further plots, and Appendix H presents        ing alone is often able to achieve meaningful performance
+experimental setup details. In contrast, COALA effectively        gains in terms of preference alignment. This is especially
+stabilizes the preference alignment task by re-framing this       true in larger more expressive models such as Llama-3.1-8B.
+as a convex optimization problem with principled conver-          In contrast, offline DPO alone often does not surpass the
+gence guarantees. Since rewards steadily increase over            performance of a large SFT-trained LLM and requires a SFT-
+time, this eliminates the need for an exponentially smaller       initialized model for efficacy. ORPO delivers the slowest
+learning rate, such as in DPO and ORPO. The integration           training per epoch, but seems to alleviate dependence on an
+of CRONOS to solve the cvxNN training task further re-            SFT starting point. COALA is able to perform competitively
+duces reliance on hyperparameter tuning and cuts down             and consistently with significantly less time, memory, and
+fine-tuning time (see Appendix D), while lifting dimension-       compute (Table 5). This is in line with recent work, which
+
+                                                               7
+          Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+suggests the large amount of pre-training experienced in                                      DATASET  COALA  ORPO    DPO    SFT
+LLMs is already inherently expressive (Brown et al., 2024;
+Zhou et al., 2023; Lin et al., 2023), therefore more strategic                                EDU      39.1%  15.5%  28.8%  16.6%
+methodology should be able to guide preference alignment                                      IMDB     42.7%  20.1%  24.8%  12.4%
+without exhaustive compute-extensive training on a dramat-
+ically smaller learning rate.                                                                 Table 4. 107 Real Human Feedback Win Rates per Method on two
+                                                                                              datasets. COALA achieves the highest human win rates.
+
+                                     Prompt (User)                                            6.4. Human Feedback Validation
+
+                 "Hi can you explain the main characteristics that                            We validate preference alignment efficacy with a double-
+          differentiate the Baroque period from the Romantic period?"                         blind 107-sample human survey, since existing autorun met-
+                                                                                              rics can ultimately be "gamified" (Gao et al., 2023; Dubois
+chosen    Agent (direct response)                                                             et al., 2024) and simply serve as proxies for true human
+                                                                                              preference. Appendix G provides setup details, sample
+          "The Baroque period (roughly 1600-1750) is characterized                            questions, win rates per method on individual questions,
+                                                                                              and the consent form for ethical consideration. Fifty vol-
+          by intricate compositions, ornate embellishments, and a                             unteers are from a deep learning class, and fifty-seven vol-
+                                                                                              unteers are from a commercial technology sector. Table 4
+          strong emphasis on harmony and counterpoint. Music from this era . . . "            shows COALA exhibits the highest real human preference
+                                                                                              on average across two datasets. This experiment is in the
+                                          User (follow-up)                                    same spirit as the 24-sample human study conducted in the
+                                                                                              seminal DPO paper, and also highlights the existing gap
+          "I need more help. What if a question on the quiz asks me to enumerate              between automated evaluation metrics versus real human
+             the main differences between the Baroque and Romantic periods"                   preferences (Warren et al., 2015; Coller & Califf, 2009).
+
+rejected                                                                                      6.5. Quality and Compute Efficiency
+
+          Agent (follow-up response less directly answers the Prompt, yet still relevant)     Win rates in this study are evaluated via Custom Pairwise
+                                                                                              Win Rate Excluding Ties with standard GPT-4 as base refer-
+                           "During the Classical period the role of the conductor             ence model and GPT-4o as judge. Therefore metrics provide
+                    was often filled by a leading musician within the ensemble, . . . "       the percentage of each method's "wins" over the reference
+                                                                                              model (not against each other), hence they do not sum to
+Figure 2. Alternating Population Method for creating preference                               one. Table 3 shows COALA's strong performance and sub-
+datasets. One conversation yields multiple (prompt, chosen, re-                               stantially lower variance across the majority of settings in
+jected) preference triplets, without requiring external LLMs to                               comparison to competing methods. For example, on the
+generate matching responses in chosen-rejected pairs.                                         Llama-3.1-8B (Edu) setting, COALA achieves a tightly
+                                                                                              clustered 40.90 ± 0.09 in LC WR% compared to ORPO's
+6.3. Alternating Population Method for Datasets                                               23.87 ± 0.60. This is also consistent with Theorem 4.3:
+                                                                                              that COALA loss achieves global optimality in polynomial
+We exploit the structure of multi-turn conversational layouts                                 time, while providing mathematical interpretation that the
+to design a sample-efficient preference extraction method                                     convex optimization framework yields a more robust align-
+via a sliding-window scheme. Traditional preference dataset                                   ment trajectory than heuristic-driven non-convex methods.
+methods populate the same number of preference training                                       Interestingly, LC WR% displays lower variance than pure
+pairs (pref-pairs) as user prompts (one pref-pair per conver-                                 WR %. We intuitively attribute this to the high-variance
+sation), and require an external LLM to generate missing                                      length exploitation behavior often observed in preference
+preference responses to create the chosen-rejected pairs.                                     optimization.
+Our strategy creates the same number of pref-pairs as agent
+responses (multiple pref-pairs per conversation), and does                                    Table 5 summarizes average TFLOPs measured across three
+not require any external LLM generation/reward model.                                         runs on the EduFeedback dataset per method. COALA
+Figure 2 shows the overview. The agent's first response                                       exhibits significantly lower TFLOPs per dataset in contrast
+becomes the chosen answer since it most directly addresses                                    to competitors, due to the synergistic combination of its
+the user's Prompt. The agent's subsequent response is the                                     convex reformulation objective for optimality, CRONOS
+rejected answer, since it is topically related and informative                                integration, and its efficient implementation in JAX. ORPO
+but less direct. This yields natural preference triplets at scale,                            displayed the longest training times, but was the most robust
+allowing us to populate 65 606 preference training samples
+from 26 621 EduFeedback conversations. Appendix F pro-
+vides qualitative examples, and human evaluation presented
+in Appendix G validates this hypothesis. We note the limita-
+tions of this strategy, since it is a domain-specific directness
+heuristic for objective succinct dialogs, and not a general
+preference-labeling method. Therefore only the EduFeed-
+back dataset uses this, while the three other datasets validate
+generalization.
+
+                                                                                           8
+            Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+MODEL       COALA       DPO      ORPO    SFT                       suggest that full parameter modification is often unnecessary
+                                                                   for effective preference alignment. This positions COALA
+DISTILGPT2  152.56    537.12    643.33   271                       within a recent class of compute-efficient alignment algo-
+GPT2        379.89   1087.45   1305.27   522                       rithms (Cao et al., 2024; Rimsky et al., 2024; Kowsher et al.,
+MISTRAL-7B  1580.45  9284.71   11241.89  2492                      2025), utilizing tools such as lightweight steering vectors
+LLAMA-8B    1805.39  10253.37  12352.98  2851                      or residual modifications to achieve comparable gains with-
+DOLPHIN-7B  1794.66  10091.25  12116.50  2804                      out incurring the cost of full-parameter fine-tuning. Finally,
+                                                                   COALA's speed and compute efficiency presents a solution
+Table 5. TFLOPs measurements for all methods on the EduFeed-       for resource-constrained and on-premises settings, where
+back dataset.                                                      speed, efficiency, data privacy and short dialogs are key.
+
+against SFT versus non-SFT-initialized baselines. Figure 5         7. Conclusion
+shows COALA effectively using less TFLOPs to achieve
+competitive AlpacaEval2 LC WR% across three models, for            We introduce COALA, a framework for preference learning
+a clear indication of efficiency and performance. Further          that is stable, efficient, and reference-free. The key insight
+metrics and ablation studies are presented in Appendix D.          of COALA is in recognizing that preference learning can
+                                                                   be framed as convex optimization based task. The chal-
+6.6. Expressiveness Tradeoff                                       lenge is capturing the expressiveness of the rich features in
+                                                                   the underlying base model with a principled and efficient
+To formalize the discussion of expressiveness tradeoffs and        method. By using a convex neural network (cvxNN) to
+limitations in COALA, we distinguish between two distinct          provide a stabilized reward signal, COALA eliminates the
+layers of optimality: architectural optimality within the con-     reliance on a frozen reference model and reduces compu-
+vex layer, and the system-wide expressiveness across the           tational overhead. Instead of optimizing over input text, it
+entire model. Section 3 presents the theoretical background        operates on preference features derived from the foundation
+which guarantees that COALA's convex subroutine operates           LLM, thus preserving expressiveness while lowering input
+as an exact global optimizer within its feature subspace.          dimensionality.
+This is also motivated by much recent work which leverages
+globally optimal training (Gautier et al., 2016) to eliminate      COALA demonstrates strong performance across four
+the challenging non-convex optimization landscape of stan-         datasets, shows robustness to hyperparameter tuning, and is
+dard policy heads.                                                 validated by real human feedback. By lowering the resource
+                                                                   barrier for alignment, COALA opens preference fine-tuning
+However, freezing the base model parameters can constrain          to broader educational, research, and edge deployment use-
+the policy from learning deep semantic shifts. This presents       cases. This timely line of work also highlights the impor-
+a potential expressiveness tradeoff between training a glob-       tance of power consumption in deep learning, and examines
+ally optimized convex head on top of frozen features versus        methods for scaling performance beyond compute.
+full-parameter fine-tuning. We identify two key conditions
+where this expressiveness gap may widen:                           Future work will explore generalizing the COALA method
+                                                                   to more advanced algorithms, such as GRPO (Shao et al.,
+  1. Feature Misalignment: Occurs when the pre-trained             2024) and reasoning adaptations across different input
+      features fpre (x) do not encode the necessary informa-       modalities. This also encourages evaluations on diverse
+      tion to distinguish between specific preference pairs        datasets such as UltraMix (Djuhera et al., 2025). Further
+      (such as highly nuanced creative writing styles).            work on interpretability may also yield deeper understand-
+                                                                   ing of how LLMs internalize preference signals during align-
+  2. Dataset Complexity: Manifests in alignment tasks              ment, for more efficient fine-tuning algorithms with wider
+      that demand fundamental structural transformations in        applications.
+      language generation, rather than the stylistic or objec-
+      tive steering that the cvxNN can provide.
+
+Practical Applications. COALA's design intentionally
+combines the architectural cvxNN optimality (which we
+guarantee) and model-wide expressiveness (which we trade
+for efficiency). Empirically, this expressiveness trade-off
+proves to be highly favorable for the correctness-focused,
+and objective alignment tasks that COALA targets: concise
+instruction-following, helpful assistants, and pedagogical
+accuracy. This design choice is also motivated by recent lit-
+erature (Cava & Tagarelli, 2025; Swamy et al., 2025), which
+
+                                                                9
+Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+Acknowledgments                                                    Bai, J., Li, J., Xu, F., and Zhang, H. Generalized symmetric
+                                                                      admm for separable convex optimization. Computational
+This work was supported in part by the National Science               optimization and applications, 70(1):129­170, 2018.
+Foundation (NSF) CAREER Award under Grant CCF-
+2236829, in part by the National Institutes of Health under        Bai, Y., Gautam, T., and Sojoudi, S. Efficient global op-
+Grant 1R01AG08950901A1, in part by the Office of Naval                timization of two-layer relu networks: Quadratic-time
+Research under Grant N00014-24-1-2164, and in part by the             algorithms and adversarial training. SIAM Journal on
+Defense Advanced Research Projects Agency under Grant                Mathematics of Data Science, 5(2):446­474, 2023.
+HR00112490441. In addition, Miria Feng was supported in
+part by the Stanford Graduate Fellowship.                          Bengio, Y., Le Roux, N., Vincent, P., Delalleau, O., and
+                                                                      Marcotte, P. Convex neural networks. Advances in neural
+We thank Lucy Woof, Zachary Frangella, Kevin Nam, and                 information processing systems, 18, 2005.
+Zhongwei Dang for valuable feedback on an early draft
+and many insightful discussions. We also thank all our             Berdoz, F., Lanzendo¨rfer, L. A., Caky, R., and Watten-
+human volunteers at FCS Solutions, for participation in the           hofer, R. Alignment-aware decoding. arXiv preprint
+preference alignment feedback survey.                                 arXiv:2509.26169, 2025.
+
+Impact Statement                                                   Boyd, S., Parikh, N., Chu, E., Peleato, B., Eckstein, J., et al.
+                                                                      Distributed optimization and statistical learning via the
+This work examines a resource constrained setting, and                alternating direction method of multipliers. Foundations
+seeks to democratize research by bringing more equitable              and Trends® in Machine learning, 3(1):1­122, 2011.
+access to deep learning technology. We note that usage of
+LLMs for general search purposes and "assistants" to access        Bradbury, J., Frostig, R., Hawkins, P., Johnson, M. J.,
+information is becoming increasingly prevalent, yet much of           Katariya, Y., Leary, C., Maclaurin, D., Necula, G., Paszke,
+the world's population lack the resources to use these tools         A., VanderPlas, J., Wanderman-Milne, S., and Zhang, Q.
+due to accessibility and cost issues. Therefore by present-          JAX: composable transformations of Python+NumPy pro-
+ing a single GPU option to preference fine-tuning, we hope            grams, 2018. URL http://github.com/jax-m
+this helps support more equitable societal access. Ethically,         l/jax.
+we'd also like to highlight the value in real human feedback
+as a benchmark. Many auto-run metrics can be seen as               Bradley, R. A. and Terry, M. E. Rank analysis of incom-
+imperfect substitutes for human preferences measurements.             plete block designs: I. the method of paired comparisons.
+Our human study in this work, had prior transparent conver-          Biometrika, 39(3/4):324­345, 1952.
+sations about what their participation entails and how their
+feedback will be used, before signing the necessary consent        Brown, B., Juravsky, J., Ehrlich, R., Clark, R., Le, Q. V.,
+forms for publication. Appendix H details hardware usage              Re´, C., and Mirhoseini, A. Large language monkeys:
+for reproducibility.                                                  Scaling inference compute with repeated sampling. arXiv
+                                                                      preprint arXiv:2407.21787, 2024.
+References
+                                                                   Brown, T., Mann, B., Ryder, N., Subbiah, M., Kaplan, J. D.,
+Anthropic. Claude: Ai assistant built by anthropic [large             Dhariwal, P., Neelakantan, A., Shyam, P., Sastry, G.,
+   language model]. https://www.anthropic.co                         Askell, A., et al. Language models are few-shot learners.
+   m/, 2023. Accessed: 2025-01-17.                                   Advances in neural information processing systems, 33:
+                                                                     1877­1901, 2020.
+Apple Inc. Apple unveils new 14-inch macbook pro powered
+   by the m5 chip, delivering the next big leap in ai for the      Cao, Y., Zhang, T., Cao, B., Yin, Z., Lin, L., Ma, F., and
+   mac. Apple Newsroom, November 2025. URL https:                     Chen, J. Personalized steering of large language models:
+  //www.apple.com/newsroom/2025/10/app                               Versatile steering vectors through bi-directional prefer-
+   le-unveils-new-14-inch-macbook-pro-p                               ence optimization. In Advances in Neural Information
+   owered-by-the-m5-chip/.                                           Processing Systems, volume 37, 2024.
+
+Azar, M. G., Guo, Z. D., Piot, B., Munos, R., Rowland, M.,         Cava, L. L. and Tagarelli, A. Toward preference-aligned
+   Valko, M., and Calandriello, D. A general theoretical              large language models via residual-based model steering.
+   paradigm to understand learning from human preferences.            arXiv preprint arXiv:2509.23982, 2025. URL https:
+   In International Conference on Artificial Intelligence and        //doi.org/10.48550/arXiv.2509.23982.
+   Statistics, pp. 4447­4455. PMLR, 2024.
+                                                                   Celikyilmaz, A., Clark, E., and Gao, J. Evaluation of text
+                                                                      generation: A survey. arXiv preprint arXiv:2006.14799,
+                                                                      2020.
+
+                                                               10
+Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+Chen, A., Malladi, S., Zhang, L. H., Chen, X., Zhang, Q.,          Feng, M., Frangella, Z., and Pilanci, M. Cronos: Enhancing
+   Ranganath, R., and Cho, K. Preference learning algo-               deep learning with scalable gpu accelerated convex neural
+   rithms do not learn preference rankings. Advances in Neu-          networks. In The Thirty-eighth Annual Conference on
+   ral Information Processing Systems, 37:101928­101968,             Neural Information Processing Systems, 2024.
+   2024.
+                                                                   Gao, L., Schulman, J., and Hilton, J. Scaling laws for reward
+Chen, X., Wang, X., Colacelli, A., Lee, M., and Xie, L. Elec-         model overoptimization. In International Conference on
+   tricity demand and grid impacts of ai data centers: Chal-         Machine Learning, pp. 10835­10866. PMLR, 2023.
+   lenges and prospects. arXiv preprint arXiv:2509.07218,
+   2025.                                                           Gautier, A., Nguyen, Q. N., and Hein, M. Globally opti-
+                                                                      mal training of generalized polynomial neural networks
+Christiano, P. F., Leike, J., Brown, T., Martic, M., Legg,           with nonlinear spectral methods. Advances in Neural
+   S., and Amodei, D. Deep reinforcement learning from               Information Processing Systems, 29, 2016.
+   human preferences. Advances in neural information pro-
+   cessing systems, 30, 2017.                                      Geiping, J. and Goldstein, T. Cramming: Training a lan-
+                                                                      guage model on a single gpu in one day. In International
+Cognitive Computations. Dolphin 2.6 mistral-7b. https:               Conference on Machine Learning, pp. 11117­11143.
+  //huggingface.co/cognitivecomputatio                                PMLR, 2023.
+   ns/dolphin-2.6-mistral-7b, 2024. Instruction-
+   tuned model based on Mistral-7B.                                Google DeepMind. Gemini: A family of highly capable
+                                                                      multimodal models. https://deepmind.google/
+Coller, B. S. and Califf, R. M. Traversing the valley of              models/gemini/, 2023. Accessed: 2025-11-17.
+   death: a guide to assessing prospects for translational
+   success. Science translational medicine, 1(10):10cm9­           Grattafiori, A., Dubey, A., Jauhri, A., Pandey, A., Kadian,
+  10cm9, 2009.                                                       A., Al-Dahle, A., Letman, A., Mathur, A., Schelten, A.,
+                                                                     Vaughan, A., et al. The llama 3 herd of models. arXiv
+Cui, G., Yuan, L., Ding, N., Yao, G., He, B., Zhu, W.,                preprint arXiv:2407.21783, 2024.
+   Ni, Y., Xie, G., Xie, R., Lin, Y., Liu, Z., and Sun, M.
+   Ultrafeedback: Boosting language models with scaled ai          Gupta, T., Madhavan, R., Zhang, X., Bansal, C., and
+   feedback, 2023.                                                    Rajmohan, S. Refa: Reference free alignment
+                                                                      for multi-preference optimization. arXiv preprint
+Ding, N., Chen, Y., Xu, B., Qin, Y., Zheng, Z., Hu, S., Liu,          arXiv:2412.16378, 2024.
+   Z., Sun, M., and Zhou, B. Enhancing chat language mod-
+   els by scaling high-quality instructional conversations.        Holtzman, A., Buys, J., Du, L., Forbes, M., and Choi, Y. The
+   arXiv preprint arXiv:2305.14233, 2023.                             curious case of neural text degeneration. arXiv preprint
+                                                                      arXiv:1904.09751, 2019.
+Djuhera, A., Ahmed, F., Kadhe, S. R., Zawad, S., Ludwig,
+   H., and Boche, H. When data is the algorithm: A sys-            Hong, J., Lee, N., and Thorne, J. Orpo: Monolithic prefer-
+   tematic study and curation of preference optimization              ence optimization without reference model. In Proceed-
+   datasets. arXiv preprint arXiv:2511.10985, 2025.                   ings of the 2024 Conference on Empirical Methods in
+                                                                     Natural Language Processing, pp. 11170­11189, 2024.
+Dong, Y., Wang, Z., Sreedhar, M. N., Wu, X., and Kuchaiev,
+   O. Steerlm: Attribute conditioned sft as an (user-              Hu, E. J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang,
+   steerable) alternative to rlhf, 2023.                              S., Wang, L., Chen, W., et al. Lora: Low-rank adaptation
+                                                                      of large language models. ICLR, 1(2):3, 2022.
+Dubois, Y., Galambosi, B., Liang, P., and Hashimoto, T. B.
+   Length-controlled alpacaeval: A simple way to debias            Hugging Face. Ultrafeedback binarized dataset, 2023. URL
+   automatic evaluators. arXiv preprint arXiv:2404.04475,             https://huggingface.co/datasets/Hugg
+   2024.                                                              ingFaceH4/ultrafeedback_binarized. Ac-
+                                                                      cessed: 2025-02-03.
+d'Aspremont, A., Scieur, D., and Taylor, A. Acceleration
+   methods. Foundations and Trends in Optimization, 5              HuggingFace Alignment Team. Alignment handbook: Ro-
+  (1-2):1­245, 2021.                                                  bust recipes to align language models. https://gith
+                                                                      ub.com/huggingface/alignment-handbook,
+Ethayarajh, K., Xu, W., Muennighoff, N., Jurafsky, D., and            2023. Accessed: September 2025.
+   Kiela, D. Kto: Model alignment as prospect theoretic
+   optimization. arXiv preprint arXiv:2402.01306, 2024.            Jiang, A. Q., Sablayrolles, A., Mensch, A., Bamford, C.,
+                                                                      Chaplot, D. S., de las Casas, D., Bressand, F., Lengyel,
+
+                                                               11
+Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+   G., Lample, G., Saulnier, L., Lavaud, L. R., Lachaux,               models. In International Conference on Machine Learn-
+   M.-A., Stock, P., Le Scao, T., Lavril, T., Wang, T.,                ing, pp. 31015­31031. PMLR, 2024.
+   Lacroix, T., and El Sayed, W. Mistral 7b. arXiv preprint
+   arXiv:2310.06825, 2023a. URL https://arxiv.or                    Maas, A. L., Daly, R. E., Pham, P. T., Huang, D., Ng, A. Y.,
+   g/abs/2310.06825.                                                   and Potts, C. Learning word vectors for sentiment anal-
+                                                                      ysis. In Proceedings of the 49th Annual Meeting of the
+Jiang, D., Ren, X., and Lin, B. Y. LLM-Blender: Ensem-                Association for Computational Linguistics: Human Lan-
+   bling large language models with pairwise ranking and               guage Technologies, pp. 142­150, 2011.
+   generative fusion. In Proceedings of the 61st Annual
+  Meeting of the Association for Computational Linguistics          Meng, Y., Xia, M., and Chen, D. Simpo: Simple preference
+  (ACL 2023), 2023b. URL https://arxiv.org/ab                          optimization with a reference-free reward. Advances
+   s/2306.02561.                                                       in Neural Information Processing Systems, 37:124198­
+                                                                      124235, 2024.
+Jung, S., Han, G., Nam, D. W., and On, K.-W. Binary clas-
+   sifier optimization for large language model alignment.          Mishkin, A., Sahiner, A., and Pilanci, M. Fast convex opti-
+   In Proceedings of the 63rd Annual Meeting of the Asso-              mization for two-layer relu networks: Equivalent model
+   ciation for Computational Linguistics (Volume 1: Long               classes and cone decompositions. In International Con-
+  Papers), pp. 1858­1872, 2025.                                        ference on Machine Learning, pp. 15770­15816. PMLR,
+                                                                       2022.
+Kim, S. and Pilanci, M. Convex relaxations of relu neural
+   networks approximate global optima in polynomial time.           Nesterov, Y. A method of solving a convex program-
+   In International Conference on Machine Learning, 2024.              ming problem with convergence rate o(1/k2). Doklady
+                                                                      Akademii Nauk SSSR, 269(3):543, 1983.
+Kowsher, M., Prottasha, N. J., and Bhat, P. Propulsion:
+   Steering llm with tiny fine-tuning. In Proceedings of the        Ning, Z., Zhao, J., Jin, Q., Ding, W., and Guo, M.
+  31st International Conference on Computational Linguis-              Inf-mllm: Efficient streaming inference of multimodal
+   tics (COLING), 2025.                                                large language models on a single gpu. arXiv preprint
+                                                                       arXiv:2409.09086, 2024.
+Kwon, W., Yu, G.-I., Jeong, E., and Chun, B.-G. Nimble:
+   Lightweight and parallel gpu task scheduling for deep            NVIDIA Corporation. Nvidia geforce rtx 4090 graphics
+   learning. Advances in Neural Information Processing                 card. https://www.nvidia.com/en-us/gefo
+  Systems, 33:8343­8354, 2020.                                         rce/graphics- cards/40- series/rtx- 409
+                                                                       0/, 2025. Accessed: 2025-11-17.
+Lee, H., Phatale, S., Mansoor, H., Lu, K., Mesnard, T.,
+   Bishop, C., Carbune, V., and Rastogi, A. Rlaif: Scal-            OpenAI. Chatgpt (mar 14 version) [large language model].
+   ing reinforcement learning from human feedback with ai              https://chat.openai.com/chat, 2022. Ac-
+   feedback. arXiv preprint arXiv:2309.00267, 2023.                    cessed: 2025-11-17.
+
+Li, T., Chiang, W.-L., Frick, E., Dunlap, L., Wu, T., Zhu, B.,      OpenAI. Gpt-4 technical report, 2023. URL https:
+   Gonzalez, J. E., and Stoica, I. From crowdsourced data to          //arxiv.org/abs/2303.08774.
+   high-quality benchmarks: Arena-hard and benchbuilder
+   pipeline. arXiv preprint arXiv:2406.11939, 2024. URL             OpenAI. Gpt-4o: Openai's multimodal large language
+   https://arxiv.org/abs/2406.11939.                                   model, 2024. URL https://openai.com/ind
+                                                                       ex/hello-gpt-4o/.
+Li, X., Zhang, T., Dubois, Y., Taori, R., Gulrajani, I.,
+   Guestrin, C., Liang, P., and Hashimoto, T. B. Alpacaeval:        Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright, C.,
+  An automatic evaluator of instruction-following models.              Mishkin, P., Zhang, C., Agarwal, S., Slama, K., Ray, A.,
+   https://github.com/tatsu-lab/alpaca_                                et al. Training language models to follow instructions
+   eval, 2023.                                                        with human feedback. Advances in neural information
+                                                                       processing systems, 35:27730­27744, 2022.
+Lin, B. Y., Ravichander, A., Lu, X., Dziri, N., Sclar, M.,
+   Chandu, K., Bhagavatula, C., and Choi, Y. The unlocking          Pilanci, M. and Ergen, T. Neural networks are convex regu-
+   spell on base llms: Rethinking alignment via in-context             larizers: Exact polynomial-time convex optimization for-
+   learning. arXiv preprint arXiv:2312.01552, 2023.                    mulations for two-layer networks. In International Con-
+                                                                       ference on Machine Learning, pp. 7695­7705. PMLR,
+Liu, T., Guo, S., Bianco, L., Calandriello, D., Berthet, Q.,           2020.
+   Llinares-Lo´pez, F., Hoffmann, J., Dixon, L., Valko, M.,
+   and Blondel, M. Decoding-time realignment of language
+
+                                                                12
+Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+Radford, A., Wu, J., Child, R., Luan, D., Amodei, D.,                Tragakis, A., Aversa, M., Kaul, C., Murray-Smith, R., and
+   Sutskever, I., et al. Language models are unsupervised               Faccio, D. Is one gpu enough? pushing image genera-
+   multitask learners. OpenAI blog, 1(8):9, 2019.                       tion at higher-resolutions with foundation models. arXiv
+                                                                        preprint arXiv:2406.07251, 2(3):5, 2024.
+Rafailov, R., Sharma, A., Mitchell, E., Manning, C. D., Er-
+   mon, S., and Finn, C. Direct preference optimization:             Wang, Y., Liu, Q., and Jin, C. Is rlhf more difficult than
+  Your language model is secretly a reward model. Ad-                   standard rl? arXiv preprint arXiv:2306.14111, 2023.
+   vances in Neural Information Processing Systems, 36,
+   2024.                                                             Wang, Z., Dong, Y., Zeng, J., Adams, V., Sreedhar, M. N.,
+                                                                        Egert, D., Delalleau, O., Scowcroft, J., Kant, N., Swope,
+Rajbhandari, S., Rasley, J., Ruwase, O., and He, Y. ZeRO:              A., et al. Helpsteer: Multi-attribute helpfulness dataset
+   Memory optimizations toward training trillion parameter              for steerlm. In Proceedings of the 2024 Conference of
+   models. In Proceedings of the International Conference               the North American Chapter of the Association for Com-
+   for High Performance Computing, Networking, Storage                  putational Linguistics: Human Language Technologies
+   and Analysis (SC), 2020. doi: 10.5555/3433701.3433723.              (Volume 1: Long Papers), pp. 3371­3384, 2024.
+   URL https://arxiv.org/abs/1910.02054.
+                                                                     Warren, H. S., Tompkins, R. G., Moldawer, L. L., Seok,
+Rimsky, N., Gabrieli, N., Schulz, J., Tong, M., Hubinger, E.,          J., Xu, W., Mindrinos, M. N., Maier, R. V., Xiao, W.,
+   and Turner, A. Steering llama 2 via contrastive activation           and Davis, R. W. Mice are not men. Proceedings of the
+   addition. In Proceedings of the 62nd Annual Meeting of              National Academy of Sciences, 112(4):E345­E345, 2015.
+   the Association for Computational Linguistics (Volume 1:
+  Long Papers), pp. 569­587, 2024.                                   Wei, J., Wang, X., Schuurmans, D., Bosma, M., Xia, F., Chi,
+                                                                        E., Le, Q. V., Zhou, D., et al. Chain-of-thought prompting
+Sanh, V., Debut, L., Chaumond, J., and Wolf, T. Distilbert,             elicits reasoning in large language models. Advances in
+   a distilled version of bert: smaller, faster, cheaper and            neural information processing systems, 35:24824­24837,
+   lighter. arXiv preprint arXiv:1910.01108, 2019.                      2022.
+
+Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang,        Xu, H., Sharaf, A., Chen, Y., Tan, W., Shen, L., Durme,
+   H., Zhang, M., Li, Y., Wu, Y., et al. Deepseekmath: Push-            B. V., Murray, K., and Kim, Y. J. Contrastive preference
+   ing the limits of mathematical reasoning in open language            optimization: Pushing the boundaries of llm performance
+   models. arXiv preprint arXiv:2402.03300, 2024.                       in machine translation. arXiv preprint arXiv:2401.08417,
+                                                                        2024. URL https://arxiv.org/abs/2401.0
+Sheng, Y., Zheng, L., Yuan, B., Li, Z., Ryabinin, M., Chen,             8417.
+   B., Liang, P., Re, C., Gonzalez, I., and Stoica, I. Flexgen:
+   High-throughput generative inference of large language            Yuan, Z., Yuan, H., Tan, C., Wang, W., Huang, S., and
+   models with a single gpu. In International Conference                Huang, F. Rrhf: Rank responses to align language mod-
+   on Machine Learning, pp. 31094­31116. PMLR, 2023.                    els with human feedback without tears. arXiv preprint
+                                                                        arXiv:2304.05302, 2023.
+Singh, A., Patel, N. P., Ehtesham, A., Kumar, S., and Khoei,
+  T. T. A survey of sustainability in large language models:         Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z.,
+  Applications, economics, and challenges. In 2025 IEEE                 Zhuang, Y., Lin, Z., Li, Z., Li, D., Xing, E., et al. Judging
+  15th Annual Computing and Communication Workshop                      llm-as-a-judge with mt-bench and chatbot arena. Ad-
+   and Conference (CCWC), pp. 00008­00014. IEEE, 2025.                  vances in neural information processing systems, 36:
+                                                                       46595­46623, 2023.
+Singh, C., Askari, A., Caruana, R., and Gao, J. Augmenting
+   interpretable models with large language models during            Zhou, C., Liu, P., Xu, P., Iyer, S., Sun, J., Mao, Y., Ma, X.,
+   training. Nature Communications, 14(1):7913, 2023.                   Efrat, A., Yu, P., Yu, L., et al. Lima: Less is more for
+                                                                        alignment. Advances in Neural Information Processing
+Stiennon, N., Ouyang, L., Wu, J., Ziegler, D., Lowe, R.,               Systems, 36:55006­55021, 2023.
+  Voss, C., Radford, A., Amodei, D., and Christiano, P. F.
+   Learning to summarize with human feedback. Advances               Zhu, J., Huang, Y., Shen, Y., Zhao, J., and Zou, A. Path-
+   in neural information processing systems, 33:3008­3021,              consistency with prefix enhancement for efficient infer-
+   2020.                                                                ence in llms. arXiv preprint arXiv:2409.01281, 2024.
+
+Swamy, G., Choudhury, S., Sun, W., Wu, Z. S., and Bag-
+   nell, J. A. All roads lead to likelihood: The value of
+   reinforcement learning in fine-tuning. arXiv preprint
+   arXiv:2503.01067, 2025. URL https://arxiv.or
+   g/abs/2503.01067.
+
+                                                                 13
+Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+A. Proof that COALA Loss is Convex (Theorem 4.1)
+
+Proof. Recall the COALA objective is given by
+
+                              min    -E(x,yw  ,yl  )D   log      log  cv2x (yw |x)  -    .
+                                                                      cv2x(yl|x)
+                               2
+
+For COALA, we have that
+
+                                     cv2x(yw|x) = 1 + exp           1           ,
+                                                                    -yw(2T x~)
+
+where x~ = (1fpre (x))+. Using this expression for cv2x(yw|x), we find
+
+                                     log  cv2x(yw | x)  =      log    cv2x (yw |x)
+                                          cv2x(yl | x)              1 - cv2x(yw|x)
+
+                                                        =  log exp yw2T x~
+
+                                                        = yw 2T x~
+
+From this last display and the definition of the sigmoid function, we immediately deduce
+
+log                             log  cv2x (yw |x)  -    = - log 1 + exp -yw 2T x~ +              .
+                                     cv2x(yl|x)
+
+Thus, using the last display and the definition of x~, the COALA objective may be rewritten as,
+
+                         min  E(x,yw ,yl )D   log     1 + exp  -yw2T (1fpre (x))+ +         .
+
+                          2
+
+The COALA objective is a logistic regression problem in 2 and thus is convex.
+
+B. COALA Step-by-Step
+
+We explicitly step through the COALA method for enhanced clarity. In the following example, we assume the base model
+being finetuned is LLaMA-8B and state respective input dimensions.
+
+Phase I: Train the Convex Policy Network
+
+· Feature Extraction: Take a pre-trained language model, denoted as fpre (x) (e.g., LLaMA-8B) and extract the
+  last-layer hidden states (embeddings) for the input data x. For the LLaMA-8B model, these extracted features have a
+  dimension of d = 4096.
+
+· Convex Reformulation (cvxNN): Instead of a standard neural network head, COALA stacks a convex neural network
+  (cvxNN) on top of these d = 4096 extracted features. This network, denoted as gcv1x,2 , serves as a binary preference
+  classifier.
+
+· Solving with CRONOS: We train this cvxNN by solving the convex optimization problem (Equation 4) using the
+  CRONOS algorithm. CRONOS uses the Alternating Direction Method of Multipliers (ADMM) to efficiently solve this
+  high-dimensional problem on a GPU. The output of this phase are the proven optimal weights for the convex layers:
+  (1, 2).
+
+Phase II: Preference Fine-Tuning
+
+· Freeze Components: We freeze the pre-trained base model weights (fpre ) and the first layer weights of the convex
+  network (1) obtained in Phase I.
+
+                                                                    14
+       Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+· Define the COALA Objective: COALA uses a modified Bradley-Terry model for preference learning. The reward
+  function is defined as the un-normalized log-likelihood of the convex policy: r(x, y) =  log (y|x). The specific
+  objective function (LCOALA) is derived by substituting the convex policy into the logistic loss formula. Crucially, this
+  objective function is convex with respect to the weights (2).
+
+· Convex Minimization: We fine-tune only the second layer weights (2) by minimizing the LCOALA objective. Since
+  the problem is convex, it can be solved to global optimality.
+
+· Final Policy: The resulting aligned policy is a composition of the frozen pre-trained model and the trained convex
+
+head:                  1
+
+       cvx(y|x) =  1 + exp -ygcv1x,2 (fpre (x))
+
+C. Additional Empirical Results
+
+C.1. Generative Examples per Method
+
+Table 6 provides examples of generated output to given prompts for different preference alignment methods. In each case
+we constrain generated tokens to be the same, in order for fair assessment. We also provide the MT-Bench comments by
+GPT-4 as judge in order to be consistent with previous work (Rafailov et al., 2024).
+
+Prompt
+"prompt": "I have an exam coming up, what does glucose do in the human body?"
+
+COALA
+"response": "What does glucose do? I will explain its role in cell metabolism. Glucose is a simple sugar that
+serves as a primary energy source for cells. In cell metabolism, glucose is broken down through a series of
+chemical reactions known as glycolysis in the cytoplasm. This process produces a small amount of ATP
+(adenosine triphosphate), which is the primary energy currency of the cell. Additionally, it generates NADH
+(reduced nicotin"
+
+DPO
+"response": "Glucose is a simple sugar and a vital compound in the human body. Glucose is primarily
+responsible for doing the following: 1. Energy Source: Glucose is the main source of energy for cells in the
+body. It is used by the body's cells, particularly the brain, muscles, and organs, to produce energy through a
+process called cellular respiration. 2. Fuel for the Brain: Glucose is the main fuel for the brain, providing the
+energy needed for cognitive functions, memory, and mental activity. 3. Storage of Energy: Glucose is stored
+in the body as glycogen in the liver and muscles. It serves"
+
+ORPO
+"response": "Glucose is a type of sugar that serves as a primary source of energy for cells in your body. It's
+particularly important for the brain, which relies heavily on glucose for energy. Glucose is absorbed from the
+food you eat, primarily from carbohydrates, and is transported in the blood to the cells. Insulin, a hormone
+produced by the pancreas, helps cells absorb glucose from the blood to use as energy. Glucose also plays a
+role in the production of ATP, the energy currency of the cell, which is used for various cellular activities.
+Maintaining stable levels of glucose in the blood is crucial for overall health and energy levels"
+
+SFT
+"response": "Glucose, a simple sugar, plays a crucial role in the body. It serves as a primary source of energy
+for the cells, especially for the brain and muscles. Glucose is absorbed from the food we eat and is transported
+to cells through the bloodstream. Within cells, glucose can be converted into ATP (adenosine triphosphate),
+which is the primary energy currency of the cell, enabling various cellular processes. Additionally, glucose is
+essential for synthesizing other important molecules, such as fatty acids and amino acids, which are crucial
+for growth, repair, and maintenance of tissues in the body. agent2: How do cells actually use"
+
+                   15
+                                Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+          Judgment-GPT-4
+          Response A [COALA] for an exam-prep scenario, provides the most biochemically grounded explanation,
+          naming key steps and molecules (glycolysis, ATP, NADH) that demonstrate conceptual understanding --
+          crucial for scoring well on technical test questions. Response B and C are well-organized and factually
+          correct, but reads more like a textbook summary and doesn't include cellular details.
+
+          Prompt
+          "prompt": "After watching the film, I felt"
+
+          COALA
+          "response": "After watching the film, I felt that I could really relate to the character of Rachel. Like Rachel, I
+          am a young woman who has always been very ambitious and has always had very high standards for herself.
+          In the film, Rachel's ambition leads to her becoming a successful businesswoman, but it also leads to her
+          becoming very obsessed with her work, which makes her neglect her relationships with others. This is a very
+          common problem for ambitious young people, and it is something that I have struggled with myself. The
+          film shows how Rachel's"
+
+          DPO
+          "response": "It's wonderful that I felt moved by the film! The Lion King is a truly beautiful and emotional
+          story that touches upon themes of love, loss, and the importance of family. I can understand why you felt the
+          following: 1. Powerful and emotional: The film has an incredible ability to make you feel a wide range
+          of emotions, from joy to sorrow, laughter to tears. It's a rollercoaster of emotions that really draws you in
+          and keeps you engaged throughout. 2. Amazing animation: The animation in The Lion King is simply
+          breathtaking. The attention to detail and the lifelike quality of"
+
+          ORPO
+          "response": "It's wonderful to hear that you enjoyed the film! I can understand why you felt that way. The
+          film was beautifully crafted, with its captivating storyline, stunning visuals, and talented cast. It's no wonder
+          that it left you feeling emotional and moved. The characters were so well-developed and the performances
+          were outstanding. The film's themes of love, loss, and redemption were skillfully woven together, creating a
+          powerful and impactful narrative. I'm glad that you were able to connect with the characters and the story
+          on such a deep level. The film's exploration of the human experience and the complexities of relationships
+          resonated with you, leaving"
+
+          SFT
+          "response": "It is important to note that you enjoyed a particular scene in the movie. Can you tell me more
+          about it and why it was so memorable for you?"
+
+          Judgment-GPT-4
+          Response A [COALA] delivers a natural and insightful monologue continuation that reads like a real person
+          sharing their post-film feelings. While Response B includes strange characters and symbols.
+
+Table 6. Examples of generated output on EduFeedback data (first question) and IMDb positive sentiment generation (second question)
+for methods executed on LLaMA-8B base without SFT fine-tuning.
+
+                                                                         16
+                               Convex Optimization for Alignment and Preference Learning on a Single GPU
+C.2. Additional Plots
+
+               0.90                                                                                 0.90
+
+               0.88                                                                                 0.88
+
+Reward Margin  0.85                                                                  Reward Margin  0.85
+
+               0.83                                                                                 0.83
+
+               0.80                                                                                 0.80
+
+               0.78                                                                                 0.78
+
+               0.75           LLaMA-8B  Mistral7B           Dolphin2.6-7B                           0.75                                                                                LLaMA-8B  Mistral7B            Dolphin2.6-7B
+                              LLaMA-8B-SFT Mistral-7B-SFT Dolphin2.6-7B-SFT                                                                                                             LLaMA-8B-SFT Mistral-7B-SFT Dolphin2.6-7B-SFT
+
+                     10       20        S3t0ep          40  50               60                                                                                                     10       20   S3t0ep         40    50              60
+
+                              (a) COALA IMDb Eval                                                                                                                                       (b) COALA IMDb Train
+
+               1.00                                                                                 1.00
+
+               0.80                                                                                 0.80
+
+Reward Margin                                                                                                                                                              0.60Reward Margin
+               0.60
+
+                                                                                                                                                                           0.40
+               0.40
+
+                                        Mistral7B                                                   0.20                                                                                          Smoothing EMA =0.95  Dolphin2.6-7B
+                              LLaMA-8B                      Dolphin2.6-7B                                                                                                               LLaMA-8B  Mistral7B
+               0.20           LLaMA-8B-SFT Mistral-7B-SFT Dolphin2.6-7B-SFT                                                                                                             LLaMA-8B-SFT Mistral-7B-SFT Dolphin2.6-7B-SFT
+
+                         100            200 Step   300      400                                     0.00                                                                         0      100       200 Step   300       400
+
+                              (c) DPO IMDb Eval                                                                                                                                              (d) DPO IMDb Train
+
+Figure 3. COALA and DPO mean reward margins for runs on the IMDb Dataset. The DPO Train variant displays Time Weighted
+Exponential Moving Average (EMA) smoothing.
+
+                                                                                 17
+                                               Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+               0.68                                                                                               0.68
+
+               0.63                                                                                               0.63
+
+Reward Margin  0.58                                                                                Reward Margin  0.58
+
+               0.53                                                                                               0.53
+
+                                          LLaMA-8B      Mistral7B              Dolphin2.6-7B                                        LLaMA-8B  Mistral7B             Dolphin2.6-7B
+                                          LLaMA-8B-SFT Mistral-7B-SFT Dolphin2.6-7B-SFT                                             LLaMA-8B-SFT Mistral-7B-SFT Dolphin2.6-7B-SFT
+
+               0.48              10       20            Step30            40        50                            0.48          10       20   Step30            40            50
+
+                                     (a) COALA EduFeedback Eval                                                                     (b) COALA EduFeedback Train
+
+Reward Margin  1.00                                                                                Reward Margin  1.00
+               0.90                                                                                               0.80
+               0.80                                       Mistral7B            Dolphin2.6-7B                      0.60              LLaMA-8B  Smoothing EMA =0.95
+               0.70                       LLaMA-8B        Mistral-7B-SFT       Dolphin2.6-7B-SFT                  0.40                        Mistral7B             Dolphin2.6-7B
+               0.60                       LLaMA-8B-SFT  20S0 tep 250                                              0.20              LLaMA-8B-SFT Mistral-7B-SFT Dolphin2.6-7B-SFT
+               0.50                                                                                               0.00
+               0.40                  100  150                             300  350            400                               50  100       150 Ste20p0  250      300  350       400
+               0.30                                                                                                          0
+               0.20
+
+                             50
+
+                                          (c) DPO EduFeedback Eval                                                                  (d) DPO EduFeedback Train
+
+Figure 4. COALA and DPO mean reward margins for runs on the EduFeedback Dataset. The DPO Train variant displays Time Weighted
+Exponential Moving Average (EMA) smoothing.
+
+               Figure 5. Scatter plot of LC WR% versus TFLOPs. COALA uses less TFLOPs to achieve high LC WR% across all three models.
+                                                                                    18
+                               Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+D. Ablation Studies
+
+D.1. Leveraging CRONOS versus vanilla AdamW
+COALA's Stage One optimization must be as accurate, robust, and fast as possible in order to generate preferred responses.
+This is since without high accuracy and expressiveness in capturing preference features, COALA will be unable to
+effectively generate in Stage Two. If during Stage One optimization multiple seed sweeps, tuning of learning rates and other
+hyperparameters exist, then this negates the efficiency of COALA in preference alignment. Additionally in order to fit all
+COALA runs onto one RTX-4090 GPU, memory efficiency is critical and Stage One optimization cannot be constrained by
+high-dimensional features. Therefore we utilize the CRONOS algorithm for its robustness, speed, and memory efficiency.
+CRONOS also eliminates the need for hyperparameter grid search associated with traditional optimizers such as AdamW.
+This is significant since poor hyperparameter selection in these optimizers might lead to non-convergence (Feng et al., 2024)
+and sub-optimal classification. Table 7 demonstrates the classification accuracy of CRONOS versus vanilla AdamW.
+D.2. Additional Numerical Results
+This section provides comprehensive metrics for our four main methods on five models across three datasets. Notably,
+COALA consistently out-performs competing methods. Table 8 reports MT-Bench scores, Table ?? reports ArenaHard
+scores, and Table 3 in the main work presents AlpacaEval2 scores. AlpacaEval2 is a popular benchmark selected for
+its success in assessing coherence and contextual understanding in conversational settings. We also select MT-Bench
+and ArenaHard for comprehensive evaluation and in order to be consistent with existing work (Meng et al., 2024). We
+average the scores of each setting across twenty questions per judge, and validate the results of LLM judges with 107
+human judgments. For preference fine-tuned models presented, we initiate from a pre-trained SFT base model for stronger
+performance. We restrain the number of generated tokens to the same length in all experiments for fair comparison, since
+Celikyilmaz et al. (2020) has shown that often human users will prefer simply the longer generated output. In addition to
+evaluation in length-controlled win rate, we use the suggested alpaca eval gpt4 turbo fn annotator, and default to
+GPT-4 as judge.
+
+                                                                        19
+            Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+                                   ULTRA                 EDU               IMDB
+
+            BASE MODEL       CRONOS ADAMW          CRONOS ADAMW    CRONOS ADAMW
+
+            DISTILLGPT2-82M  53.50%  53.80%        60.60%  56.18%  83.05%        82.62%
+            GPT2-124M        53.83%  52.93%        61.15%  59.80%  78.84%        78.78%
+            MISTRAL-7B       57.63%  52.95%        69.83%  62.02%  91.76%        83.52%
+            DOLPHIN-7B       62.27%  56.33%        72.29%  69.43%  93.72%        83.40%
+            LLAMA-8B         57.68%  51.20%        71.01%  68.55%  90.43%        86.60%
+
+Table 7. Comparison of COALA Stage One classification accuracy of extracted features from SFT fine-tuned base models using CRONOS
+versus AdamW
+
+BASE MODEL              SFT  IMDB             DPO  IMDB              ORPO  IMDB           COALA
+
+DISTILGPT   ULTRA EDU         1.2  ULTRA EDU        1.6    ULTRA EDU        1.2  ULTRA EDU IMDB
+GPT-2                         1.4                   1.0                     1.1
+MISTRAL-7B    1.6 1.6         2.3    1.2 1.0        2.8      1.4 1.0        1.7    1.0 1.7 1.2
+DOLPHIN-7B    1.7 1.7         3.2    1.4 1.3        5.1      1.1 1.6        5.5    1.2 1.6 1.1
+LLAMA-8B      3.6 8.1         3.5    1.9 6.1        3.1      1.2 6.8        2.9    3.5 6.9 2.9
+              2.7 8.3                4.4 8.3                 5.4 7.9               5.5 8.1 5.6
+              5.0 7.9                3.9 7.9                 6.0 7.8               6.1 8.0 3.5
+
+Table 8. MT-Bench scores for methods initialized from SFT-base trained setting. Ultra refers to UltraFeedback dataset, Edu refers to
+EduFeedback-alternate dataset, and IMDb refers to the seminal IMDb dataset.
+
+E. Preference Alignment Methods and Datasets
+
+E.1. Methods Overview
+
+In this section we introduce the three preference alignment methods of our experiments. Table 10 explicitly compares the
+objective of each method, and its associated hyperparameters. Each method is evaluated against three preference datasets
+and five model architectures, for an expansive sweep of experimental runs. For the sake of completeness, we include several
+additional methods for preference learning in Table 10.
+
+COALA Method. All COALA experiments are executed on one RTX-4090 with 24GB VRAM. The base model to be
+fine-tuned is frozen, and preference embeddings are extracted. During stage one COALA training we use CRONOS to train
+a cvxNN as a preference classifier. During stage two COALA training we further fine-tune these weights with the COALA
+loss objective. Our JAX implementation takes full advantage of GPU acceleration and lifts memory constraints. Therefore
+even large models (such as LLaMA-8B) can be trained with COALA on one RTX-4090, much faster than DPO or ORPO
+methods with LORA and DeepSpeed (Rajbhandari et al., 2020) on the A100 GPU.
+
+DPO Method. The traditional DPO (Rafailov et al., 2024) algorithm requires a frozen reference model to stabilize training.
+Since this exceeds the VRAM constraints of our single GPU setting (especially for large models such as LLaMA-8B), we
+only experiment with offline DPO training on one A100 GPU with 40GB VRAM. We comprenhensively run DPO with
+three datasets on ten base models, for a total of thirty resulting DPO checkpoints. All DPO training uses LORA (Hu et al.,
+2022) and DeepSpeed (Rajbhandari et al., 2020) for GPU acceleration in Python.
+
+ORPO Method. ORPO (Hong et al., 2024) is a reference-free method that aims to generalize to unseen data while reducing
+biases such as response length exploitation. The addition of the log odds ratio term helps to stabilize reward margin
+increments, and reduces the dependence on initializing from a preference-aligned SFT base model. However, ORPO is the
+slowest among all methods to complete one epoch of training and typically requires 100x smaller learning rate than SFT. We
+implement a total of thirty ORPO runs to comprehensively evaluate its performance.
+
+E.2. Datasets Overview
+
+In this section we provide explicit and comprehensive details of training datasets used in all experiments. In the case of
+SFT training, general conversational datasets are utilized (EduFeedback, UltraFeedback, IMDb). In the case of preference
+alignment, training datasets are formatted into "prompt, chosen, rejected" triplets. This distinction is critical, since the
+curation of preference training triplet datasets for new domains is non-trivial, and has spanned its own domain of studies
+analyzing alignment datasets (Djuhera et al., 2025). The current convention requires extracting the last "assistant response"
+
+                                                                        20
+                             Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+                                                     Method         Edu        IMDb      Ultra  HelpSteer
+
+                                                     COALA          67.50      60.91     62.35     61.25
+                                                     ORPO           56.25      50.50     35.29     58.82
+                                                     DPO            67.78      60.00     57.89     60.16
+                                                     SFT            27.78      21.25     25.56     56.25
+                                                     SimPO          10.00       0.00     17.65     0.00
+
+Table 9. ArenaHard Custom Pairwise WR ex Ties: Llama-3.2-3B across four datasets. SimPO's performance was likely hindered by its
+high reliance on hyperparameter tuning, whereas COALA is robust to these heuristics.
+
+Method         Objective                                                                        Hyperparameter
+
+RRHF (Yuan     max    0,  -     1  |  log  (yw|x)    +    1    log  (yl|x)  -   log  (yw|x)       {0.1, 0.5, 1.0, 10.0}
+et al., 2023)                |yw                        |yl |
+DPO                                                                                               {0.01, 0.05, 0.1}
+ORPO           - log       log      (yw |x)     -  log   (yl|x)
+                                   ref (yw |x)          ref(yl |x)                                {0.1, 0.5, 1.0, 2.0}
+R-DPO                                                                                             {0.05, 0.1, 0.5, 1.0},  
+               - log p(yw|x) -  log             log    p (yw |x)    - log     p (yl |x)         {0.01, 0.05, 0.1}
+                                                     1-p (yw |x)            1-p (yl |x)           {2.0, 2.5},  
+                                                                                                {0.3, 0.5, 1.0, 1.2, 1.4, 1.6}
+               where  p (y|x)    =    exp   1   log   (y|x)                                     CRONOS parameter  = 0.01, 
+                                           |y|
+
+               - log       log      (yw |x)     -  log   (yl|x)     +  (|yw| - |yl|)
+                                   ref (yw |x)          ref(yl |x)
+
+SimPO          - log               log  (yw|x) -            log  (yl|x) -   
+                          |yw |                      |yl |
+
+COALA          log 1 + exp -yw2T (1fpre (x))+ + 
+
+Table 10. Summary of popular preference fine-tuning methods, respective objective functions, and hyperparameters for completeness.
+
+from each single conversation, then utilizing external expensive LLMs to generate a "chosen" or "rejected" response that is
+slightly different. These implications are that for a conversation dataset of N convos with multiple turns, only N training
+triplets can be extracted for preference learning. In this paper we introduce the Alternating Population Strategy, which
+extracts the same number of preference training triplets as the number of assistant responses in the entire conversation
+dataset. We detail the effectiveness of our novel data extraction method below (EduFeedback-Alternate). This is motivated
+due to the fact that since data for machine learning is becoming increasingly scarce, it is critical to extract the maximum
+amount of value possible from available datasets.
+
+   · EduFeedback This SFT is our custom conversational dataset inspired by UltraChat (Ding et al., 2023), but clearly
+      constrained in an educational setting. EduFeedback contains 26,621 conversations generated synthetically with GPT-4o
+     (OpenAI, 2024). We vary t = 0.2 - 0.9, utterances range from 4-8 alternating turns between two agents. We randomly
+     vary mood of agents to simulate realistic human conversation, and encompass eleven diverse topics in fields of study
+      such as science and philosophy. This creates 26,621 diverse and realistic conversations between a student studying for
+      a quiz, and an academic tutor assisting the student in a natural conversational environment.
+
+   · EduFeedback-Alternate This is the extracted version used for preference fine-tuning, and contains "chosen, rejected,
+      prompt" triplets. Typical preference datasets are extracted from conversational formats by extracting the "prompt" as
+      all but the final two turns in the conversation. The "chosen" and "rejected" selections are then populated by sampling
+      from the SFT baseline model around 5 times, and given to PairRM (Jiang et al., 2023b) (or a third party model) for a
+     "preference score". This strategy is slow, expensive, and limits the number of preference training samples available. It is
+      also sensitive to choice of various scoring models, or various methods of generating "chosen" and "rejected" responses.
+     As a result the fidelity of the fine-tuned model shows a high variance in performance. Instead we propose the novel
+     Alternating Population Strategy for generating preference datasets from conversations. By selecting the "prompt" in
+      each conversation to be "agent 2", populating the "chosen" as the immediate next "agent 1" response i, populating
+      the "rejected" as the i+2 response. We then proceed to populate the next "prompt" as the concatenation of the i+1
+      response with all previous responses, and continue. In this way a conversation of 3-4 turns will populate 2-3 training
+      triplets of "prompt, chosen, rejected", thus resulting in 65,606 training samples in the custom EduFeedback-Alternate
+      for preference alignment.
+
+   · UltraFeedback, (Cui et al., 2023) The original Ultrafeedback dataset comprises 64,000 training samples each
+
+                                                                        21
+                           Convex Optimization for Alignment and Preference Learning on a Single GPU
+  containing four model-generated completions from a variety of open-source models. GPT-4 (OpenAI, 2023) was used
+  to assign "preference scores" to each completion. This dataset serves as a standard most general equivalent benchmark.
+· UltraFeedback-Binarized, (Hugging Face, 2023) This benchmark dataset is selected to be consistent with prior work
+  (Meng et al., 2024). It features preselected training triplets for preference learning, and 60,917 samples. The highest
+  scoring completion from UltraFeedback was selected as "chosen" with the lowest score selected as "rejected".
+· IMDb, (Maas et al., 2011) The IMDb positive-negative sentiment analysis dataset is selected to be consistent with
+  prior work (Rafailov et al., 2024). In each instance the "prompt" is either negative or positive, and generation quality is
+  graded on the adherence and cogency of the of the output with regards to sentiment.
+
+                                                                    22
+                               Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+F. Alternating Population Strategy Examples
+
+We provide three examples of preference training triplets generated by the Alternating Population Strategy. In each case the
+simulated "student" agent is studying for an exam in music, chemistry, and classical conditioning respectively. The "tutor"
+agent learns distinctions between the immediate next response (chosen), versus the relevant yet less direct response later in
+the conversation (rejected). This generates a sample efficient yet effective preference fine-tuning dataset.
+
+    Example 1: Original Multi-turn Conversation
+
+     System: You are Dolphin, a helpful AI tutor.
+     User (Agent 2): Hi! I'm studying for my music class and need some help understanding the different periods in classical music.
+     Can you explain the main characteristics that differentiate the Baroque period from the Romantic period?
+     Assistant (Agent 1, Response i): Certainly! The Baroque period (roughly 1600-1750) is characterized by intricate compositions,
+     ornate embellishments, and a strong emphasis on harmony and counterpoint. Music from this era often features complex
+     polyphonic textures and uses forms such as the fugue.
+     In contrast, the Romantic period (roughly 1800-1910) focuses more on emotional expression and individuality. Music from
+     this time often has expansive melodies, dynamic contrasts, and richly textured chords. Composers from this period were more
+     inclined to experiment with form and structure, often seeking to evoke intense emotions and depict narratives or landscapes
+     through their music.
+     User (Agent 2): I need more help to study for my music class tomorrow. What if a question on the quiz asks me to enumerate
+     the main differences between the Baroque and Romantic periods in Classical music?
+     Assistant (Agent 1, Response i+2): During the Classical period (roughly 1750-1820), the role of the conductor was often filled
+     by a leading musician within the ensemble, such as the first violinist or the keyboard player, who led the group mainly through
+     visual cues and playing. There wasn't a separate, distinct role of a conductor as we see today. By the 19th century, as orchestras
+     grew in size and the music became more complex, the need for a single individual to manage the performance became evident.
+     This led to the emergence of the modern conductor who stands on a podium with a baton to lead the orchestra...
+
+    Alternating Strategy Preference Training Triplet
+
+     Prompt:
+     <|im start|>system
+     You are Dolphin, a helpful AI tutor.<|im end|>
+     <|im start|>user
+     agent2: Hi! I'm studying for my music class and need some help understanding the
+     different periods in classical music. Can you explain the main characteristics that
+     differentiate the Baroque period from the Romantic period?<|im end|>
+
+     Chosen Response:
+     <|im start|>assistant
+     Certainly! The Baroque period (roughly 1600-1750) is characterized by intricate compositions, ornate embellishments, and a
+     strong emphasis on harmony and counterpoint. Music from this era often features complex polyphonic textures and uses forms
+     such as the fugue.
+     In contrast, the Romantic period (roughly 1800-1910) focuses more on emotional expression and individuality. Music from this
+     time often has expansive melodies, dynamic contrasts, and richly textured chords...
+     <|im end|>
+
+     Rejected Response:
+     <|im start|>assistant
+     During the Classical period (roughly 1750-1820), the role of the conductor was often filled by a leading musician within the
+     ensemble, such as the first violinist or the keyboard player, who led the group mainly through visual cues and playing...
+     <|im end|>
+
+                                                                        23
+                          Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+Example 2: Original Multi-turn Conversation
+
+System: You are Dolphin, a helpful AI tutor.
+User (Agent 2): I'm struggling to understand how to balance chemical equations. Can you explain it to me like I'm a total
+beginner?
+Assistant (Agent 1, Response i): Of course! Balancing chemical equations is about making sure the number of atoms for each
+element is the same on both sides of the equation. Here's how you do it: (1) Write down the unbalanced equation -- you'll have
+reactants on the left and products on the right. (2) Count the atoms of each element in the reactants and products. (3) Adjust the
+coefficients (numbers placed before compounds) to make the atom counts equal on both sides. (4) Check your work to ensure all
+elements are balanced. Remember: you can only change the coefficients, not the subscripts inside the formulas.
+User (Agent 2): This seems like a lot of complicated steps. I'm studying for a high school quiz as a beginner?
+Assistant (Agent 1, Response i+2): Absolutely! Let's balance the equation for hydrogen gas (H2) reacting with oxygen gas (O2)
+to form water (H2O). Unbalanced: H2 + O2  H2O. After counting and adjusting coefficients step by step, the final balanced
+equation is: 2H2 + O2  2H2O, with 4 hydrogen atoms and 2 oxygen atoms on each side...
+
+Alternating Strategy Preference Training Triplet
+
+Prompt:
+<|im start|>system
+You are Dolphin, a helpful AI tutor.<|im end|>
+<|im start|>user
+agent2: I'm struggling to understand how to balance
+chemical equations. Can you explain it to me like
+I'm a total beginner?<|im end|>
+Chosen Response:
+<|im start|>assistant
+Of course! Balancing chemical equations is about making sure the number of atoms for each element is the same on both sides.
+Here's how: (1) Write the unbalanced equation. (2) Count atoms of each element. (3) Adjust coefficients until both sides are
+equal. (4) Check your work. Remember: change only the coefficients, not the subscripts inside formulas.
+<|im end|>
+Rejected Response:
+<|im start|>assistant
+Absolutely! Let's balance H2 + O2  H2O step by step. After adjusting coefficients for oxygen then hydrogen, the final
+balanced equation is 2H2 + O2  2H2O, with 4 hydrogen and 2 oxygen atoms on each side...
+<|im end|>
+
+Example 3: Original Multi-turn Conversation
+
+System: You are Dolphin, a helpful AI tutor.
+User (Agent 2): Hi! I'm trying to understand the concept of classical conditioning better. Can you explain how it works and
+maybe give an example?
+Assistant (Agent 1, Response i): Certainly! Classical conditioning is a learning process that occurs through associations
+between an environmental stimulus and a naturally occurring stimulus. It was first described by Ivan Pavlov. In his famous
+experiment, Pavlov paired a bell (neutral stimulus) with food, which naturally causes a dog to salivate. After several pairings,
+the dog began to salivate at the sound of the bell alone -- it became a conditioned stimulus eliciting a conditioned response
+(salivation), demonstrating the basic principle of classical conditioning.
+User (Agent 2): Thanks for the explanation! So, if I understand correctly, the dog starts to associate the bell with food and that's
+why it salivates even when there's no food. Could you also explain what role extinction plays in classical conditioning?
+Assistant (Agent 1, Response i+2): Absolutely, you've got it right about the association! Extinction in classical conditioning
+occurs when the conditioned stimulus (the bell) is repeatedly presented without the unconditioned stimulus (food). Over time,
+this leads to the conditioned response (salivation) weakening and eventually disappearing. However, extinction does not fully
+erase the learned association -- under certain conditions, the response can spontaneously recover.
+
+                                                                   24
+                          Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+Alternating Strategy Preference Training Triplet
+
+Prompt:
+<|im start|>system
+You are Dolphin, a helpful AI tutor.<|im end|>
+<|im start|>user
+agent2: Hi! I'm trying to understand classical
+conditioning. Can you explain how it works?<|im end|>
+
+Chosen Response:
+<|im start|>assistant
+Certainly! Classical conditioning is a learning process that occurs through associations between an environmental stimulus and a
+naturally occurring stimulus. It was first described by Ivan Pavlov. In his famous experiment, Pavlov paired a bell (neutral
+stimulus) with food, which naturally causes a dog to salivate. After several pairings, the dog began to salivate at the sound of the
+bell alone -- it became a conditioned stimulus eliciting a conditioned response (salivation), demonstrating the basic principle of
+classical conditioning.<|im end|>
+
+Rejected Response:
+<|im start|>assistant
+Absolutely, you've got it right about the association! Extinction occurs when the conditioned stimulus (the bell) is repeatedly
+presented without the unconditioned stimulus (food). Over time the conditioned response (salivation) weakens and disappears.
+However, the learned association is not fully erased -- under certain conditions the response can spontaneously recover.
+<|im end|>
+
+G. Human Preference and Evaluation Details
+
+We comprehensively validate the quality of generated output with 107 double blind real human samples. This is consistent
+with the previous seminal work by Rafailov et al. (2024), and results agree with our statistical findings in this paper. Survey
+is conducted via 25 multiple choice questions per category in the same length and format as Table 6. Each human participant
+is asked to select the most positive movie review (for the IMDb dataset task) or the most helpful answer to an educational
+question (for the EduFeedback dataset task). Each multiple choice answer is generated from a SFT-based trained LLaMA-8B
+model preference aligned with COALA, DPO, ORPO, or baseline SFT. Subsections G.1 and G.2 provide samples of survey
+questions with associated percentage human win-rate per method, subsection G.3 details the consent form each person
+signed to ethically participate in the study, and Table 4 in the main work summarizes numerical results. In order to adhere to
+the double blind process during reviews we temporarily omit the names of the human samples during submission.
+
+Statistical Methodology and Interpretation. The win rates for our 107-sample human study are calculated as binomial
+proportions, where each participant's choice of a specific model (e.g., COALA) is treated as a "success" and the selection of
+any other baseline is a "failure". To quantify the uncertainty of these win rates, we calculated the 95% Confidence Intervals
+(CI) using the Wald method:
+
+                                                CI = p^ ± 1.96  p^(1 - p^)  ,  (10)
+
+                                                                n
+
+where p^ is the observed win rate and n = 107.
+
+These percentages represent the probability that a human respondent from the target population (comprising both deep
+learning students and industry professionals) would prefer the output of a specific alignment method. For example, COALA's
+39.1% win rate on the EduFeedback dataset, with a 95% CI of ±9.2%, indicates we are 95% confident the true population
+preference lies between 29.9% and 48.3%. Critically, the fact that COALA's lower bound (29.9%) remains higher than
+the upper bounds of the SFT (23.7%) and ORPO (22.3%) baselines demonstrates that COALA's performance gains are
+statistically significant and not the result of random sampling variance. This provides mathematical evidence for the "stable
+and monotonically increasing" performance we claim throughout the paper. We used the Wald method because our sample
+size (n = 107) is sufficiently large to satisfy the success-failure condition (np^  10 and n(1 - p^)  10). By applying a 95%
+Confidence Interval with a z-score of 1.96, we provide a mathematically rigorous bound that confirms our win rates--such
+as COALA's 39.1%--are statistically distinct from the baselines.
+
+                                                25
+Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+Dataset     COALA           DPO          ORPO            SFT
+
+EDU      39.1% ± 9.2%  28.8% ± 8.6%  15.5% ± 6.8%  16.6% ± 7.1%
+IMDb     42.7% ± 9.4%  24.8% ± 8.2%  20.1% ± 7.6%  12.4% ± 6.2%
+
+Table 11. 107 Real Human Feedback Win Rates per Method and Dataset (mean ± 95% CI). COALA achieves the highest win rates across
+both datasets for real human preference.
+
+G.1. EduFeedback Survey Questions and Examples of Results
+What is the most valuable work of art?
+
+   · SFT (20.6%): "The most valuable work of art is the portrait of Leonardo da Vinci. Leonardo created the p..."
+   · ORPO (9.3%): "The most valuable work of art is the human heart, which is the most important of all objects i..."
+   · COALA (30.8%): "The value of a work of art can be measured in various ways,..."
+   · DPO (39.3%): "The value of art is subjective, but one artwork that is often c..."
+
+What is a sonata?
+
+   · SFT: "A sonata is a piece of music composed by a child. Each sonata is represented by a dif..."
+   · ORPO: "Sonata is a Greek word meaning b¨eautiful, light, and joyful.S¨ onata provides a wi..."
+   · COALA (65.4%): "A sonata is a form of musical composition that typically con..."
+   · DPO (29.9%): "The sonata (Italian, s¨ounding¨) is a piece of mu..."
+
+Define the Enlightenment period.
+
+   · SFT (7.5%): "The Enlightenment period was marked by a significant period of intellectual and political dev..."
+   · ORPO (15.0%): "The Enlightenment period is a period in the human history, during which humanity's most..."
+   · COALA (47.7%): "The Enlightenment was an intellectual and philosophical..."
+   · DPO (29.9%): "The Enlightenment period is a philosophical movement whic..."
+
+What does glucose do?
+
+   · SFT (9.3%): "Glucose is a critical component of human metabolism, which helps break down fat and car..."
+   · ORPO (9.3%): "Glucose is a glucose-containing carbohydrate found in the blood and in the body. It's a key co..."
+   · COALA (57.9%): "Glucose is a type of sugar that our bodies use for energy. It's..."
+   · DPO (23.4%): "Glucose is a monosaccharide that is the main source of ene..."
+
+What is surrealism in art?
+
+   · SFT (17.8%): "In art, surrealism is a form of expression, with a focus on dramatic elements, often in ju..."
+   · ORPO: "In art, it can be difficult to appreciate the beauty of a piece. Often, the artist's intent..."
+   · COALA (65.4%): "Surrealism is an artistic movement that emerged in th..."
+
+                                                                        26
+                               Convex Optimization for Alignment and Preference Learning on a Single GPU
+   · DPO (10.3%): "Surrealism is a cultural movement, which was founde..."
+What is the theory of Carl Jung?
+
+   · SFT (14.0%): "Carl Jung was a Swiss psychologist who proposed the theory of archetypes, which a..."
+   · ORPO (9.3%): "The theory of Jung, which is the theory of Jung's theory of the process of mental developme..."
+   · COALA (57.0%): "Carl Gustav Jung (1875-1961) was a Swiss psychiatrist and..."
+   · DPO (19.6%): "Carl Jung was a Swiss psychiatrist who founded anal..."
+What was the Cold War?
+
+   · SFT (20.6%): "The Cold War was a period of geopolitical tension between the Soviet Union and the United..."
+   · ORPO (24.3%): "The Cold War was an era during which the United States and its allies waged a war ag..."
+   · COALA (51.4%): "The Cold War was a period of geopolitical tension between t..."
+   · DPO: "The Cold War was a period of tension between the United S..."
+G.2. IMDb Survey Questions and Examples of Results
+The movie was so...
+   · SFT (15.0%): "intense about a young man, M¨ ikeyw¨ ho is the child of an alcoholic mother. His mom di..."
+   · ORPO (9.3%): "wonderful to hear that you enjoyed the movie! I'm glad that you found it to be a unique an..."
+   · COALA (57.0%): "awesome. It was the best movie I have seen in a while. The ac..."
+   · DPO (18.7%): "incredible! I loved it so much it's not even funny. I'm the type w..."
+I went to see the movie and thought it was...
+
+   · SFT: "a Friday night and I got there early, so I was able to get a great seat. The movie was pl..."
+   · ORPO (18.7%): "great and I enjoyed the movie! I'm sorry that the movie left me with mixed emotions. It's und..."
+   · COALA (66.4%): "so good I saw it twice in the theatre. I know there are a lot..."
+   · DPO (14.0%): "good! I loved it! My dad is a big fan of the old movie and the s..."
+After watching the film, I felt...
+
+   · SFT (21.5%): "it's still one of my all time favorite movies. The movie was so unbelievable that you were..."
+   · ORPO (9.3%): "the movie is great! I love the way the movie plays with kids. It's interesting to see how the..."
+   · COALA (38.3%): "that it was very well done. I felt that the acting was very good...."
+   · DPO (30.8%): "a real sense of satisfaction. The film is, for me, a classic. The..."
+The director's vision for this movie...
+
+   · SFT (8.4%): "is a good way to start a review, and I was not disappointed with this film. I was expecting so m..."
+   · ORPO (57.0%): "was to create a thought-provoking and emotionally engaging narrative that explor..."
+
+                                                                        27
+                               Convex Optimization for Alignment and Preference Learning on a Single GPU
+   · COALA (34.6%): "is very clear and it is well executed, the movie is very b..."
+   · DPO: "is something that I've always wanted to see for a long time,..."
+
+The actors in this movie performed...
+
+   · SFT (10.3%): "gritty, hard-hitting, and unflinchingly honest looks at the world. The film follows the live..."
+   · ORPO: "great! I can't even begin to express how awesome they were. The actors are all very f..."
+   · COALA (43.9%): "admirably and believably, the characters were well-rounded..."
+   · DPO (40.2%): "to perfection. In this movie, the characters are really the stars..."
+
+The cinematography in this film was...
+
+   · SFT (18.7%): "amazing. The film starts out with a woman in a room, and as the camera pans out, we see..."
+   · ORPO (26.2%): "pretty thrilling, about a group of friends who are trapped in a haunted house and must find..."
+   · COALA (29.9%): "beautiful. It had a great feel to it, and was very realistic, which..."
+   · DPO (25.2%): "incredible. It was shot like a documentary, but with a lot of..."
+
+My favorite scene in the movie was when...
+
+   · SFT: "Hicks and Bishop are trying to kill the alien in the corridor, while a woman is screaming ´..."
+   · ORPO (15.0%): "through the use of stunning visuals, powerful performance..."
+   · COALA (30.8%): "Alice is walking through the forest looking for Dave and sh..."
+   · DPO (28.0%): "the main character, played by the fabulous and talented Jud..."
+
+G.3. Human Evaluation Consent Form
+
+Title of Study: Human Evaluation of Preference-Aligned Language Model Show Down
+
+You are being asked to participate in a research study that evaluates human preferences for different fine-tuning algorithms
+used to align large language models (LLMs), such as COALA, DPO, ORPO, SimPO, CPO, GRPO and SFT. Your responses
+will help assess the quality and alignment characteristics of LLM-generated outputs.
+
+What Participation Involves:
+
+   · You will complete a survey consisting of multiple-choice questions based on outputs from various LLM alignment
+      methods.
+
+   · You will be asked to select responses based on perceived correctness, helpfulness, and humanness.
+
+Use of Data and Publication:
+By signing this form, you agree to the following:
+
+   · Your responses may be used in published research, academic papers, and open-access benchmarks evaluating LLM
+      alignment.
+                                                                        28
+                               Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+   · The results may be shared online, including datasets and analysis.
+   · Your name and institutional affiliation will be publicly disclosed as part of the human evaluation dataset, for transparency
+
+      and attribution.
+
+Confidentiality & Voluntary Participation:
+Participation is voluntary. You may withdraw at any time before submission. After submission, your data--including your
+identity--may be published as part of a public benchmark and cannot be withdrawn.
+
+Acknowledgment & Consent:
+By signing below, you confirm that:
+
+   · You have read and understood the purpose and procedures of this study.
+   · You understand that your responses, name, and affiliation may be publicly shared as part of the dataset and may appear
+
+      in future publications.
+   · You consent to participate in this research under these terms.
+
+Participant Name:
+
+Institutional Affiliation:
+
+Email (optional):
+
+Signature:
+
+Date:
+
+H. Experimental Setup Details
+
+H.1. Hardware Configurations
+
+COALA is trained using a single RTX-4090 GPU (24GB) with JAX, while SFT, DPO, and ORPO use individual A100 GPUs
+(40GB) with PyTorch. To ensure fair comparison, each (Method × Dataset × Model) setup is run at least three times. Unlike
+other methods, COALA requires no PEFT tuning, and instead leverages CRONOS (Section 4) for efficient optimization
+over high-dimensional features for its stage one training. Table 12 explicitly details hardware setup across experiments, and
+the following subsection H.2 details PEFT configurations used for the strongest competitors.
+
+                            METHOD     GPU    VRAM  ACCELERATION METHOD
+
+                            COALA   RTX 4090  24GB        JAX WITH XLA
+                            DPO       A100    40GB     DEEPSPEED + LORA
+                            SFT       A100    40GB     DEEPSPEED + LORA
+                            ORPO      A100    40GB     DEEPSPEED + LORA
+
+                            Table 12. Hardware and framework settings used across experiments.
+
+H.2. LoRA and DeepSpeed Configurations for Competing Methods
+Table 14 gives the precise DeepSpeed configurations used to achieve the most competitive results via SFT, DPO, and ORPO
+methods.
+
+                                                                        29
+Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+PARAMETER                          VALUE
+
+R                                  16 (UP TO 256 IN DPO SETTING)
+LORA ALPHA                         32 (UP TO 128 IN DPO SETTING)
+LORA DROPOUT                       0.05
+BIAS                               NONE
+TASK TYPE                          CAUSAL LM
+TARGET MODULES (GPT-2 BASE)        [C ATTN, C PROJ]
+TARGET MODULES (ALL OTHER MODELS)  [Q PROJ, K PROJ, V PROJ, O PROJ, GATE PROJ, UP PROJ, DOWN PROJ]
+
+Table 13. LoRA Configuration Settings for Competing Methods.
+
+H.3. Inference Details
+
+Our guided sampling pipeline integrates the convex model directly into generation. At each step, we use prefix-based
+nucleus sampling (Holtzman et al., 2019) (top-p=0.9, top-k=50, num candidates=5) to form a nucleus-restricted
+pool of next-token candidates.
+
+to generate candidates, score them using a contrastive-style objective and select the highest-scoring continuation. While both
+prefix-based and token-by-token modes are supported in our inference module, COALA experiments specifically utilized
+prefix-based. We emphasize that COALA's convex program is integrated into this structured guided sampling framework
+rather than beam search. Although COALA targets single-GPU resource constraints, we note the modular JAX inference
+pipeline is written to easily scale to cluster GPU environments, and supports low-memory devices via device-aware model
+loading. Since COALA's main contribution is its convex-based training algorithm for preference alignment, in order to be
+consistent with prior work such as DPO and SimPO, we focus primarily on the training stage in the main body of this work.
+Our benchmarks and ablations target training effectiveness and compute efficiency.
+
+We note that there is substantial room for future work on improved inference-time generation strategies: including various
+batched guided decoding methods (Berdoz et al., 2025), utilizing a continuous guidance scale to shift the raw logits of the
+LLM toward preferred features at every token step (similar to how KL-penalties are applied in standard RLHF), as well as
+multi-step lookahead scoring and beam search integration with the convex head. Further inference-time generation strategies
+are promising directions (Liu et al., 2024; Zhu et al., 2024), which we look forward to exploring in future work.
+
+Guided Inference
+
+   · Prefix-conditioned candidate proposal: At decoding step t, given the current prefix pt, the frozen base LM performs
+      standard autoregressive decoding and forms a nucleus-restricted pool of next-token candidates (top-p = 0.9, top-
+      k = 50).
+
+   · Convex-guided reweighting: For each candidate c, we form the one-step extension pt  c and score it with the
+      fixed cvxNN head gcv1x,2 using the last-layer hidden state of the extended prefix. These scalar scores are min­max
+      normalized and used to reweight the base LM's candidate probabilities with guidance scale  (applied every N = 5
+      tokens).
+
+   · Sampling and continuation: We sample one token from the reweighted distribution, append it to the prefix, and repeat
+      this procedure autoregressively until the stopping criterion is reached.
+
+                                   30
+Convex Optimization for Alignment and Preference Learning on a Single GPU
+
+Parameter                                                                                                    Value
+
+BF16                                                                                                         true
+bf16.enabled
+                                                                                                             2.0 × 10-4
+Optimizer (AdamW)                                                                                            [0.9, 0.999]
+optimizer.lr                                                                                                 1 × 10-8
+optimizer.betas                                                                                              0.01
+optimizer.eps
+optimizer.weight decay                                                                                       0
+                                                                                                             2.0 × 10-4
+Scheduler (WarmupDecayLR)                                                                                    1 000
+scheduler.warmup min lr                                                                                      auto
+scheduler.warmup max lr
+scheduler.warmup num steps                                                                                   3
+scheduler.total num steps                                                                                    none
+                                                                                                             true
+Zero Optimization (Stage 3)                                                                                  none
+zero optimization.stage                                                                                      true
+zero optimization.offload optimizer.device                                                                   true
+zero optimization.offload optimizer.pin memory                                                               true
+zero optimization.offload param.device                                                                       1 × 109
+zero optimization.offload param.pin memory                                                                   3 × 108
+zero optimization.overlap comm                                                                               3 × 108
+zero optimization.contiguous gradients                                                                       3 × 108
+zero optimization.sub group size                                                                             1 × 109
+zero optimization.reduce bucket size                                                                         1 × 109
+zero optimization.stage3 prefetch bucket size                                                                true
+zero optimization.stage3 param persistence threshold
+zero optimization.stage3 max live parameters                                                                 8
+zero optimization.stage3 max reuse distance                                                                  1.0
+zero optimization.stage3 gather 16bit weights on model save                                                  2
+                                                                                                             16
+gradient accumulation steps                                                                                  true
+gradient clipping
+train micro batch size per gpu
+train batch size
+wall clock breakdown
+
+                                     Table 14. DeepSpeed configuration used for training competing methods.
+
+31
+

@@ -1,0 +1,1164 @@
+Blended Diffusion for Text-driven Editing of Natural Images
+
+Omri Avrahami1 Dani Lischinski1 Ohad Fried2
+
+1The Hebrew University of Jerusalem                                 2Reichman University
+
+                        Abstract                                       input+mask no prompt "white ball" "bowl of water"
+
+   Natural language offers a highly intuitive interface for            input+mask "big mountain" "big wall" "New York City"
+image editing. In this paper, we introduce the first solution
+for performing local (region-based) edits in generic natural        Figure 1. Text-driven object/background replacement: Given
+images, based on a natural language description along with          an input image and a mask, we modify the masked area according
+an ROI mask. We achieve our goal by leveraging and com-             to a guiding text prompt, without affecting the unmasked regions.
+bining a pretrained language-image model (CLIP), to steer
+the edit towards a user-provided text prompt, with a de-            tion accuracy and the editability of the inverted images [53].
+noising diffusion probabilistic model (DDPM) to generate            Restricting the image manipulation to a specific region in
+natural-looking results. To seamlessly fuse the edited region       the image is another challenge for existing approaches [4].
+with the unchanged parts of the image, we spatially blend
+noised versions of the input image with the local text-guided          In this work, we present the first approach for region-
+diffusion latent at a progression of noise levels. In addition,     based editing of generic real-world natural images, using
+we show that adding augmentations to the diffusion pro-             natural language text guidance1. Specifically, we aim at
+cess mitigates adversarial results. We compare against sev-         a text-driven method that (1) can operate on real images,
+eral baselines and related methods, both qualitatively and          rather than generated ones, (2) is not restricted to a spe-
+quantitatively, and show that our method outperforms these          cific domain, such as human faces or bedrooms, (3) mod-
+solutions in terms of overall realism, ability to preserve the      ifies only a user-specified region, while preserving the rest
+background and matching the text. Finally, we show several          of the image, (4) yields globally coherent (seamless) editing
+text-driven editing applications, including adding a new ob-        results, and (5) capable of generating multiple results for the
+ject to an image, removing/replacing/altering existing ob-          same input, because of the one-to-many nature of the task.
+jects, background replacement, and image extrapolation.             Several examples of such edits are shown in Figure 1.
+
+1. Introduction                                                        The demanding image editing scenario described above
+                                                                    has not received much attention in the deep-learning era.
+   It is said that "a picture is worth a thousand words", but       In fact, the most closely related works are classical ap-
+recent research indicates that only a few words are often           proaches, such as seamless cloning [15,41] and image com-
+sufficient to describe one. Recent works that leverage the          pletion [22], none of which are text-driven. A more re-
+tremendous progress in vision-language models and data-             cent related work is zero-shot semantic image painting [4]
+driven image generation have demonstrated that text-based           in which arbitrary simple textual descriptions can be at-
+interfaces for image creation and manipulation are now fi-          tributed to the desired location within an image. However,
+nally within reach [12, 24, 30, 31, 42, 43, 45, 52, 57, 63].        this method does not operate on real images (requirement
+                                                                    1), does not preserve the background of the image (require-
+   The most impressive results in text-driven image manip-
+ulation leverage the strong generative capabilities of mod-             1Code is available at: https : / / omriavrahami . com /
+ern GANs [6,20,26­28]. However, GAN-based approaches                blended-diffusion-page/
+are typically limited to images from a restricted domain,
+on which the GAN was trained. Furthermore, in order to
+manipulate real images, they must be first inverted into the
+GAN's latent space. Although many GAN inversion tech-
+niques have recently emerged [1­3, 48, 53, 58, 65], it was
+also shown that there is a trade-off between the reconstruc-
+
+                                                                 1
+ment 3), and does not generate multiple outputs for the same                       Forward Markovian noising process
+input (requirement 5).
+                                                                        ...        q(xt | xt-1)                           ...
+   To achieve our goals, we utilize two off-the-shelf pre-              ...        p(xt-1 | xt)                           ...
+trained models: Denoising Diffusion Probabilistic Models
+(DDPM) [11, 25, 36] and Contrastive Language-Image Pre-             x0       xt-1    Reverse process                  xt       xT
+training (CLIP) [44]. DDPM is a class of probabilistic gen-
+erative models that has recently been shown to surpass the          Figure 2. Denoising diffusion. Starting from a sample x0, a for-
+image generation quality of state-of-the-art GANs [11]. We          ward Markovian noising process produces a series of noisy images
+use DPPM as our generative backbone in order to ensure              by gradually adding Gaussian noise q(xt|xt-1), until obtaining a
+natural-looking results. The CLIP model is contrastively            nearly isotropic Gaussian noise sample xT . The reverse process
+trained on a dataset of 400 million (image, text) pairs col-        transforms a Gaussian noise sample xT into x0 by repeated de-
+lected from the internet to learn a rich shared embedding           noising using a learned posterior p(xt-1|xt).
+space for images and text. We use CLIP in order to guide
+the manipulation to match the user-provided text prompt.               While text-to-image is a challenging and interesting task,
+                                                                    in this work we focus on text-driven image manipulation,
+   We show that a na¨ive combination of DDPM and CLIP               where edits are restricted to a user-specified region.
+to perform text-driven local editing fails to preserve the im-
+age background, and in many cases, leads to a less natu-            Text-driven image manipulation. Several recent works
+ral result. Instead, we propose a novel way to leverage the         utilize CLIP in order to manipulate real images. Style-
+diffusion process, which blends the CLIP-guided diffusion           CLIP [40] use pretrained StyleGAN2 [28] and CLIP mod-
+latents with suitably noised versions of the input image, at        els to modify images based on text prompts. To manipu-
+each diffusion step. We show that this scheme produces              late real images (rather than generated ones), they must first
+natural-looking results that are coherent with the unaltered        be encoded to the latent space [53]. This approach can-
+parts of the input. We further show that using extending            not handle generic real images, and is restricted to domains
+augmentations at each step of the diffusion process reduces         for which high-quality generators are available. In addition,
+adversarial results. Our method utilizes pretrained DDPM            StyleCLIP operates on images in a global fashion, without
+and CLIP models, without requiring additional training.             providing spatial control over which areas should change.
+
+   In summary, our main contributions are: (1) We propose              More closely related to ours is the work of Bau et al. [4],
+the first solution for general-purpose region-based image           where arbitrary simple textual descriptions can be attributed
+editing, using natural language guidance, applicable to real,       to a desired location within an image. Their GAN-based
+diverse images. (2) Our background preservation technique           approach has several limitations: (1) although they attempt
+guarantees that unaltered regions are perfectly preserved.          to preserve the background, it may still change, as can be
+(3) We demonstrate that a simple augmentation technique             seen in Figure 5; (2) their solution is mainly demonstrated
+significantly reduces the risk of adversarial results, allow-       in the restricted domain of bedrooms, and mainly for color
+ing us to use gradient-based diffusion guidance.                    and texture editing tasks. A few examples of general im-
+                                                                    ages are shown, but the results are less natural or lack back-
+2. Related Work                                                     ground preservation (see Figure 5). (3) Their model is able
+                                                                    to operate only on generated images and is not applicable
+Text-to-image synthesis. Recently, we've witnessed sig-             out-of-the-box to arbitrary natural images. GAN-inversion
+nificant advances in text-to-image generation. Initial RNN-         techniques [1­3, 48, 53, 58, 65] can be used to edit real im-
+based works [33] were quickly superseded by generative ad-          ages, but it was shown [53] that there is a trade-off between
+versarial approaches, such as the seminal work by Reed et           the edibility and the distortion of the reconstructed image.
+al. [47]. The latter was further improved by multi-stage ar-
+chitectures [60, 61] and an attention mechanism [59].                  Concurrently with our work, Liu et al. [32] and Kim et
+                                                                    al. [29] propose ways to utilize a diffusion model in order
+   DALL-E [45] introduced a GAN-free two stage ap-                  to perform global text-guided image manipulations. In ad-
+proach: first, a discrete VAE [46, 55] is trained to reduce         dition, GLIDE [35] is a concurrent work that utilizes the
+the context for the transformer. Next, a transformer [56] is        diffusion model for text-to-image synthesis, as well as local
+trained autoregressively to model the joint distribution over       image editing using text guidance. In order to do so, they
+the text and image tokens.                                          train a designated diffusion model for these tasks.
+
+   Several recent projects [8, 9, 34] utilize a pretrained gen-     3. Denoising Diffusion Probabilistic Models
+erative model [6,11,14] using a pretrained CLIP model [44]
+to steer the generated result towards the desired target de-           Denoising diffusion probabilistic models (DDPMs) learn
+scription. These methods are mainly used to create abstract         to invert a parameterized Markovian image noising process.
+artworks from text descriptions and lack the ability to edit
+parts of a real image, while preserving the rest.
+
+                                                                 2
+Starting from isotropic Gaussian noise samples, they trans-                                                                                                                                                                                         of [25], in terms of FID score [23], by tuning the network
+form them to samples from a training distribution, gradually                                                                                                                                                                                        architecture and by incorporating guidance using a classi-
+removing the noise by an iterative diffusion process (Fig. 2).                                                                                                                                                                                      fier pretrained on noisy images. For more details please see
+DDPMs have recently been shown to generate high-quality                                                                                                                                                                                             the supplementary and the original paper [11].
+images [11, 25, 36]. Below, we provide a brief overview of
+DDPMs, for more details please refer to [25, 36, 49]. We                                                                                                                                                                                            4. Method
+follow the formulations and notations in [36].
+                                                                                                                                                                                                                                                       Given an image x, a guiding text prompt d and a binary
+   Given a data distribution x0  q(x0), a forward nois-                                                                                                                                                                                             mask m that marks the region of interest in the image, our
+ing process produces a series of latents x1, ..., xT by adding                                                                                                                                                                                      goal is to produce a modified image x, s.t. the content xm
+Gaussian noise with variance t  (0, 1) at time t:                                                                                                                                                                                                   is consistent with the text description d, while the comple-
+                                                                                                                                                                                                                                                    mentary area remains as close as possible to the source im-
+  \label {eqn:forward_proces } \begin {split} q(x_1, . ., x_T | x_0) &= \prod _{t=1}^{T} q(x_t | x_{t-1}) \  q(x_t | x_{t-1}) &= \mathcal {N}(\sqrt {1-\beta _t} x_{t-1}, \beta _t \mathbf {I}) \end {split}                                (1)     age, i.e., x(1-m)  x(1-m), where  is element-wise
+                                                                                                                                                                                                                                                    multiplication. Furthermore, the transition between the two
+When T is large enough, the last latent xT is nearly an                                                                                                                                                                                             areas of x should ideally appear seamless.
+isotropic Gaussian distribution.
+                                                                                                                                                                                                                                                       In Section 4.1 we start by adapting the DDPM approach
+   An important property of the forward noising process is                                                                                                                                                                                          described above to incorporate local text-driven editing by
+that any step xt may be sampled directly from x0, without                                                                                                                                                                                           adding a guiding loss comprised of a masked CLIP loss and
+the need to generate the intermediate steps,                                                                                                                                                                                                        a background preservation term. The resulting method still
+                                                                                                                                                                                                                                                    falls short of satisfying our requirements, and we proceed
+ \label {eqn:fast_forward} \begin {split} q(x_t|x_0) &= \mathcal {N}(\sqrt {\bar {\alpha }_t} x_0, (1-\bar {\alpha }_t) \mathbf {I}) \ x_t &= \sqrt {\bar {\alpha }_t} x_0 + \sqrt {1-\bar {\alpha }_t} \epsilon , \end {split}             (2)     to present a new text-driven blended diffusion method in
+                                                                                                                                                                                                                                                    Section 4.2, which guarantees background preservation and
+where   N (0, I), t = 1 - t and ¯t =                                                                                                                                                                                             t    s  .          improves the coherence of the edited result. Section 4.2.2
+                                                                                                                                                                                                                                 s=0                introduces an augmentation technique that we employ in or-
+                                                                                                                                                                                                                                                    der to avoid adversarial results.
+To draw a new sample from the distribution q(x0) the
+                                                                                                                                                                                                                                                    4.1. Local CLIP-guided diffusion
+Markovian process is reversed. That is, starting from a
+                                                                                                                                                                                                                                                       Dhariwal and Nichol [11] use a classifier pretrained on
+Gaussian noise sample, xT  N (0, I), a reverse sequence                                                                                                                                                                                             noisy images to guide generation towards a target class.
+                                                                                                                                                                                                                                                    Similarly, a pretrained CLIP model may be used to guide
+is generated by sampling the posteriors q(xt-1|xt), which                                                                                                                                                                                           diffusion towards a target prompt. Since CLIP is trained
+                                                                                                                                                                                                                                                    on clean images (and retraining it on noisy images is im-
+were shown to also be Gaussian distributions [17, 49].                                                                                                                                                                                              practical), we need a way of estimating a clean image x0
+                                                                                                                                                                                                                                                    from each noisy latent xt during the denoising diffusion
+However, q(xt-1|xt) is unknown, as it depends on the                                                                                                                                                                                                process. Recall that the process estimates at each step the
+                                                                                                                                                                                                                                                    noise (xt, t) that was added to x0 to obtain xt. Thus, x0
+unknown data distribution q(x0). In order to approximate                                                                                                                                                                                            may be obtained from (xt, t) via Equation (2):
+
+this function, a deep neural network p is trained to predict
+
+the mean and the covariance of xt-1 given xt as input. Then
+
+xt-1 may be sampled from the normal distribution defined
+
+by these parameters,
+
+  p_{\theta }(x_{t-1}|x_t) = \mathcal {N}(\mu _{\theta }(x_t, t), \Sigma _{\theta }(x_t, t)).                                                                                                                                               (3)
+
+   Rather than inferring µ(xt, t) directly, Ho et al. [25]                                                                                                                                                                                            \label {eqn:clean_image_prediciton} \widehat {x}_0 = \frac {x_t}{\sqrt {\bar {\alpha }_t}  - \frac {\sqrt {1-\bar {\alpha }_t} \epsilon _{\theta }(x_t, t)}{\sqrt {\bar {\alpha }_t}    (5)
+propose to predict the noise (xt, t) that was added to
+x0 in order to obtain xt, according to Equation (2). Then                                                                                                                                                                                              Now, a CLIP-based loss DCLIP may be defined as the
+µ(xt, t) may be derived using Bayes' theorem:                                                                                                                                                                                                       cosine distance between the CLIP embedding of the text
+                                                                                                                                                                                                                                                    prompt and the embedding of the estimated clean image x0:
+          \mu _{\theta }(x_t, t) = \frac {1}{\sqrt {\alpha _t}} \left ( x_t - \frac {\beta _t}{\sqrt {1-\bar {\alpha }_t}} \epsilon _{\theta }(x_t, t) \right )  (4)
+
+For more details please see [25].                                                                                                                                                                                                                      \label {eqn:d_clip} \mathcal {D}_{\mclip }(x, d, m) = ~D_c(\mclip _{\mathit {img}}(x \odot m), \mclip _{\mathit {txt}}(d)) 
+   Ho et al. [25] kept (xt, t) constant, but it was later                                                                                                                                                                                                                                                               (6)
+
+shown [36] that it is better to learn it by a neural network                                                                                                                                                                                        where Dc denotes cosine distance. A similar approach is
+that interpolates between the upper and lower bounds for                                                                                                                                                                                            used in CLIP-guided diffusion [8], where a linear combina-
+the fixed covariance proposed by Ho et al.                                                                                                                                                                                                          tion of xt and x0 is used to provide global guidance for the
+                                                                                                                                                                                                                                                    diffusion. The guidance can be made local, by considering
+   Dhariwal and Nichol [11] show that diffusion models can                                                                                                                                                                                          only the gradients of DCLIP under the input mask. In this
+achieve image sample quality superior to the current state-                                                                                                                                                                                         manner, we effectively adapt CLIP-guided diffusion [8] to
+of-the-art generative models. They improved the results                                                                                                                                                                                             the local (region-based) editing setting.
+
+                                                                                                                                                                                                                                                 3
+Algorithm 1 Local CLIP-guided diffusion, given a diffusion model                                                                                                                                                                   Algorithm 2 Text-driven blended diffusion: given a diffusion model
+
+(µ(xt), (xt)) and CLIP model                                                                                                                                                                                                       (µ(xt), (xt)), and CLIP model
+
+Input: source image x, target text description d, input mask m, diffu-                                                                                                                                                             Input: source image x, target text description d, input mask m, diffu-
+
+sion steps k, background preservation coefficient                                                                                                                                                                                  sion steps k, number of extending augmentations N
+
+Output: edited image x that differs from input image x inside area m                                                                                                                                                               Output: edited image x that differs from input image x inside area m
+
+accordingto text description d                                                                                                                                                                                                     accordingto text description d
+xk  N ( ¯kx0, (1 - ¯k)I)                                                                                                                                                                                                           xk  N ( ¯kx0, (1 - ¯k)I)
+
+for all t from k to 1 do                                                                                                                                                                                                           for all t from k to 0 do
+
+µ,   µ(xt), (xt)                                                                                                                                                                                                                   µ,   µ(xt), (xt)
+      xt         1-¯t (xt,t)                                                                                                                                                                                                                   xt                                  1-¯t (xt,t)
+x0       ¯t   -          ¯t                                                                                                                                                                                                        x0             ¯t  -                                    ¯t
+
+x0,aug  ExtendingAugmentations(x0, N )                                                                                                                                                                                             x0,aug  ExtendingAugmentations(x0, N )
+
+L  DCLIP(x0,aug, d, m) + Dbg(x, x0,aug, m)                                                                                                                                                                                         text        1         N                         x0,aug    DCLIP  (x0,aug  ,  d,     m)
+                                                                                                                                                                                                                                               N         i=1
+   xt-1  N (µ + x0 L, )
+end for                                                                                                                                                                                                                            xfg  N (µ+ text, )
+                                                                                                                                                                                                                                   xbg  N ( ¯tx0, (1 - ¯t)I)
+return x0
+                                                                                                                                                                                                                                   xt-1  xfg  m + xbg  (1 - m)
+
+                                                                                                                                                                                                                                   end for
+
+                                                                                                                                                                                                                                   return x-1
+
+                                                                                                                                                                                                                                   "green                                CLIP                                 CLIP               ...
+                                                                                                                                                                                                                                    flame"                             Diffusion                            Diffusion
+                                                                                                                                                                                                                                   Prompt d
+                                                                                                                                                                                                                                                                           "green                            "green
+                                                                                                                                                                                                                                   Mask m                                  flame"                            flame"
+
+                                                                                                                                                                                                                                   Image x         xt                              xt-1, fg     xt-1                   xt-2, fg  ...  x-1
+                                                                                                                                                                                                                                    Inputs
+Input + mask      = 100          = 1000              = 10000                                                                                                                                                                                 q(xt | x)                                                                                Output
+
+Figure 3. Effect of  in local CLIP-guided diffusion. Given                                                                                                                                                                                            q(xt-1| x)
+an input image with a mask, and the prompt "a dog": with  set
+too low ( = 100), the entire image changes completely, while                                                                                                                                                                                                                       xt-1,bg      q(xt-2| x)             xt-2,bg
+if  is too high ( = 10000), the model fails to change the fore-
+ground (and the background preservation is not perfect). Using an                                                                                                                                                                  Figure 4. Text-driven blended diffusion. Given input image x,
+intermediate value ( = 1000) the model changes the foreground                                                                                                                                                                      input mask m, and a text prompt d, we leverage the diffusion pro-
+while resembling the original background (zoom for more details).                                                                                                                                                                  cess to edit the image locally and coherently. We denote with 
+                                                                                                                                                                                                                                   the element-wise blending of two images using the input mask m.
+
+   The above process starts from an isotropic Gaussian                                                                                                                                                                             noisier images. Each step of the reverse, denoising diffusion
+noise and has no background constraints. Thus, although                                                                                                                                                                            process, projects a noisy image onto the next, less noisy,
+DCLIP is evaluated inside the masked region, it affects the                                                                                                                                                                        manifold. To create a seamless result where the masked re-
+entire image. In order to steer the surrounding region to-                                                                                                                                                                         gion complies with a guiding prompt, while the rest of the
+wards the input image, a background preservation loss Dbg                                                                                                                                                                          image is identical to the original input, we spatially blend
+is added to guide the diffusion outside the mask:                                                                                                                                                                                  each of the noisy images progressively generated by the
+                                                                                                                                                                                                                                   CLIP-guided process with the corresponding noisy version
+ \label {eqn:los_background_preservation} \begin {split} \mathcal {D}_{bg}(x_1, x_2, m) = d(x_1 \odot (1-m), x_2 \odot (1-m) \ d(x_1, x_2) = \frac {1}{2}(\textit {MSE}(x_1, x_2) + \textit {LPIPS}(x_1, x_2) \end {split} (7)     of the input image. Our key insight is that, while in each
+                                                                                                                                                                                                                                   step along the way, the result of blending the two noisy im-
+where MSE is the L2 norm of the pixel-wise difference be-                                                                                                                                                                          ages is not guaranteed to be coherent, the denoising dif-
+tween the images, and LPIPS is the Learned Perceptual Im-                                                                                                                                                                          fusion step that follows each blend, restores coherence by
+age Patch Similarity metric [62].                                                                                                                                                                                                  projecting onto the next manifold. This process is depicted
+                                                                                                                                                                                                                                   in Figure 4 and summarized in Algorithm 2.
+   The diffusion guidance loss is thus set to the weighted
+sum DCLIP (x0, d, m) + Dbg(x, x0, m), and the resulting                                                                                                                                                                            4.2.1 Background preserving blending
+method is summarized in Algorithm 1.
+                                                                                                                                                                                                                                   A na¨ive way to preserve the background is to let the CLIP-
+   In practice, we have found that an inherent trade-off ex-                                                                                                                                                                       guided diffusion process generate an image x without any
+ists between the two guidance terms above, as demonstrated                                                                                                                                                                         background constraints (by setting  = 0 in Algorithm 1).
+in Figure 3. Note that even in the intermediate case of                                                                                                                                                                            Next, replace the generated background with the original
+ = 1000 the result is far from perfect: the background is                                                                                                                                                                          one, taken from the input image: x  m + x  (1 - m). The
+only roughly preserved and the foreground is severely lim-                                                                                                                                                                         obvious problem is that combining the two images in this
+ited. We overcome this issue in the next section.                                                                                                                                                                                  manner fails to produce a coherent, seamless result. See the
+                                                                                                                                                                                                                                   supplementary for an example.
+4.2. Text-driven blended diffusion
+                                                                                                                                                                                                                                      In their pioneering work, Burt and Adelson [7] show that
+   The forward noising process implicitly defines a progres-
+sion of image manifolds, where each manifold consists of
+
+                                                                                                                                                                                                                                4
+two images can be blended smoothly by separately blend-             well as to the Local CLIP GD baseline (Algorithm 1) for all
+ing each level of their Laplacian pyramids. Inspired by this        the comparisons in this paper.
+technique, we propose to perform the blending at different
+noise levels along the diffusion process. Our key hypothesis        4.2.3 Result ranking
+is that at each step during the diffusion process, a noisy la-
+tent is projected onto a manifold of natural images noised to       Algorithm 2 can generate multiple outputs for the same in-
+a certain level. While blending two noisy images (from the          put; this is a desirable feature because our task is one-to-
+same level) yields a result that likely lies outside the mani-      many by its nature. Similarly to [45,46], we found it benefi-
+fold, the next diffusion step projects the result onto the next     cial to generate multiple predictions, rank them and choose
+level manifold, thus ameliorating the incoherence.                  those with the higher scores. For the ranking, we utilize the
+                                                                    CLIP model using the same DCLIP from Equation (6) on
+   Thus, at each stage, starting from a latent xt, we perform       the final results, without the extending augmentations.
+a single CLIP-guided diffusion step, that denoises the latent
+in a direction dependent on the text prompt, yielding a latent      5. Results
+denoted xt-1,fg. In addition, we obtain a noised version of
+the background xt-1,bg from the input image using Equa-                We begin by comparing our method to previous methods
+tion (2). The two latents are now blended using the mask:           and baselines both qualitatively and quantitatively. Next,
+xt-1 = xt-1,fg  m + xt-1,bg  (1 - m), and the process               we demonstrate the effect of our use of extending augmen-
+is repeated (see Figure 4 and Algorithm 2).                         tations. Finally, we demonstrate several applications en-
+                                                                    abled by our method.
+   In the final step, the entire region outside the mask is re-
+placed with the corresponding region from the input image,          5.1. Comparisons
+thus strictly preserving the background.
+                                                                       In Figure 5 we compare the text-driven edits performed
+4.2.2 Extending augmentations                                       by our method to those performed using (1) PaintBy-
+                                                                    Word [4]; (2) local CLIP-guided diffusion, as described in
+Adversarial examples [21,51] is a well known phenomenon             Algorithm 1, with  = 1000; and (3) VQGAN-CLIP +
+that may occur when optimizing an image directly on its             Paint By Word [4, 9]. For the latter, we adapt VQGAN-
+pixel values. For example, a classifier can be easily fooled        CLIP [9] to support masks using the same DCLIP loss from
+to classify an image incorrectly by slightly altering its pix-      Equation (6). In addition, we find that results can be im-
+els in the direction of their gradients with respect to some        proved by optimizing only part of the VQGAN [14] latent
+wrong class. Adding such adversarial noise will not be per-         space that corresponds to the edited area, similarly to the
+ceived by a human, but the classification will be wrong.            process in Bau et al. [4]. Because VQGAN includes a pre-
+                                                                    trained decoder, we can easily use this method on real im-
+   Similarly, gradual changes of pixel values by CLIP-              ages. We denote this method PaintByWord++.
+guided diffusion, might result in reducing the CLIP loss
+without creating the desired high-level semantic change in             Since the implementation of Bau et al. [4] is not currently
+the image. We find that this phenomenon frequently occurs           available, we perform this comparison using the examples
+in practice. Bau et al. [4] also experienced this issue and         included in their paper. Note that since PaintByWord oper-
+addressed it using a non-gradient method that is based on           ates only on GAN-generated images, all the input images in
+evolution strategy.                                                 this comparison are synthetic and somewhat unnatural. In
+                                                                    order to achieve better results on places, Bau et al. [4] used
+   We hypothesized that this problem can be mitigated by            two different models: one that is trained on MIT Places [64]
+performing several augmentations on the intermediate result         and the other on ImageNet [10]. In contrast, our method can
+estimated at each diffusion step, and calculating the gradi-        operate on real images and uses a single DPPM model that
+ents using CLIP on each of the augmentations separately.            was trained on ImageNet.
+This way, in order to "fool" CLIP, the manipulation must do
+so on all the augmentations, which is harder to achieve with-          The results shown in Figure 5 demonstrate that although
+out a high-level change in the image. Indeed, we find that          PaintByWord and the other two baselines all encourage
+a simple augmentation technique mitigates this problem:             background preservation, the background is not always pre-
+given the current estimated result x0, instead of taking the        served and some global changes occur in almost all cases.
+gradients of the CLIP loss directly, we compute them with           Furthermore, in each of the rows (1)­(3) there are some re-
+respect to several projectively transformed copies of this im-      sults that appear unrealistic. In contrast, our method pre-
+age. These gradients are then averaged together. We term            serves the background perfectly, and the edits appear natu-
+this strategy as "extending augmentation". The effect of            ral and coherent with the surrounding background.
+these augmentations is studied in Section 5.2. We've added
+extending augmentations to our method (Algorithm 2) as                 In order to obtain quantitative results, we conducted a
+                                                                    preliminary user study comparing between the different re-
+
+                                                                 5
+Input + mask
+
+(1)
+
+(2)
+
+(3)
+
+Our
+
+                      "A photo of a  "A photo of a  "A photo of a        "A photo of a      "A photo of a  "A photo of a
+                      camping tent"                                                                         happy dog"
+                                     magnificent dome" blue firetruck" bouquet of flowers"  sad dog"
+
+Figure 5. Comparison using examples from Paint By Word [4]. We use the GAN-generated input images, and user-provided masks and
+text prompts from Bau et al. [4], as well as their results (1). In the next two rows, we show results of two other baselines: (2) Local CLIP
+GD [8] and (3) PaintByWord++ [4, 9]. Our results (bottom row) exhibit more realistic objects. Moreover, our method perfectly preserves
+the background region of the input image, while other methods change it.
+
+Method                  Realism      Background     Text match           its surroundings, in contrast to the results of our method.
+
+PaintByWord [4]       3.31 ± 1.38     3.25 ± 1.33   3.14 ± 1.31          5.2. Ablation of extending augmentations
+Local CLIP GD [8]     3.50 ± 1.19     3.11 ± 1.24   3.86 ± 1.32
+PaintByWord++ [4, 9]  1.94 ± 1.36     3.37 ± 1.30   3.01 ± 1.38             In order to assess the importance of the extending aug-
+Ours                  3.93 ± 1.08    4.73 ± 0.61    4.63 ± 0.77          mentation technique described Section 4.2.2, we disable the
+                                                                         extending augmentations completely from our method (Al-
+Table 1. User study results: Participants were presented with            gorithm 2). Figure 7 demonstrates the importance of the
+the inputs and results shown in Figure 5 and were asked to rate          augmentations: the same random seed is used in two runs,
+each result on a Likert scale of 1-5 according to the following cri-     one with and the other without augmentations. We can see
+teria: overall result realism, background preservation, and corre-       that the images generated with the use of augmentations are
+spondence between the text prompt and the outcome. The mean              more visually plausible and are more coherent than the ones
+and standard deviation are shown for each method and criterion.          generated without the augmentations.
+
+sults shown in Figure 5. Participants were asked to rate                 5.3. Applications
+each result in terms of realism, background preservation,
+and correspondence to the text prompt. Table 1 shows that                   Our method is applicable to generic real-world images
+our method outperforms the three baselines in all of these               and may be used for a variety of applications. Below we
+aspects. Please see the supplementary for more details.                  demonstrate a few.
+
+   In Figure 6 we further compare our method to local                       Text-driven object editing: we are able to add, remove
+CLIP-guided diffusion and PaintByWord++, this time using                 or alter any of the existing objects in an image. Figure 8
+real images as input. Again, the results demonstrate the in-             demonstrates the ability to add a new object to an image.
+ability of the baseline methods to preserve the background,              Note that the method is able to generate a variety of plausi-
+and exhibit lack of coherence between the edited region and              ble outcomes. Rather than completely replacing an object,
+
+                                                                      6
+Input + mask
+
+(1)
+
+(2)
+
+Our
+
+              "pink yarn ball" "red dog collar" "dog bone"  "pizza"     "golden necklace" "blooming tree" "tie with black "blue short pants"
+                                                                                                                        and yellow stripes"
+
+Figure 6. Comparison to baselines on real images: A comparison with (1) Local CLIP-guided diffusion [8] and (2) PaintByWord++ [4,9].
+Both baselines fail to preserve the background and produce results that are less natural/coherent, in contrast to the results of our method.
+
+              "sausages"
+
+              "huge avocado"
+
+                              Input + mask  (1)  (2)                    Input + mask  Result 1  Result 2  Result 3
+
+Figure 7. Extending augmentations ablation: Using the same              Figure 8. Multiple outcomes: Given the same guiding text (top
+random seed and inputs, we compared the generated results (1)           row: "a dog", bottom row: "body of a standing dog") our method
+without extending augmentations and (2) with them. The augmen-          generates multiple plausible results.
+tations make the resulting images more natural and coherent with
+the background. See supplementary material for more examples.           ble, may be used as a guide. For example, the user may
+                                                                        scribble a rough shape on a background image, provide a
+only a part of it may be replaced, guided by a text prompt,             mask (covering the scribble) to indicate the area that is al-
+as shown in the bottom row of Figure 8. Figure 1 demon-                 lowed to change, as well as a text prompt. Our method will
+strates the ability to remove an object or replace it with a            transform the scribble into a natural object while attempting
+new one. Removal is achieved by not providing any text                  to match the prompt, as demonstrated in Figure 9.
+prompt, and it is equivalent to traditional image inpainting,
+where no text or other guidance is involved.                               Text-guided image extrapolation is the ability to ex-
+                                                                        tend an image beyond its boundaries, guided by a textual
+   Background replacement: rather than editing the fore-                description, s.t. the resulting change is gradual. Figure 10
+ground object, it is also possible to replace the background            demonstrates this ability: the user provides an image and
+using text guidance, as demonstrated in Figure 1. Addi-                 two text prompts, each prompt is used to extrapolate the
+tional examples for foreground and background editing are               image in one direction. The resulting image can be arbi-
+included in supplementary results.                                      trarily wide (and mix multiple prompts). More details are
+                                                                        provided in the supplementary material.
+   Scribble-guided editing: Due to the noising process of
+diffusion models, another image, or a user-provided scrib-
+
+                                                                     7
+Original image Input scribble  Result 1  Result 2                                              Input + mask  (1)  (2)  (3)
+
+Figure 9. Scribble-guided editing: Users scribble a rough shape                                Figure 11. Failure cases: Examples of failure cases given source
+of the object they want to insert, mark the edited area, and provide                           image, mask and description "rubber toy": (1) partial object --
+a guiding text - "blanket". The model uses the scribble as a general                           ranking by the edited area only may cause partial object to get
+shape and color reference, transforming it to match the guiding                                a high score, (2) typographic bias -- the model can generate a
+text. Note that the scribble patterns can also change.                                         sign with the word "rubber" on it, (3) missing object and unnat-
+                                                                                               ural shadows -- sometimes the method adds a shadow that is not
+(a) Source image                                                                               coherent with the scene and does not correspond to the text.
+
+                                                                   (b) Extrapolated result     contrastive loss. The noising process during training should
+                                                                                               be the same as in Equation (2).
+Figure 10. Text-guided image extrapolation: The user provides
+an input image and two text descriptions: "hell" and "heaven".                                    Yet another avenue for research is extending our problem
+The model extrapolates the image to the left using the "hell"                                  to other modalities such as a general-purpose text editor for
+prompt and to the right using the "heaven" prompt.                                             3D objects or videos.
+
+6. Limitations and Future Work                                                                 7. Societal Impact
+
+   The main limitation of our work is its inference time. Be-                                     Photo manipulations are almost as old as the photo cre-
+cause of the sequential nature of DDPMs, generating a sin-                                     ation process itself [16]. Such manipulations can be used
+gle image takes about 30 seconds on a modern GPU as de-                                        for art, entertainment, aesthetics, storytelling, and other le-
+scribed in the supplementary. In addition, we generate sev-                                    gitimate use cases, but at the same time can also be used
+eral samples and choose the top-ranked ones, as described                                      to tell lies via photos, for bullying, harassment, extortion,
+in Section 4.2.3. This limits the applicability of our method                                  and may have psychological consequences [18]. Indeed,
+for real-time applications and weak end-user devices (e.g.                                     our method can be used for all of the above. For example,
+mobile devices). Further research in accelerating diffusion                                    it can be misused to add credibility to fake news, which is a
+sampling is needed to address this problem.                                                    growing concern in the current media climate. It may also
+                                                                                               erode trust in photographic evidence and allow real events
+   In addition, the ranking method presented in Sec-                                           and real evidence to be brushed off as fake [5].
+tion 4.2.3 is not perfect because it takes into account only
+the edited area without the entire context of the image. So,                                      While our work does not enable anything that was out of
+bad results that contain only part of the desired object, may                                  reach for professional image editors, it certainly adds to the
+still get a high score, as demonstrated in Figure 11 (1). A                                    ease-of-use of the manipulation process, thus allowing users
+better ranking system will enable our method to produce                                        with limited technical capabilities to manipulate photos. We
+more compelling and coherent results.                                                          are passionate about our research, not only due to the legit-
+                                                                                               imate use-cases, but also because we believe such research
+   Furthermore, because our model is based on CLIP, it in-                                     must be conducted openly in academia and not kept secret.
+herits its weaknesses and biases. It was shown [19] that                                       We will provide our code for the benefit of the academic
+CLIP is susceptible to typographic attacks - exploiting the                                    community, and we are actively working on the comple-
+model's ability to read text robustly, they found that even                                    ment of this work: image and video forensic methods.
+photographs of hand-written text can often fool the model.
+Figure 11 (2) demonstrates that this phenomenon can occur                                      8. Conclusions
+even when generating images: instead of generating an im-
+age of a "rubber toy" our method generates a sign with the                                        We introduced a novel solution to the problem of text-
+word "rubber".                                                                                 driven editing of natural images and demonstrated its supe-
+                                                                                               riority over the baselines. We believe that editing natural
+   One avenue for further research is training a version of                                    images using free text is a highly intuitive interaction, that
+CLIP that is agnostic to Gaussian noise. This may be done                                      will be further developed to a level which will make it an
+by training a version of CLIP that gets as an input a noisy                                    indispensable tool in the arsenal of every content creator.
+image, a noise level, and the description text, and embeds
+the image and the text to a shared embedding space using                                          Acknowledgments This work was supported in part by
+                                                                                               Lightricks Ltd and by the Israel Science Foundation (grants
+                                                                                               No. 2492/20 and 1574/21).
+
+                                                                                            8
+References                                                              [14] Patrick Esser, Robin Rombach, and Bjorn Ommer. Taming
+                                                                              transformers for high-resolution image synthesis. In Pro-
+ [1] Rameen Abdal, Yipeng Qin, and Peter Wonka. Im-                           ceedings of the IEEE/CVF Conference on Computer Vision
+      age2stylegan: How to embed images into the StyleGAN la-                 and Pattern Recognition, pages 12873­12883, 2021. 2, 5, 17
+      tent space? In Proceedings of the IEEE/CVF International
+      Conference on Computer Vision, pages 4432­4441, 2019. 1,          [15] Zeev Farbman, Gil Hoffer, Yaron Lipman, Daniel Cohen-Or,
+      2                                                                       and Dani Lischinski. Coordinates for instant image cloning.
+                                                                              ACM Trans. Graph., 28(3), July 2009. 1
+ [2] Rameen Abdal, Yipeng Qin, and Peter Wonka. Im-
+      age2stylegan++: How to edit the embedded images? In Pro-          [16] Hany Farid. Digital doctoring: can we trust photographs?
+      ceedings of the IEEE/CVF Conference on Computer Vision                  2009. 8
+      and Pattern Recognition, pages 8296­8305, 2020. 1, 2
+                                                                        [17] W Feller. On the theory of stochastic processes, with partic-
+ [3] Yuval Alaluf, Or Patashnik, and Daniel Cohen-Or. Restyle:                ular reference to applications. In First Berkeley Symposium
+      A residual-based StyleGAN encoder via iterative refinement.             on Mathematical Statistics and Probability, pages 403­432,
+      In Proceedings of the IEEE/CVF International Conference                 1949. 3
+      on Computer Vision, pages 6711­6720, 2021. 1, 2
+                                                                        [18] Ohad Fried, Jennifer Jacobs, Adam Finkelstein, and Ma-
+ [4] David Bau, Alex Andonian, Audrey Cui, YeonHwan Park,                     neesh Agrawala. Editing self-image. volume 63, page 70­79,
+      Ali Jahanian, Aude Oliva, and Antonio Torralba. Paint by                New York, NY, USA, Feb. 2020. Association for Computing
+      word. arXiv preprint arXiv:2103.10951, 2021. 1, 2, 5, 6, 7,             Machinery. 8
+      13, 15, 16, 17, 21
+                                                                        [19] Gabriel Goh, Nick Cammarata, Chelsea Voss, Shan Carter,
+ [5] Aaron Blake. Trump is reportedly suggesting the `ac-                     Michael Petrov, Ludwig Schubert, Alec Radford, and Chris
+      cess hollywood' tape was fake news. https://www.                        Olah. Multimodal neurons in artificial neural networks. Dis-
+      washingtonpost.com/news/the-fix/wp/2017/                                till, 2021. https://distill.pub/2021/multimodal-neurons. 8,
+      11 / 27 / trump - is - reportedly - saying - the -                      12, 24
+      access- hollywood- tape- was- fake- news- he-
+      should- talk- to- 2016- trump/. Accessed: 2021-                   [20] Ian Goodfellow, Jean Pouget-Abadie, Mehdi Mirza, Bing
+      11-15. 8                                                                Xu, David Warde-Farley, Sherjil Ozair, Aaron Courville, and
+                                                                              Yoshua Bengio. Generative adversarial nets. Advances in
+ [6] Andrew Brock, Jeff Donahue, and Karen Simonyan. Large                    neural information processing systems, 27, 2014. 1
+      scale GAN training for high fidelity natural image synthesis.
+      arXiv preprint arXiv:1809.11096, 2018. 1, 2                       [21] Ian J Goodfellow, Jonathon Shlens, and Christian Szegedy.
+                                                                              Explaining and harnessing adversarial examples. arXiv
+ [7] Peter J Burt and Edward H Adelson. The Laplacian pyramid                 preprint arXiv:1412.6572, 2014. 5
+      as a compact image code. In Readings in computer vision,
+      pages 671­679. Elsevier, 1987. 4                                  [22] James Hays and Alexei A. Efros. Scene completion using
+                                                                              millions of photographs. ACM Trans. Graph., 26(3):4­es,
+ [8] Katherine Crowson. CLIP guided diffusion HQ 256x256.                     July 2007. 1
+      https://colab.research.google.com/drive/
+      12a_Wrfi2_gwwAuN3VvMTwVMz9TfqctNj. 2, 3, 6, 7,                    [23] Martin Heusel, Hubert Ramsauer, Thomas Unterthiner,
+      12, 21                                                                  Bernhard Nessler, and Sepp Hochreiter. GANs trained by
+                                                                              a two time-scale update rule converge to a local nash equi-
+ [9] Katherine Crowson. VQGAN+CLIP. https : / /                               librium. Advances in neural information processing systems,
+      colab . research . google . com / drive / 1L8oL -                       30, 2017. 3, 13
+      vLJXVcRzCFbPwOoMkPKJ8-aYdPN. 2, 5, 6, 7, 17, 21
+                                                                        [24] Tobias Hinz, Stefan Heinrich, and Stefan Wermter. Semantic
+[10] Jia Deng, Wei Dong, Richard Socher, Li-Jia Li, Kai Li,                   object accuracy for generative text-to-image synthesis. arXiv
+      and Li Fei-Fei. Imagenet: A large-scale hierarchical image              preprint arXiv:1910.13321, 2019. 1
+      database. In 2009 IEEE conference on computer vision and
+      pattern recognition, pages 248­255. Ieee, 2009. 5, 13             [25] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising diffu-
+                                                                              sion probabilistic models. In NeurIPS, 2020. 2, 3
+[11] Prafulla Dhariwal and Alexander Nichol. Diffusion models
+      beat gans on image synthesis. Advances in Neural Informa-         [26] Tero Karras, Miika Aittala, Samuli Laine, Erik Ha¨rko¨nen,
+      tion Processing Systems, 34, 2021. 2, 3, 12                             Janne Hellsten, Jaakko Lehtinen, and Timo Aila. Alias-
+                                                                              free generative adversarial networks. arXiv preprint
+[12] Ming Ding, Zhuoyi Yang, Wenyi Hong, Wendi Zheng,                         arXiv:2106.12423, 2021. 1
+      Chang Zhou, Da Yin, Junyang Lin, Xu Zou, Zhou Shao,
+      Hongxia Yang, et al. Cogview: Mastering text-to-image gen-        [27] Tero Karras, Samuli Laine, and Timo Aila. A style-based
+      eration via transformers. arXiv preprint arXiv:2105.13290,              generator architecture for generative adversarial networks.
+      2021. 1                                                                 In Proceedings of the IEEE/CVF Conference on Computer
+                                                                              Vision and Pattern Recognition, pages 4401­4410, 2019. 1
+[13] Alexey Dosovitskiy, Lucas Beyer, Alexander Kolesnikov,
+      Dirk Weissenborn, Xiaohua Zhai, Thomas Unterthiner,               [28] Tero Karras, Samuli Laine, Miika Aittala, Janne Hellsten,
+      Mostafa Dehghani, Matthias Minderer, Georg Heigold, Syl-                Jaakko Lehtinen, and Timo Aila. Analyzing and improv-
+      vain Gelly, et al. An image is worth 16x16 words: Trans-                ing the image quality of StyleGAN. In Proceedings of
+      formers for image recognition at scale. In International Con-           the IEEE/CVF Conference on Computer Vision and Pattern
+      ference on Learning Representations, 2020. 12                           Recognition, pages 8110­8119, 2020. 1, 2
+
+                                                                        [29] Gwanghyun Kim and Jong Chul Ye. Diffusionclip: Text-
+                                                                              guided image manipulation using diffusion models. arXiv
+                                                                              preprint arXiv:2110.02711, 2021. 2
+
+                                                                     9
+[30] Bowen Li, Xiaojuan Qi, Thomas Lukasiewicz, and Philip HS                  Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learn-
+      Torr. Controllable text-to-image generation. arXiv preprint              ing transferable visual models from natural language super-
+      arXiv:1909.07083, 2019. 1                                                vision. arXiv preprint arXiv:2103.00020, 2021. 2, 12, 13,
+                                                                               24
+[31] Wenbo Li, Pengchuan Zhang, Lei Zhang, Qiuyuan Huang,                [45] Aditya Ramesh, Mikhail Pavlov, Gabriel Goh, Scott
+      Xiaodong He, Siwei Lyu, and Jianfeng Gao. Object-driven                  Gray, Chelsea Voss, Alec Radford, Mark Chen, and Ilya
+      text-to-image synthesis via adversarial training. In Proceed-            Sutskever. Zero-shot text-to-image generation. arXiv
+      ings of the IEEE/CVF Conference on Computer Vision and                   preprint arXiv:2102.12092, 2021. 1, 2, 5
+      Pattern Recognition, pages 12174­12182, 2019. 1                    [46] Ali Razavi, Aaron van den Oord, and Oriol Vinyals. Gen-
+                                                                               erating diverse high-fidelity images with VQ-VAE-2. In
+[32] Xihui Liu, Dong Huk Park, Samaneh Azadi, Gong Zhang,                      Advances in neural information processing systems, pages
+      Arman Chopikyan, Yuxiao Hu, Humphrey Shi, Anna                           14866­14876, 2019. 2, 5
+      Rohrbach, and Trevor Darrell. More control for free! image         [47] Scott Reed, Zeynep Akata, Xinchen Yan, Lajanugen Lo-
+      synthesis with semantic diffusion guidance. arXiv preprint               geswaran, Bernt Schiele, and Honglak Lee. Generative ad-
+      arXiv:2112.05744, 2021. 2                                                versarial text to image synthesis. In International Conference
+                                                                               on Machine Learning, pages 1060­1069. PMLR, 2016. 2
+[33] Elman Mansimov, Emilio Parisotto, Jimmy Ba, and Ruslan              [48] Elad Richardson, Yuval Alaluf, Or Patashnik, Yotam Nitzan,
+      Salakhutdinov. Generating images from captions with atten-               Yaniv Azar, Stav Shapiro, and Daniel Cohen-Or. Encoding in
+      tion. CoRR, abs/1511.02793, 2016. 2                                      style: a StyleGAN encoder for image-to-image translation.
+                                                                               In Proceedings of the IEEE/CVF Conference on Computer
+[34] Ryan Murdock. The big sleep: BigGANxCLIP.                                 Vision and Pattern Recognition, pages 2287­2296, 2021. 1,
+      https : / / colab . research . google . com /                            2
+                                                                         [49] Jascha Sohl-Dickstein, Eric Weiss, Niru Maheswaranathan,
+      github / levindabhi / CLIP - Notebooks / blob /                          and Surya Ganguli. Deep unsupervised learning using
+      main/The_Big_Sleep_BigGANxCLIP.ipynb. 2                                  nonequilibrium thermodynamics. In International Confer-
+[35] Alex Nichol, Prafulla Dhariwal, Aditya Ramesh, Pranav                     ence on Machine Learning, pages 2256­2265. PMLR, 2015.
+      Shyam, Pamela Mishkin, Bob McGrew, Ilya Sutskever, and                   3
+      Mark Chen. Glide: Towards photorealistic image generation          [50] Jiaming Song, Chenlin Meng, and Stefano Ermon.
+      and editing with text-guided diffusion models. arXiv preprint            Denoising diffusion implicit models. arXiv preprint
+      arXiv:2112.10741, 2021. 2                                                arXiv:2010.02502, 2020. 12
+[36] Alexander Quinn Nichol and Prafulla Dhariwal. Improved              [51] Christian Szegedy, Wojciech Zaremba, Ilya Sutskever, Joan
+      denoising diffusion probabilistic models. In International               Bruna, Dumitru Erhan, Ian Goodfellow, and Rob Fergus. In-
+      Conference on Machine Learning, pages 8162­8171. PMLR,                   triguing properties of neural networks. In 2nd International
+      2021. 2, 3, 12, 13                                                       Conference on Learning Representations, ICLR 2014, 2014.
+[37] OpenAI. CLIP Github. https : / / github . com /                           5
+      openai/CLIP. 12                                                    [52] Ming Tao, Hao Tang, Songsong Wu, Nicu Sebe, Xiao-Yuan
+[38] OpenAI. Guided Diffusion Github. https://github.                          Jing, Fei Wu, and Bingkun Bao. DF-GAN: Deep fusion
+      com/openai/guided-diffusion. 12, 13                                      generative adversarial networks for text-to-image synthesis.
+[39] Adam Paszke, Sam Gross, Francisco Massa, Adam Lerer,                      arXiv preprint arXiv:2008.05865, 2020. 1
+      James Bradbury, Gregory Chanan, Trevor Killeen, Zeming             [53] Omer Tov, Yuval Alaluf, Yotam Nitzan, Or Patashnik, and
+      Lin, Natalia Gimelshein, Luca Antiga, et al. Pytorch: An im-             Daniel Cohen-Or. Designing an encoder for StyleGAN im-
+      perative style, high-performance deep learning library. Ad-              age manipulation. ACM Transactions on Graphics (TOG),
+      vances in neural information processing systems, 32:8026­                40(4):1­14, 2021. 1, 2
+      8037, 2019. 13                                                     [54] John W Tukey. Comparing individual means in the analysis
+[40] Or Patashnik, Zongze Wu, Eli Shechtman, Daniel Cohen-                     of variance. Biometrics, pages 99­114, 1949. 20, 21
+      Or, and Dani Lischinski. StyleCLIP: Text-driven manipula-          [55] Aa¨ron van den Oord, Oriol Vinyals, and Koray
+      tion of StyleGAN imagery. In Proceedings of the IEEE/CVF                 Kavukcuoglu. Neural discrete representation learning.
+      International Conference on Computer Vision, pages 2085­                 In NIPS, 2017. 2
+      2094, 2021. 2, 12                                                  [56] Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszko-
+[41] Patrick Pe´rez, Michel Gangnet, and Andrew Blake. Pois-                   reit, Llion Jones, Aidan N Gomez, Lukasz Kaiser, and Illia
+      son image editing. ACM Trans. Graph., 22(3):313­318, July                Polosukhin. Attention is all you need. In Advances in neural
+      2003. 1                                                                  information processing systems, pages 5998­6008, 2017. 2
+[42] Tingting Qiao, Jing Zhang, Duanqing Xu, and Dacheng Tao.            [57] Weihao Xia, Yujiu Yang, Jing-Hao Xue, and Baoyuan Wu.
+      Learn, imagine and create: Text-to-image generation from                 Towards open-world text-guided face image generation and
+      prior knowledge. Advances in Neural Information Process-                 manipulation. arXiv preprint arXiv:2104.08910, 2021. 1
+      ing Systems, 32:887­897, 2019. 1                                   [58] Weihao Xia, Yulun Zhang, Yujiu Yang, Jing-Hao Xue, Bolei
+[43] Tingting Qiao, Jing Zhang, Duanqing Xu, and Dacheng                       Zhou, and Ming-Hsuan Yang. GAN inversion: A survey.
+      Tao. MirrorGAN: Learning text-to-image generation by re-                 arXiv preprint arXiv:2101.05278, 2021. 1, 2
+      description. In Proceedings of the IEEE/CVF Conference
+      on Computer Vision and Pattern Recognition, pages 1505­
+      1514, 2019. 1
+[44] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya
+      Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry,
+
+                                                                     10
+[59] Tao Xu, Pengchuan Zhang, Qiuyuan Huang, Han Zhang, Zhe
+      Gan, Xiaolei Huang, and Xiaodong He. AttnGAN: Fine-
+      grained text to image generation with attentional generative
+      adversarial networks. In Proceedings of the IEEE conference
+      on computer vision and pattern recognition, pages 1316­
+      1324, 2018. 2
+
+[60] Han Zhang, Tao Xu, Hongsheng Li, Shaoting Zhang, Xiao-
+      gang Wang, Xiaolei Huang, and Dimitris N Metaxas. Stack-
+      GAN: Text to photo-realistic image synthesis with stacked
+      generative adversarial networks. In Proceedings of the IEEE
+      international conference on computer vision, pages 5907­
+      5915, 2017. 2
+
+[61] Han Zhang, Tao Xu, Hongsheng Li, Shaoting Zhang, Xiao-
+      gang Wang, Xiaolei Huang, and Dimitris N Metaxas. Stack-
+      GAN++: Realistic image synthesis with stacked generative
+      adversarial networks. IEEE transactions on pattern analysis
+      and machine intelligence, 41(8):1947­1962, 2018. 2
+
+[62] Richard Zhang, Phillip Isola, Alexei A Efros, Eli Shecht-
+      man, and Oliver Wang. The unreasonable effectiveness of
+      deep features as a perceptual metric. In Proceedings of the
+      IEEE conference on computer vision and pattern recogni-
+      tion, pages 586­595, 2018. 4
+
+[63] Zizhao Zhang, Yuanpu Xie, and Lin Yang. Photographic
+      text-to-image synthesis with a hierarchically-nested adver-
+      sarial network. In Proceedings of the IEEE Conference
+      on Computer Vision and Pattern Recognition, pages 6199­
+      6208, 2018. 1
+
+[64] Bolei Zhou, Agata Lapedriza, Jianxiong Xiao, Antonio Tor-
+      ralba, and Aude Oliva. Learning deep features for scene
+      recognition using places database. 2014. 5
+
+[65] Jiapeng Zhu, Yujun Shen, Deli Zhao, and Bolei Zhou. In-
+      domain GAN inversion for real image editing. In European
+      conference on computer vision, pages 592­608. Springer,
+      2020. 1, 2
+
+                                                                         11
+A. Additional Examples                                              A.3. Failure Cases
+
+   In this section we provide additional examples of the               Figure 25 demonstrates the susceptibility of our model to
+applications and the failure cases that were mentioned in           typographic attacks [19]. Figure 26 demonstrates synthesis
+the main paper. In addition, we show that our method                of objects which appear natural on their own, but possess
+naturally supports an iterative editing process. Lastly, we         the wrong size compared to the rest of the photo.
+demonstrate the na¨ive blending approach (main paper, Sec-
+tion 4.2.1).                                                        A.4. Na¨ive blending example
+
+A.1. Applications -- Additional Examples                               As discussed in Section 4.2.1 of the paper, na¨ive blend-
+                                                                    ing of the input image and the diffusion-synthesized result
+   We provide additional examples for the applications              inside the masked area yields an unnatural result, as can be
+mentioned in the paper: Figures 12 to 14 demonstrate the            seen in Figure 27.
+ability of our method to add new objects to an existing im-
+age, where Figures 12 and 13 show that different results            A.5. High-resolution generation
+can be obtained for the same text prompt, while Figure 14
+shows results obtained using a variety of prompts. Figure 15           Most results presented in the paper use an unconditional
+demonstrates the ability to remove or replace objects in an         DDPM model of resolution 256 × 256, producing gener-
+exiting image, while Figure 16 demonstrates the ability to          ated images of that resolution. Nevertheless, we are not
+alter an existing object in an image. Figures 17 and 18             constrained to this resolution, as can be seen in Figure 10
+demonstrate the ability to replace the background of an im-         in the main paper and in Figure 20 in this supplementary
+age. Figure 19 demonstrates more examples of scribble-              document (for more details read Appendix B.5.2). We can
+guided editing, and Figure 20 demonstrates text-guided im-          also use OpenAI's unconditional 512 × 512 version of the
+age extrapolation.                                                  model [38], by feeding the one-hot encoding with zeroes
+                                                                    vector (similarly to [8]). Demonstration of using the higher
+A.2. Iterative Editing                                              resolution model for blended diffusion can be seen in Fig-
+                                                                    ure 28.
+   The synthesis results that are given by our method are at
+times exactly what the user envisioned, but they can also be        A.6. Comparison to DDIM
+different from the user's intent or might include unwanted
+artifacts. Unlike other text-driven image editing techniques           Our method uses Denoising Diffusion Probabilistic
+that operate on the entire image (e.g., StyleCLIP [40]), our        Models (DDPMs). Recently, Song et al. propose Denoising
+method is region-based, thus allowing the user to progres-          Diffusion Implicit Models (DDIMs) [50], a fast sampling
+sively refine their result in an incremental editing session.       algorithm for DDPMs that produces a new implicit model
+                                                                    with the same marginal noise distributions, but determinis-
+   Figure 21 demonstrates such an editing session. At first,        tically maps noise to images. Nichol et al. [36] showed that
+the user starts by replacing the background, as described           DDIMs produce better samples than DDPMs with fewer
+in Section 5.3 in the main paper, and obtains a result that         than 50 sampling steps, but worse samples when using 50
+is mostly satisfactory, but is not perfect: there are two un-       or more steps. In order to check the effect of using DDIM
+wanted generated objects on the grass that the user wishes          instead of DDPM we first adjusted the DDIM version of the
+to remove. In addition, the user decides that the initial mask      guided-diffusion algorithm [11] with Blended Diffusion in
+used in the previous step was not accurate enough, causing          Algorithm 3. As we can see experimentally in Figure 29,
+a mismatch between the generated grass and the grass from           the same holds for image generation using Blended Diffu-
+the original scene. The user then provides additional masks,        sion: DDPMs produce better results than DDIMs when us-
+without a text prompt, causing our method to inpaint these          ing 100 diffusion steps, but worse results when using less
+areas, yielding the final result.                                   than 50 diffusion steps.
+
+   Figures 22 to 24 demonstrate more editing sessions.              B. Implementation Details
+Each of the sessions utilizes a variety of editing types:
+adding, changing and removing objects and backgrounds,                 For all the experiments reported in this paper we used
+scribble-guided edits, and clip-art-guided edits. Out method        a pre-trained CLIP model [44] and a pre-trained guided-
+is compositional by design, and does not require any modi-          diffusion model [11]:
+fications to support such mixed editing sessions.
+                                                                       · For the CLIP model we used ViT-B/16 as a backbone
+   Unless stated otherwise, all the results in the main pa-               for the Vision Transformer [13] that was released by
+per and in this supplemental document are without such in-                OpenAI [37].
+cremental refinements -- we show the raw results with no
+further user interaction.
+
+                                                                12
+Input image  Image mask  Result 1                                 Result 2  Result 3  Result 4
+
+Result 5     Result 6    Result 7                                 Result 8  Result 9  Result 10
+
+Figure 12. Adding a new object (multiple results for the same input): Given the input image, mask and text description "rock", our
+model is able to generate multiple plausible results.
+
+Input image  Image mask  Result 1                                 Result 2  Result 3  Result 4
+
+Result 5     Result 6    Result 7                                 Result 8  Result 9  Result 10
+
+Figure 13. Adding a new object (multiple results for the same input): Given the input image, mask, and text description "a dog", our
+model is able to generate multiple plausible results. Some results are better (first row) than others (second row).
+
+   · For the diffusion model we used an unconditional             our model and in the baselines):
+      model of resolution 256 × 256 [38].
+                                                                     · Fast sampling speed: We follow the fast sampling
+   Both of these models were released under MIT license                 speed from [36] which showed that 100 sampling steps
+and were developed using PyTorch [39].                                  are sufficient to achieve near-optimal FID score [23]
+                                                                        on ImageNet [10]. This scheme reduces the sampling
+   All the input images in this paper are real images (i.e.,            time to 27 seconds, for more details see Appendix B.3.
+not synthesized), except the ones in Figure 5 of the main
+paper, which were generated by Bau et al. [4]. All images            · Number of diffusion steps: In most of our experi-
+were released freely under a Creative Commons license.                  ments we set the number of diffusion steps to k = 75,
+                                                                        allowing the model to change the input image in a suf-
+B.1. Hyperparamters                                                     ficient manner. Exceptions are scribble-based editing
+                                                                        (k = 60) and background editing (k = 67).
+   We used the CLIP model as-is, without changing any pa-
+rameters. In addition, we did not utilize any prompt engi-           In Algorithm 2 we use the following hyperparameters:
+neering techniques as described by Radford et al. [44].
+                                                                     · Number of extending augmentations: We found that
+   We used the following hyperparameters in the guided-
+diffusion model across the different experiments (both in
+
+                                                              13
+Input image   Input mask    "car tire"                             "big stone"     "meat"    "tofu"
+
+"grass"       "blue ball"   "silver brick"                         "ice cube"      "plastic bag" "bowl of water"
+
+"black rock"  "cardboard"   "tooth"                                "water bottle"  "bread"   "smoke"
+
+"chocolate"   "clay pot"    "cola"                                 "egg"           "flower"  "glass"
+
+"glow stick"  "gravestone"  "helmet"                               "lamp"          "milk"    "hole"
+
+Figure 14. Adding a new object (different prompts): Given an input image and mask, our model is able to generate different objects
+corresponding to different text descriptions.
+
+      setting this to N = 16 was sufficient to mitigate the        put size of the CLIP model (224 × 224) along with its input
+      adversarial example phenomena.                               mask. Next, we create N copies of this image and perform
+                                                                   a different random projective transformation on each copy,
+   · Number of total repetitions: As explained in Sec-             along with the same transformation on the corresponding
+      tion 4.2.3, we generate several results and rank them        mask (see Figure 30). Finally, we calculate the gradients
+      using the CLIP model. In our experiments, we gen-            using the CLIP loss w.r.t each one of the transformed copies
+      erate 64 samples and choose the best ones. For more          and average all the gradients. This way, an adversarial ma-
+      details on inference time see Appendix B.3.                  nipulation is much less likely, as it would have to "fool"
+                                                                   CLIP under multiple transformations.
+B.2. Extending Augmentations
+                                                                      As mentioned in Section 5.2 we performed an ablation
+   Given an input image x, in the resolution of the diffusion      study for the extending augmentations. Figure 31 demon-
+model (256 × 256 in our case), we first resize it to the in-
+
+                                                               14
+Input image  Input mask    No prompt                              "white ball" "bowl of water"  "stool"
+
+"hole"       "red brick"   "pile of dirt"                         "laptop"    "plastic bag"     "rat"
+
+"bonfire"    "snake"       "spider"                               "plant"     "candle"          "blanket"
+
+"bottle"     "cardboard"   "chocolate"                            "clay pot"  "egg"             "flower"
+
+"glass"      "glow stick"  "gravestone"                           "helmet"    "milk"            "smoke"
+
+Figure 15. Removing/replacing a foreground object: Given an input image and a mask, we demonstrate inpainting of the masked region
+using different guiding texts. When no prompt is given, the result is similar to traditional image inpainting.
+
+strates the importance of the augmentations: the same ran-           · Our method (Algorithm 2) & Local CLIP-guided dif-
+dom seed is used in two runs, one with and the other without            fusion (Algorithm 1): 27 seconds.
+augmentations. We can see that the images generated with
+the use of augmentations are more visually plausible and             · PaintByWord++: 78 seconds.
+are more coherent than the ones generated without the aug-
+mentations. (This is an extended version of Figure 7 from            Original paint by word [4] did not release their code and
+the main paper.)                                                  did not mention the run-time.
+
+B.3. Inference Time                                                  In practice, as described in Section 4.2.3, we generate
+                                                                  several results for the same inputs and use the best ones.
+   We report synthesis time for a single image using one          Instead of generating them sequentially, we accelerate the
+NVIDIA A10 GPU:                                                   generation process using two techniques:
+
+                                                                    1. Batch generation: Instead of generating a single im-
+
+                                                              15
+Input image             Input mask                       Result 1           Result 2   Result 3   Result 4
+
+    Result 5                    Result 6                 Result 7           Result 8   Result 9   Result 10
+
+    Result 11                   Result 12                Result 13          Result 14  Result 15  Result 16
+
+    Result 17                   Result 18                Result 19          Result 20  Result 21  Result 22
+
+Figure 16. Altering a part of an existing foreground object: Given an input image and a mask, we aim to alter the foreground object
+corresponding to the guiding text "body of a standing dog". Multiple plausible results are generated, some more plausible than others.
+(The first two rows are better than the bottom two rows.)
+
+Algorithm 3 DDIM blended diffusion: given a diffusion                             age in each diffusion pass, we multiplied the input sev-
+model (µ(xt), (xt)), and CLIP model                                               eral times and generated several instances on the same
+                                                                                  pass. Because of the stochasticity of the diffusion pro-
+Input: source image x, target text description d, input mask m, diffu-            cess, each result is different.
+
+sion steps k, number of extending augmentations N                             2. Parallel generation: Because each of the generation
+                                                                                  processes is independent, we can distribute the gener-
+Output: edited image x that differs from input image x inside area m              ation across multiple GPUs. In our experiments, we
+                                                                                  concurrently used 4 NVIDIA A10 GPUs.
+accordingto text description d
+xk  N ( ¯kx0, (1 - ¯k)I)                                                    Using the above accelerations, we generate 64 synthesis re-
+for all t from k to 0 do                                                    sults in about 6 minutes -- less than 6 seconds per image.
+
+µ,   µ(xt), (xt)                                                            B.4. Comparison with Baselines
+         xt        1-¯t (xt,t)
+x0          ¯t  -          ¯t                                               PaintByWord Because the models and code that was used
+                                                                            by Bau et al. [4] are currently unavailable, we used as input
+x0,aug  ExtendingAugmentations(x0, N )                                      the images and masks extracted from their paper.
+
+text        1      N    x0,aug  DCLIP (x0,aug ,  d,  m)
+            N
+                   i=1
+^  (xt) -          1 -¯ttext
+                                    
+                   xt - 1-¯ t ^  + 1 - ¯t-1^
+xfg  ¯t-1                   ¯t
+            
+xbg  N ( ¯tx0, (1 - ¯t)I)
+
+xt-1  xfg  m + xbg  (1 - m)
+
+end for
+
+return x-1
+
+                                                                        16
+Input image    Input mask                   "big mountain"           "swimming pool"       "big wall"             "New York City"
+
+"green hills"  "red house"                  "oasis"                  "Acropolis"           "fire"                 "big waterfall"
+
+"China"        "Colosseum"                  "festival"               "Golden Gate Bridge"  "Machu Picchu"         "Mount Fuji"
+
+"Petra"        "The Great Pyramid of Giza"  "river"                  "snowy mountain"      "Stanford University"  "Stonehenge"
+
+"sunrise"      "rainy"                      "volcanic eruption"      "The Western Wall"    "Arc de Triomphe"      "big ship"
+
+Figure 17. Background replacement: Given a source image and a mask of the background, the model is able to replace the background
+according to the text description. Note that the famous landmarks are not meant to accurately appear in the new background, but serve as
+an inspiration for the image completion.
+
+PaintByWord++ We adapted the VQGAN+CLIP [9] im-                      B.5. Implementation Details for Applications
+plementation to support masks using the same DCLIP loss
+from Equation (6). We used the VQGAN [14] model that                    In this section, we provide the implementation details for
+was trained on ImageNet with reduction factor f = 16. For            scribble-guided editing and text-guided image extrapolation
+the latent optimization, we used the Adam optimizer with             applications.
+a learning rate of 0.1 for 500 steps. We found that con-
+straining the optimization of the latent space z only to the         B.5.1 Scribble-guided editing
+corresponding mask area, the same way it was done by Bau
+et al. [4], improved the background preservation.                    In order to create the results that are demonstrated in Fig-
+                                                                     ure 9 of the main paper, the user first scribbles on the input
+                                                                     image, then masks the scribble area (the masking can also
+                                                                     be done automatically by taking the scribbles area and di-
+
+                                                                 17
+Input image          Input mask          "Acropolis"                      "fire"                 "China"             "Colosseum"
+
+"desert"             "festival"          "Grand Canyon"            "Machu Pichu"                 "north pole"        "parking lot"
+
+"Petra"              "river"             "snowy mountain"          "Stanford University"    "Stonehenge"             "rainy"
+
+"volcanic eruption"  "The Western Wall"  "in the woods"            "beach"                  "big waterfall"          "flower field"
+
+"green hills"        "lake"              "oasis"                   "book cover"                  "fog"               "gravel"
+
+Figure 18. Background replacement: Given a source image and a mask of the background, the model is able to replace the background
+corresponding to the text description. Note that the famous landmarks are not meant to accurately appear in the new background, but serve
+as an inspiration for the image completion.
+
+lating it by morphological operations), then provides a text       B.5.2 Text-guided image extrapolation
+prompt and uses the same algorithm as for object altering.
+                                                                   In order to extend the image beyond its original resolution,
+   An important hyper-parameter for this application is the
+number of target diffusion steps k in Algorithm 2. Figure 32       we gradually predict the unknown parts of the image in a se-
+demonstrates the effect of changing this parameter: when
+diffusing for a longer period (e.g., 80 diffusion steps out        quential manner. Figure 33 demonstrates the building pro-
+of 100), only the main red color of the blanket is kept, the
+blanket shading is more realistic, and the results are more        cess:  at  each  stage,  (2)  we  translate  the  image  1  to  the  op-
+diverse. When diffusing for a shorter period (e.g., 20 diffu-                                                               4
+sion steps out of 100), the scribble is hardly modified.
+                                                                   posite of the desired direction and fill the missing area us-
+
+                                                                   ing standard reflection padding, (4) then we inpaint the new
+
+                                                                   area guided by the text description, using the regular algo-
+
+                                                                   rithm for foreground editing. (5-7) We repeat the process 3
+
+                                                                   times until we have a new image. The new image is still a
+
+                                                                   bit noisy -- due of the gradual inpainting, each synthesis re-
+
+                                                               18
+"leopard"
+
+"floral carpet" "straw chair"
+
+"graffiti"
+
+"table"
+
+                               Input image  Image + scribble  Mask      Result 1  Result 2  Result 3
+
+Figure 19. Scribble-guided editing: Users scribble a rough shape of the object they want to insert, mark the edited area, and provide
+a guiding text. The model uses the scribble as a general shape and color reference, transforming it to match the guiding text. Note that
+the scribble patterns can also change. In the last example, we embedded a clip art of a table instead of a manual scribble, it shows the
+effectiveness of our model to transform unnatural clip arts into real-looking objects.
+
+sult is noisier than the previous one because of the chaining           As described in Section 6 in the main paper, the ranking is
+of the natural image statistics. In order to mitigate it, (8) we        not perfect because it takes into account only the generated
+denoise this image using the diffusion process again. We                area. In addition, the ranking is not accurate enough in the
+repeat the same process in the other direction. Our output              resolution of single images: the top-ranked image isn't al-
+can have an arbitrarily large image resolution.                         ways better than the second one, etc. Nonetheless, the top
+                                                                        20% of the images are almost always better than the bottom
+   We also notice that gradual diffusion steps are beneficial:          20%. In practice, we generate 64 results and choose manu-
+we diffuse the first quarter for a small number of diffusion            ally from the top 10 images ordered by their ranking (in both
+steps, and then in each step, we enlarge the number of dif-             the baselines and our method). Figure 34 demonstrates the
+fusion steps.                                                           effectiveness of the ranking algorithm.
+
+B.6. Ranking Implementation Details
+
+   We utilized the ranking algorithm that is explained in
+Section 4.2.3 in the main paper using 64 synthesis results.
+
+                                                                    19
+                         (a) Source image
+
+                                                                   (b) Extrapolated result
+
+Figure 20. Text-guided image extrapolation: The user provides an image and two text descriptions that guide the extrapolation to the left
+("sunny day" in this example) and to the right ("dark night").
+
+Input image  Input mask  First result                            Refinement mask  Final result
+
+Figure 21. Result refinement: The initial synthesis result of our model can be further refined. For example, here the user first masks a
+rough area in the source image and replaces the background using the prompt "New York City". Next, they wish to remove two unwanted
+objects from the generated result and to further refine the rough mask that was used in the first stage. They provide additional masks and
+no guiding text in this case (to perform inpainting) in order to obtain the final result.
+
+C. User Study                                                          text description.
+
+   In order to evaluate our model quantitatively, we con-           The questions were randomly ordered, and the partici-
+ducted a user study. The only results of the Paint By Word       pant had the ability to go back and edit their previous ratings
+model on general images (albeit GAN-generated) that were         until submission.
+available are the ones in their paper. Hence, we chose to
+conduct the user study on these images (along with their            Mean user study scores are presented in Table 1 of the
+corresponding masks). The study was conducted on 35 par-         main paper. The difference between conditions is statisti-
+ticipants.                                                       cally significant (Kruskal-Wallis test, p < 10-130). Fur-
+                                                                 ther analysis using Tukey's honestly significant difference
+   The participants were shown each time the inputs to the       procedure [54] shows that the improvement shown by our
+model (image, mask and text description) along with the          method is statistically significant vs. all other conditions
+model prediction, and were asked to rate the prediction, on      (Table 2).
+a scale of 1­5, for one of the following criteria:
+
+  1. The overall realism of the prediction.
+
+  2. The amount of background preservation of the predic-
+      tion in the unedited area.
+
+  3. The correspondence of the edited image to the guiding
+
+                                                             20
+Step 1: "curly blond hair"
+
+Step 3: scribble + "floral jacket" Step 2: "shiny purple tie"
+
+                                                               Input image                        Mask     Result
+
+Figure 22. Editing session mix example: The user can use several editing operations consecutively. For example, as the first step, the user
+masks the hair of the person and provides the guiding text "curly blond hair". As the second step, the user masks the tie and provides the
+guiding text "shiny purple tie". At the last step, the user scribbles red dots on the jacket, masks the jacket, and provides the guiding text
+"floral jacket".
+
+     Method 1                                                                      Method 2       Realism  Background preservation  Text match
+                                                                                                  p-value            p-value          p-value
+Local CLIP GD [8]                                                                     Ours
+Local CLIP GD [8]                                                              PaintByWord [4]     0.003              ¡0.001          ¡0.001
+Local CLIP GD [8]                                                           PaintByWord++ [4, 9]   0.435              0.578           ¡0.001
+                                                                               PaintByWord [4]     ¡0.001             0.106           ¡0.001
+        Ours                                                                PaintByWord++ [4, 9]   ¡0.001             ¡0.001          ¡0.001
+        Ours                                                                PaintByWord++ [4, 9]   ¡0.001             ¡0.001          ¡0.001
+ PaintByWord [4]                                                                                   ¡0.001             0.719            0.704
+
+Table 2. User study statistical analysis: We use Tukey's honestly significant difference procedure [54] to test whether the differences
+between mean scores in our user study are statistically significant. Significant results in bold. Our results are statistically better than all
+other methods on all the measured conditions.
+
+                                                                                                  21
+Step 1: paste clip art + "table"
+
+Step 2: "orange"
+
+Step 3: "river bank"
+
+                                  Input image  Mask  Result
+
+Figure 23. Editing session mix example: The user can use several editing operations consecutively. For example, here the user starts by
+pasting a clip art of a table on the image, then masks the relevant area and provides the guiding text "table" to get a more natural looking
+table. In the second stage, the user masks an area on the previous synthesis result and provides the guiding text "orange". In the last stage,
+the user masks the background of the previous synthesis result and provides the guiding text "river bank" to get the final synthesis result.
+
+                                               22
+Step 1: "dresser"
+
+Step 3: "window" Step 2: scribble + "ceiling lamp"
+
+                                                    Input image  Mask  Result
+
+Figure 24. Editing session mix example: The user can use several editing operations consecutively. As a first step, the user masks the
+chair and provides the guiding text "dresser". Next, the user scribbles a rough shape of a lamp on the result of the previous step, masks
+the area of the lamp, and provides the guiding text "ceiling lamp". Finally, the user masks an area over the wall in the previous result, and
+provides the guiding text "window" to obtain the final result.
+
+                                                                 23
+"rubber toy"
+
+"Colosseum"
+
+"Acropolis"
+
+"rubber toy"
+
+              Input image  Mask  Result
+
+Figure 25. Typographic failure: Our model inherits CLIP [44] susceptibility to typographic attacks [19]. Instead of generating an object
+or a scene, the model might generate a textual description.
+
+                           24
+             Input image              Mask                      Synthesis result
+
+Figure 26. Out of proportion synthesis: We show a failure case in which our method generates objects the look natural by themselves,
+but with the wrong proportion to the rest of the scene. For the guiding text "grapes", the synthesized result contains grapes which are huge
+compared to the leopard and to the rest of the scene.
+
+Input image               Input mask        Initial prediction                    Na¨ive blend
+
+Figure 27. Na¨ive Blending: When providing the model the input image and mask with the text prompt "a dog", and without using the
+background preservation loss -- the result is a dog whose head is inside the mask, but most of the dog's body is outside the mask. Blending
+such a result with the input image using the input mask we obtain an unnatural result.
+
+                                      25
+Input image  Input mask   "blanket"         "blue ball"     "pile of books" "bowl of water"
+
+"bread"      "cardboard"  "carrot"          "pile of dirt"  "egg"       "fire"
+
+"flower"     "glass"      "glow stick"      "golden coins"  "grave"     "green flame"
+
+"lamp"       "newspaper"  "clay pot"        "puddle"        "red ball"  "rock"
+
+"smoke"      "soap"       "spoon"           "car tire"      "vase"      "shiny ball"
+
+Figure 28. High resolution results: Given an input image of and mask, our model is able to generate different objects corresponding to
+different text descriptions. Results were produced using 512 × 512 DDPM model.
+
+                                        26
+DDPM
+
+DDIM
+
+DDPM
+
+DDIM
+
+DDPM
+
+DDIM
+
+      Input image  Input mask  100 steps      50 steps  25 steps  12 steps
+
+Figure 29. Blended Diffusion DDPM VS Blended Diffusion DDIM comparison: The part corresponds to the editing text "a shiny ball",
+the middle part to "a rock" and the bottom part to "green hills". As we can see, DDPM produces better results when using 100 diffusion
+steps, whereas it produces worse results in less than 50 diffusion steps.
+
+                                          27
+Input + mask  Augmentation 1      Augmentation 2  Augmentation 3
+
+Figure 30. Extending augmentation example: Given an input image and mask, we augment the masked area in the image using various
+projective transformations.
+
+                              28
+"happy dog mouth" "big red pillow"
+
+"sausages"
+
+"huge avocado"
+
+"knit beanie"
+
+"burning tree"
+
+                                    Input image  Input image + mask  (1)  (2)
+
+Figure 31. Extending augmentations ablation: In order to assess the importance of the extending augmentation technique, we used
+the same random seeds for the same inputs to ensure that the results would differ in the use of augmentations. As we can see, (2)
+using extending augmentations makes the resulting images more natural and coherent with the background in comparison to (1) not using
+extending augmentations.
+
+                                                 29
+                                                                                                       Original image            Input scribble            Mask
+
+Diffusion steps k = 80 Diffusion steps k = 60 Diffusion steps k = 40 Diffusion steps k = 20
+
+                                                                                             Result 1                  Result 2                  Result 3        Result 4
+
+Figure 32. Scribble-guided editing diffusion steps effect: when the diffusion steps are large (e.g. k = 80), the resulting images are more
+realistic and diverse but do not preserve the colors of the input scribble, on the other hand, when the diffusions steps are low (e.g. k = 20),
+the resulting images are almost identical to the input scribble.
+
+                                                                                                                                 30
+(1) Source image                            (2) Translated and reflected                      (3) Mask                                 (4) 1st prediction
+
+(5) 2nd prediction                               (6) 3rd prediction                           (7) 4th prediction              (8) Denoised prediction
+
+Figure 33. Text-guided image extrapolation: We aim to extrapolate the source image (1) to the right according to the guiding text
+
+"heaven".  We  start  by  (2)  translating  the  image  to  the  left  by  1  of  the  input  resolution,  and  filling  the  missing  area  with  reflection  padding.
+                                                                           4
+
+Then we mask the new area (3) and predict the missing part (4) using the foreground altering algorithm. We perform this process 3 more
+
+times (5-7) to get a noisy prediction (7). In order to denoise it, we do the same process with a mask that covers the entire image and get the
+
+denoised result (8) that we can stitch to the source image. Notice that we can reach an arbitrary resolution using this method.
+
+                                                                                  31
+"pile of books"
+
+"car tire"
+
+"sunrise"
+
+"gravel"
+
+                 Input image  Input mask 1st ranked result 2nd ranked result 63th ranked result 64th ranked result
+
+Figure 34. Ranking algorithm effectiveness: We generate 64 synthesis results and rank them using CLIP. We found that this method only
+roughly ranks the results: the top 20% are consistently better than the bottom 20%, but in the resolution of a single image, this is not the
+case -- the first result isn't always better than the second one.
+
+                              32
+

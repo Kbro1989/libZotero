@@ -1,0 +1,926 @@
+                                        GRAND: Graph Neural Diffusion
+
+                                        Benjamin P. Chamberlain * 1 James Rowbottom * 1 Maria Gorinova 1 Stefan Webb 1 Emanuele Rossi 1
+                                                                                          Michael M. Bronstein 1 2 3
+
+arXiv:2106.10934v2 [cs.LG] 22 Sep 2021                          Abstract                                 PDEs are among the most studied mathematical construc-
+                                                                                                         tions, with a vast literature dating back at least to Leonhard
+                                              We present Graph Neural Diffusion (GRAND)                  Euler in the eighteenth century. This includes various dis-
+                                              that approaches deep learning on graphs as a con-          cretisation schemes, numerical methods for approximate
+                                              tinuous diffusion process and treats Graph Neural          solutions, and theorems for their existence and stability. His-
+                                              Networks (GNNs) as discretisations of an under-            torically, PDE-based methods have been used extensively
+                                              lying PDE. In our model, the layer structure and           in signal and image processing (Perona & Malik, 1990),
+                                              topology correspond to the discretisation choices          computer graphics (Sun et al., 2009), and more recently, in
+                                              of temporal and spatial operators. Our approach            machine learning (Chen et al., 2018).
+                                              allows a principled development of a broad new
+                                              class of GNNs that are able to address the com-            Our goal is to show that the tools of PDEs can be used to
+                                              mon plights of graph learning models such as               understand existing GNN architectures and as a principled
+                                              depth, oversmoothing, and bottlenecks. Key to              way to develop a broad class of new methods. We focus on
+                                              the success of our models are stability with re-           GNN architectures that can be interpreted as information
+                                              spect to perturbations in the data and this is ad-         diffusion on graphs, modelled by the diffusion equation.
+                                              dressed for both implicit and explicit discretisa-         In doing so, we show that many popular GNN architec-
+                                              tion schemes. We develop linear and nonlinear              tures can be derived from a single mathematical framework
+                                              versions of GRAND, which achieve competitive               by different choices of the form of diffusion equation and
+                                              results on many standard graph benchmarks.                 discretisation schemes. Standard GNNs are equivalent to
+                                                                                                         the explicit single-step Euler scheme that is inefficient and
+                                        1. Introduction                                                  requires small step sizes. We show that more advanced,
+                                                                                                         adaptive multi-step schemes such as Runge-Kutta perform
+                                        Machine learning on graphs and graph neural networks             significantly better and using implicit schemes, which are
+                                        (GNNs) have been shown to be successful in a broad               unconditionally stable, amounts to larger multi-hop diffu-
+                                        range of problems across different domains, extending way        sion operators. Choosing different spatial discretisation
+                                        beyond machine learning. Important results have been             amounts to graph rewiring, a technique recently used to
+                                        achieved in the physical sciences (Li et al., 2020b;c), where    improve the performance of GNNs (Klicpera et al., 2019;
+                                        partial differential equations (PDEs) have traditionally been    Alon & Yahav, 2021). We show that appropriate choices
+                                        the dominant modelling paradigm.                                 within our framework allow the design of deep GNN archi-
+                                                                                                         tectures with tens of layers. This is a feat hard to achieve
+                                        GNNs are in fact intimately connected to differential equa-      otherwise due to feature oversmoothing (NT & Maehara,
+                                        tions. The seminal work of Scarselli et al. (2009) was con-      2019; Oono & Suzuki, 2020) and bottlenecks (Alon & Ya-
+                                        cerned with finding the fixed points of differential equa-       hav, 2021) ­ phenomena that are recognised as a common
+                                        tions using the Almeida-Pineda algorithm (Almeida, 1987;         plight of most graph learning architectures.
+                                        Pineda, 1987). The currently predominant message passing
+                                        paradigm (Gilmer et al., 2017) can be modelled as a dif-         Main contributions We describe a broad new class of
+                                        ferential equation. More recently, diffusion processes have      GNNs based on the discretised diffusion PDE on graphs
+                                        been shown to be an effective preprocessing step for graph       and study different numerical schemes for their solution.
+                                        learning (Klicpera et al., 2019).                                Second, we provide stability conditions for these schemes.
+                                                                                                         Finally, based on our model, we develop linear and nonlinear
+                                           *Equal contribution 1Twitter Inc., London, UK 2Imperial Col-  Graph Neural Diffusion (GRAND) architectures that per-
+                                        lege London, UK 3IDSIA/USI, Switzerland. Correspondence to:      form competitively on many popular benchmark datasets.
+                                        Ben Chamberlain <bchamberlain@twitter.com>.                      We show detailed ablation studies shedding light on the
+                                                                                                         choice of numerical schemes and parameters.
+                                        Proceedings of the 38 th International Conference on Machine
+                                        Learning, PMLR 139, 2021. Copyright 2021 by the author(s).
+                                           GRAND: Graph Neural Diffusion
+
+2. Background                                                      as a Riemannian manifold, and let X () and X (T ) denote
+                                                                   the spaces of scalar and (tangent) vector fields on it, respec-
+Central to our work is the notion of diffusion processes. In       tively. We denote by x, y and X , Y the respective in-
+this section, we provide a concise background on diffusion         ner products on X () and X (T ). Furthermore, we denote
+equations in the continuous setting, on which we build in          by  : X ()  X (T ) and div =  : X (T )  X ()
+Section 3 to develop similar notions on graphs. As we are          the gradient and divergence operators, which are adjoint
+concerned with continuous analogues of graph diffusion             w.r.t. the above inner products: x, X = x, div(X ) .
+and graphs are associated with a broad array of underlying         Informally, the gradient x of a scalar field x is a vector
+geometries, it is inadequate to formulate these processes in       field providing at each point u   the direction x(u)
+simple flat spaces and more general Riemannian manifolds           of the steepest change of x. The divergence div(X ) of a
+are required.                                                      vector field X is a scalar field providing, at each point, the
+                                                                   flow of X through an infinitesimal volume. The Lapla-
+Diffusion equation We are interested in studying diffu-            cian x can be interpreted as the local difference between
+sion processes on . Informally, diffusion describes the            the value of a scalar field x at a point and its infinitesimal
+movement of a substance from regions of higher to lower            neighbourhood.
+concentration. For example, when a hot object is placed
+on a cold surface, heat will diffuse from the object to the        Applications of diffusion equations In image process-
+surface until both are of equal temperature.                       ing, diffusion equations were used for nonlinear filtering
+                                                                   of images. Given an image x defined on  = [0, 1]2, the
+Let x(t) denote a family of scalar-valued functions on  ×          non-homogeneous isotropic diffusion equation
+[0, ) representing the distribution of some property (which
+we will assume to be temperature for simplicity) on  at                        x(t)
+some time, and let x(u, t) be its value at point u   at time                           = div [g( x(u, t) )x(u, t)] ,
+t. According to Fourier's law of heat conduction, the heat
+flux                                                                             t
+
+               h = -gx,                                            applied to the input image x(u, 0) = x0(u) as the initial
+                                                                   condition, is often referred to as Perona-Malik diffusion
+is proportional to the temperature gradient x, where g             or (erroneously) anisotropic diffusion (Perona & Malik,
+is the diffusivity describing the thermal conductance prop-        1990). The scalar function g  x(u, t) -1 is referred
+erties of . An idealized homogeneous setting assumes               as an edge indicator and is designed to prevent diffusion
+that g is a constant scalar throughout . More generally,           across discontinuities (edges) in the image, thus preserving
+the diffusivity is a inhomogeneous (position-dependent)            its sharpness while at the same time removing the noise. In
+function that can be scalar-valued (in which case it sim-          computer graphics and geometry processing, non-Euclidean
+ply scales the temperature gradient and is isotropic) or           diffusion equations were studied as shape descriptors.
+matrix-valued (in which case the diffusion is said to be
+anisotropic, or direction-dependent). The continuity condi-        3. Diffusion equations on graphs
+tion xt = -div(h) (roughly meaning that the only change
+in the temperature is due to the heat flux, as measured by the     We now define diffusion equations on graphs, analogous to
+divergence operator, i.e., heat is not created or destroyed),      Section 2 and argue that formalizing GNNs under the diffu-
+leads to a PDE referred to as the (heat) diffusion equation,       sion equation framework provides a principled and rigorous
+                                                                   way to develop new architectures for graph learning.
+
+    x(u, t)                                                        3.1. Graph diffusion equation
+               = div[g(u, x(u, t), t)x(u, t)],
+
+       t
+
+with the initial condition x(u, 0) = x0(t); for simplicity,        Let G = (V, E) be an undirected graph with |V| = n nodes
+                                                                   and |E| = e edges, and let x and X denote features defined
+we assume no boundary conditions. The choice of the diffu-         on nodes and edges respectively.1 The node and edge fields
+                                                                   can be represented as n- and e-dimensional vectors assum-
+sivity function determines if the diffusion is homogeneous         ing some arbitrary ordering of nodes. We adopt the same
+                                                                   notation for the respective inner products:
+(g = c), inhomogeneous (g(u, t)), or anisotropic (A(u, t)).
+
+In the isotropic case, the diffusion equation can be expressed
+
+as  x(u,t)  =  div(cx)   =  cx,  where  x  =  div(x)  is
+       t
+                                                                   x, y = xiyi       X , Y = wij Xij Yij
+the Laplacian operator.
+                                                                                 iV                      i>j
+
+Diffusion on manifolds In our discussion so far we as-                 1For simplicity, we assume these features to be scalar-valued
+sumed some abstract domain . The structure of the domain           and refer to them as node and edge fields, by analogy to scalar
+is manifested in the definition of the spatial differential oper-  and vector fields on manifolds. In the rest of the paper, we assume
+ators in the diffusion PDE. In a general setting, we model         vector-valued node features, a straightforward extension.
+                                GRAND: Graph Neural Diffusion
+
+Here, wij denotes the adjacency of G: wij = wji = 1 iff            #$                             #$                                #$
+(i, j)  E. We tacitly assume edge fields to be alternating,
+so Xji = -Xij, and no self-edges, so (i, i) / E. The                                         !                                      +
+gradient (x)ij = xj - xi assigns the edge (i, j)  E
+the difference of its endpoint features and is alternating by                         % "+                                                     )
+definition. Similarly, the divergence (div(X ))i assigns the
+node i the sum of the features of all edges it shares:                                                    !                                %
+
+                                                                                               % "+                                 # $'(
+
+                                                                   %                                 % )+
+
+                           n                                         )                            !
+                                                                                            ! + !%
+(div(X ))i =            Xij = wij Xij                              # $'(                 !  *
+                                                                                         *
+                                                                                                             +
+
+              j:(i,j)E     j=1                                                                       +
+
+The two operators are adjoint, x, X = x, div(X ) .                                                   # $'(
+
+We consider the following diffusion equation on the graph          Figure 1. Block diagrams of (left to right) explicit Euler, 4th order
+                                                                   Runge-Kutta, and implicit Euler schemes.
+   x(t)
+         = div[G(x(t), t)x(t)]         (1)
+   t
+                                                                   k = arg maxi xi and l = arg mini xi we have
+
+with an initial condition x(0). Here we denote by G =                  xk =                 a¯kj (x)xj  xk                a¯kj = 0      (4)
+diag(a(xi(t), xj(t), t)) an e × e diagonal matrix and a is              t
+some function determining the similarity between nodes i                              j                                j
+and j. While in general a(xi, xj, t) can be time-dependent,
+we will assume a = a(xi, xj) for the sake of simplicity.                  xl =              a¯lj (x)xj  xl                a¯lj = 0      (5)
+Plugging in the expressions of  and div, we get                           t
+                                                                                      j                             j
+
+ x(t) = (A(x(t)) - I)x(t) = A¯ (x(t))x(t) (2)                      since A is right stochastic, which proves (ii) and (iii).
+t
+                                                                   Furthermore,  the  derivative     A(x)       is  Lipschitz-continuous
+                                                                                                  x
+
+                                                                   (from the definition of the attention function we use), Taken
+
+where A(x) = (a(xi, xj)) is the n × n attention matrix             together with continuity in time, the requirements of Picard-
+with the same structure as the adjacency of the graph (we
+assume aij = 0 if (i, j) / E). Note that in the setting when       Lindelöf are satisfied and our PDE is also well posed.
+A(x(t)) = A we get a linear diffusion equation that can be
+solved analytically as x(t) = eA¯ tx(0).                           3.3. Solving the graph diffusion equation
+
+3.2. Properties of the graph diffusion equation                    There are a wide range of numerical techniques for solving
+                                                                   nonlinear diffusion equations. Our method most resem-
+Differential equation stability is closely related to the con-     bles the Method of Lines (MOL) where a finite difference
+cept of robustness in machine learning; changes in model           method discretises the spatial derivatives, leaving a linear
+outputs should be small under small changes in inputs. For-        system of ODEs on the temporal axis that can be solved
+mally, a solution x(t) of the PDE is said to be stable, if         with numerical integrators. On a graph, the spatial operators
+given any > 0 there exists  > 0 such that for any solution         are already discrete and follow the structure of the input
+x^(t), such that |x(0) - x^(0)|  , it is also the case that        graph; nevertheless, we show that different structures can be
+|x(t) - x^(t)|  for all t  0.                                      used, thus decoupling the input and computational graph.
+
+In the linear case, it is sufficient to show that the eigenvalues  For temporal discretisation, there exist two main schemes:
+of A¯ are non-positive (see Appendix D for proof) For the          explicit and implicit. Furthermore, we can distinguish be-
+general nonlinear case, we show                                    tween single-step and multi-step schemes; the latter use
+                                                                   multiple function evaluations at different times to compute
+                                                                   the next iterate (see Figure 1).
+
+max xi(0)  xi(t)  min xi(0) t  0, (3)
+i                       i
+                                                                   Explicit schemes. The simplest way to discretise Equa-
+which follows from (i) the function A¯(x)x being continuous        tion (1) is using the forward time difference:
+in x, (ii) the largest component of x(t) not increasing in
+time, and (iii) the smallest component is not decreasing in        x(ik+1) - xi(k) =              a xi(k), xj(k) (x(jk)-xi(k)), (6)
+time.                                                                     
+                                                                                      j:(i,j)E
+Condition (i) holds as A¯ is a composition of Lipschitz-
+continuous functions (cf. equation (10)). Defining indices         where k denotes the discrete time index (iteration),  is the
+                                                                   time step (discretisation parameter), and a is assumed to be
+                                      GRAND: Graph Neural Diffusion
+
+normalised, j a(xi(k), x(jk)) = 1. Rewriting compactly in        and can be explicit or implicit depending s and {j, j}.
+
+matrix-vector form,  x(k+1) -x(k)  =  A(x(k)) - I  x(k) =        The (explicit) Adams­Bashford and (implicit) Adams­
+                                                                 Moulton methods are classes of linear multi-step methods
+A¯ (x(k))x(k), leads to the explicit or forward Euler scheme     that set s-1 = -1 and s-2 = . . . = 0 = 0. For both,
+                                                                 the {j} coefficients are solved for by interpolating the
+(Figure 1, left):                                                dynamics function at the points of the previous solutions,
+                                                                 x(k+j) with a polynomial of order highest order possible
+x(k+1) = I +  A¯ (x(k)) x(k) = Q(k)x(k), (7)                     using the Lagrange formula and substituting this into the
+                                                                 integral form of the ODE. The methods differ in that Adams­
+where for a(ijk) = a(x(ik), x(jk)), the matrix Q(k) is given     Moulton interpolates through x(k+s) and is consequently
+                                                                 implicit whereas the Adams­Bashford methods do not. For
+by qi(ik) = 1 -      ai(k), qi(jk) =  ai(jk) if (i, j)  E , and  Adams­Moulton methods, the implicit equations can be
+                                                                 solved by Newton's method. Alternatively, one can use the
+                   :(i, )E                                       predictor-corrector algorithm, which in this case takes an
+                                                                 initial step with the explicit Adams­Bash method then multi-
+qi(jk) = 0 otherwise. This scheme is called explicit because     ple steps of Adams­Moulton, replacing the unknown x(k+s)
+the update x(k+1) is deduced from x(k) directly by the ap-       with the solution from the previous iteration, repeating until
+                                                                 the difference between adjacent solutions is less than some
+plication of the diffusion operator Q(k). The solution to the    threshold. In our experiments, we use fourth-order meth-
+                                                                 ods, s = 4. Additional details of multi-step schemes are
+diffusion equation is computed by applying the scheme (7)        provided in Appendix F.
+
+multiple times in sequence, starting from some initial x(0).
+
+Implicit schemes use a backward time difference,
+
+x(k+1) -x(k)  = A¯  x(k)    x(k+1), which leads to the (semi-
+        
+
+)implicit scheme (Figure 1, right):
+
+I -  A¯(x(k)) x(k+1) = B(x(k))x(k+1) = x(k) (8)
+
+This scheme is called (semi-)implicit because it requires        Adaptive step size Adaptive step size solvers estimate
+solving a linear system in order to compute the update           the error in each iteration, which is then compared to an
+x(k+1) from x(k), amounting to the inversion of B. The           error tolerance; the step size is adapted to either increase
+efficiency of this step is crucially dependent on the struc-     or reduce the error. The error is estimated by comparing
+ture of B -- for example, on grids, this matrix has a multi-     two methods, one with order p and one with order p - 1.
+diagonal structure, allowing O(n) inversion that was heavily     They are interwoven, i.e., they have common intermediate
+exploited in PDE-based image processing applications (We-        steps. As a result, estimating the error has little or negligible
+ickert, 1997). In general, exact inversion is replaced with a    computational cost compared to a step with the higher-order
+few iterations of a linear solver.                               method. Further details are given in Appendix F.
+
+Stability There exists a tradeoff between the number of          3.4. Connection to existing architectures
+iterations of the scheme K and the time step size  . At
+the same time, the step size  must be chosen in a way            Many GNN architectures can be formalised as a discretisa-
+that guarantees that the scheme is stable. We summarise          tion scheme of (1). The discrete time index k corresponds
+the stability results in the following theorems and provide      to a (convolutional) layer of the graph neural network. Run-
+additional details and proofs in Appendix D.                     ning the diffusion for multiple iterations thus amounts to
+                                                                 applying a GNN layer multiple times. In the diffusion for-
+Theorem 1. The explicit scheme (7) is stable for 0 <  < 1.       malism, the time parameter t acts as a continuous analogy of
+                                                                 the layers, in the spirit of Neural ODEs (Chen et al., 2018).
+Theorem 2. The implicit scheme (8) is unconditionally            This interpretation allows us to exploit more efficient nu-
+stable for any  > 0.                                             merical schemes and analyze the stability and convergence
+                                                                 of the diffusion process.
+Multi-step schemes use intermediate fractional time
+steps to obtain a higher-order numerical approximation,          The vast majority of GNN architectures are explicit single-
+reusing the calculations for efficiency. Runge-Kutta (Fig-       step schemes of the form (7). For example, Equation (6)
+ure 1, center) is among the most common multi-step               corresponds to the update formula of GAT (Velickovic´ et al.,
+schemes. General linear multi-step methods calculate the         2018) with residual connection, assuming a is a learnable
+subsequent iterate using a linear combination of previous        attention function and no non-linearity is used between the
+iterates of the form,                                            layers. Our choice of a time-independent attention function
+                                                                 in the experiments in this paper amounts to all the layers
+s                           s                                    sharing the same parameters. We will show that this is
+                                                                 actually an advantage, as our models will be significantly
+              j x(k+j) =  j A¯ (x(k+j))x(k+j). (9)
+
+j=0                         j=0
+                                            GRAND: Graph Neural Diffusion
+
+more lightweight and less prone to overfitting.                        tion is given by
+
+The diffusion equation is a PDE, with temporal and spatial             a(Xi, Xj) = softmax         (WK Xi) WQXj  ,  (10)
+components. In the graph setting, the former is continuous                                                   dk
+while the latter is discrete. Thus, the diffusion operator Q
+inherits the structure of the adjacency of the input graph.            where WK and WQ are learned matrices, and dk is a hy-
+However, it is possible to consider the graph as a discreti-
+sation of a continuous object and thus regard the graph                perparameter determining the dimension of Wk. We use
+diffusion operator as a discrete derivative. In the same way
+that different discretisations of continuous derivatives with          multi-head attention which is useful to stabilise the learning
+different support can be chosen, we can rewire the graph
+and make the structure of Q different from the input one               (Velickovic´ et al., 2018; Vaswani et al., 2017) by taking the
+and possibly learnable. Multiple GNN architecture de facto
+use a different computational graph from the input one,                expectation,  A(X)  =  1    h Ah(X). The attention weight
+whether for reasons of scalability (e.g. sampling used in                                     h
+GraphSAGE (Hamilton et al., 2017)), denoising the input
+graph (Klicpera et al., 2019), or avoiding bottlenecks (Alon           matrix A = (a(Xi, Xj)) is right-stochastic, allowing equa-
+& Yahav, 2021). We argue that additional reasons are nu-
+merical convenience, to produce diffusion operators that are           tion (12) to be written as
+e.g. friendlier for matrix inversion.
+                                                                                      X = (A(X) - I)X = A¯ (X)X     (11)
+In the following, we also show that the use of more efficient                        t
+multi-step explicit schemes as well as unconditionally stable
+implicit schemes offers significant performance advantages.            As discussed in Section 3, a broad range of discretisations
+In particular, implicit schemes of the form (8) can be inter-          are possible. Temporal discretisations amount to the choice
+preted as multi-hop diffusion operators, since the inverse             of numerical scheme, which can use either fixed or adaptive
+of B is typically dense (unlike Q in the explicit scheme (7)           step sizes and be either explicit or implicit. Time forms
+that has the same sparsity structure of the 1-hop adjacency            a continuous analogy to the layer index, where each layer
+matrix of the graph).                                                  corresponds to an iteration of the solver. When using adap-
+                                                                       tive time step solvers, the number of layers is not specified
+4. Graph Neural Diffusion                                              a-priori. Explicit schemes use residual structures (e.g. Fig-
+                                                                       ure1, left and middle) that are usually more complex than
+We now describe Graph Neural Diffusion (GRAND), a new                  those employed in resnets and which follow directly from
+class of GNN architectures derived from the graph diffu-               rigorous numerical stability results (see Appendix F). Im-
+sion formalism. We assume a given graph G = (V, E)                     plicit numerical schemes offer a natural way of trading off
+with n nodes and d-dimensional node-wise features repre-               depth and width (spatial support of the diffusion kernel).
+sented as a matrix Xin. GRAND architectures implement                  In Section 6.3 we explore several temporal discretisations
+the learnable encoder/decoder functions ,  and a learn-                using various numerical integrators.
+able graph diffusion process, to produce node embeddings
+Y = (X(T )),                                                           Spatial discretisation amounts to modifying the given graph,
+                                                                       or building one in settings where no graph is given and the
+                                                                       data can be assumed to lie in some feature space or on a
+                                                                       continuous manifold. When the input graph is given, which
+                                                                       is the case in our experimental sections, we can rewire the
+                                                                       given graph and use a different edge set in the diffusion
+                                                                       equation.
+
+X(T ) = X(0) +            T X(t)  dt,       X(0) = (Xin)               While in general equation (11) is nonlinear due to the depen-
+                                                                       dence of A on X, it becomes linear if the attention weights
+                          0 t                                          are fixed inside the integral, A¯ (X(t)) = A¯ (note that A is
+                                                                       still parametric and learnable, but does not change through-
+X(t)  is  given  by  the  graph  diffusion  equation  (1).  Different  out the diffusion process). In this case, equation (11) can be
+  t                                                                    solved analytically as X(t) = eA¯ tX(0). As A¯ is a form of
+                                                                       normalised Laplacian, all eigenvalues are non-positive and
+GRAND architectures amount to the choice of the learnable              the steady state solution is given by the dominating eigen-
+                                                                       vector, which is the degree vector. However, as A¯ is learned,
+diffusivity function G and spatial/temporal discretisations            this limitation is not severe as the system can be (and in
+                                                                       practice is) degenerate; the graph becomes (approximately)
+of equation (1).                                                       disconnected, with connected components permitted to have
+                                                                       unique steady state solutions. We call this model GRAND-l
+The diffusivity is modelled with an attention function a(., .).        for linear to distinguish it from the more general GRAND-
+Empirically, scaled dot product attention (Vaswani et al.,             nl for non-linear. The final variant is GRAND-nl-rw (non-
+2017) outperforms the Bahdanau et al. attention used in                linear with rewiring), where rewiring is performed via a two
+GAT (Velickovic´ et al., 2018). The scaled dot product atten-          step process: as a preprocessing step, the graph is densified
+                   GRAND: Graph Neural Diffusion
+
+using diffusion weights as in (Klicpera et al., 2019), and     & Niyogi, 2003) use linear diffusion PDEs with closed
+then at runtime the subset of edges to use is learned based    form solutions expressed through Laplacian eigenvec-
+on attention weights. Equation (1) becomes:                    tors. Diffusion-Convolutional Neural Networks (Atwood
+                                                               & Towsley, 2016) employ a diffusion operator for graph
+Xi(t) =            a (Xi(t), Xj(t)) (Xj(t) - Xi(t))            convolutions and LanczosNet (Liao et al., 2019) uses a poly-
+   t                                                           nomial filter on the Laplacian matrix, which corresponds
+         j:(i,j)E                                              to a multi-scale linear diffusion PDE. Adaptive Lanczos-
+                                                               Net (Liao et al., 2019) additionally allows learning the filters
+                   (12)                                        to reweight the graph using a kernel. The use of a polyno-
+                                                               mial filter approximates the solution of the PDE, and the
+where E = {(i, j) : (i, j)  E and aij > } with some            diffusion is linear with a fixed operator.
+threshold value , is the `rewired' edge set, which may
+now contain self-loops. While a changes throughout the         Neural ODEs. Chen et al. (2018) introduced neural
+diffusion process, rewiring is only performed at the start of  ODEs. Many follow-up works explored augmenta-
+the epoch based on features at t = 0.                          tion (Dupont et al., 2019) and regularization (Finlay et al.,
+                                                               2020) and provided extensions into new domains such as
+GRAND shares parameters across layer/iteration and is thus     stochastic (Li et al., 2020a; Tzen & Raginsky, 2019) dif-
+more data-efficient than conventional GNNs. The full train-    ferential equations. Neural ODEs have also been applied
+ing objective is given in Appendix C. To update the param-     to GNNs: Avelar et al. (2019) model continuous residual
+eters we either backpropagate through the computational        layers with GCN. Poli et al. (2019) propose approaches for
+graph of the numerical integrator or, when memory is con-      static and dynamic graphs using GCN to model static graphs
+strained, use Pontryagin's maximum principle (Pontryagin,      and a hybrid approach where the latent state evolves contin-
+2018).                                                         uously between RNN steps for dynamic graphs. Xhonneux
+                                                               et al. (2020) address continuous message passing. Their
+5. Related work                                                model is a solution to the constant linear diffusion PDE. Un-
+                                                               like most GNN, it scales with the size of the graph having
+Image processing and graphics. During the 1990s-               O(n) parameters. Continuous GNNs were also explored
+2000s, a vast amount of image processing literature ex-        by Gu et al. (2020) who, similarly to (Scarselli et al., 2009),
+ploited the formalism of diffusion equations (Weickert,        addressed the solutions of fixed point equations. Ordinary
+1998), starting with the seminal work of Perona & Ma-          Differential Equations on Graph Networks (GODE)(Zhuang
+lik (1990). Sochen et al. (1998) developed a differential      et al., 2020) approach the problem using the technique of
+geometric framework (`Beltrami flow') considering the evo-     invertible ResNets. Finally, Sanchez-Gonzalez et al. (2019)
+lution of images represented as embedded manifolds. The        used graph-based ODEs to generate physics simulations.
+related bilateral (Tomasi & Manduchi, 1998) and non-local
+means (Buades et al., 2005) filters, together with efficient   Neural PDEs. Using deep learning to solve PDEs was
+numerical techniques (Weickert, 1997; Durand & Dorsey,         explored by Raissi et al. (2017). Neural networks appeared
+2002), have popularised these ideas in the image process-      in (Li et al., 2020b) to accelerate PDE solvers with appli-
+ing community. PDE-based methods were also used for            cations in the physical sciences. These have been applied
+low-level tasks such as image segmentation (Caselles et al.,   to problems where the PDE can be described on a graph
+1997; Chan & Vese, 2001) and inpainting (Bertalmio et al.,     (Li et al., 2020c). Belbute-Peres et al. (2020) consider the
+2000).                                                         problem of predicting fluid flow and use a PDE inside a
+                                                               GNN. These approaches differ from ours in that they solve a
+In computer graphics, solutions of non-Euclidean diffusion     given PDE, whereas we use the notion of discretising PDEs
+equations were studied as heat kernel signature (Sun et al.,   as a principle to understand and design GNNs.
+2009; Bronstein & Kokkinos, 2010) local shape descriptors
+related to the Gaussian curvature. Non-Euclidean diffusion     6. Results
+equations can be solved by using the Laplacian eigenvectors
+as the analogy of Fourier basis and the corresponding eigen-   We design experiments to answer the following: Are GNNs
+values as frequencies. The solution can be represented as      derived from the diffusion PDE competitive with existing
+a spectral transfer function (Patané, 2016), which can also    popular methods? Can we address the problem of building
+be learned (Litman & Bronstein, 2013). The non-Euclidean       deep graph neural networks? Under which conditions can
+Fourier approach was exploited in the early work on deep       implicit methods yield more efficient GNNs than explicit
+learning on graphs (Henaff et al., 2015; Defferrard et al.,    methods? Additional implementation details are provided
+2016; Kipf & Welling, 2017; Levie et al., 2017).               in the Appendix.
+
+Graph diffusion processes techniques such as eigen-
+maps and diffusion maps (Coifman et al., 2005; Belkin
+GRAND: Graph Neural Diffusion
+
+GRAND is implemented in PyTorch (Paszke et al., 2019),           perparameters with the highest validation accuracy were
+using PyTorch geometric (Fey & Lenssen, 2019) and torchd-        chosen and results are reported on a test set that is used only
+iffeq (Chen et al., 2018). Code and instructions to repro-       once. Hyperparameter search used Ray Tune (Liaw et al.,
+duce the experiments are available at https://github.            2018) with a thousand random trials using an asynchronous
+com/twitter-research/graph-neural-pde.                           hyperband scheduler with a grace period of ten epochs and a
+                                                                 half life of ten epochs. The code to reproduce our results is
+6.1. Node classification benchmarks                              included with the submission and will be released publicly
+                                                                 following the review process. Experiments ran on AWS
+We measure the performance of GRAND on a range of                p2.8xlarge machines, each with 8 Tesla V100-SXM2 GPUs.
+common node classification benchmarks.
+
+Methods We compare to four of the most popu-                     Implementation details For smaller datasets (Cora, Cite-
+lar GNN architectures: Graph Convolutional Network               seer) we used the Anode augmentation scheme (Dupont
+(GCN) (Kipf & Welling, 2017), Graph Attention Net-               et al., 2019) to stabilise training. The ogb-arxiv dataset used
+work (GAT) (Velickovic´ et al., 2018), Mixture Model             the Runge-Kutta method, for all others Dormand-Prince
+Networks (Monti et al., 2017) and GraphSage (Hamilton            was used. For the larger datasets, we used kinetic energy
+et al., 2017). Additionally we compare to recent ODE-            and Jacobian regularization (Finlay et al., 2020; Kelly et al.,
+based GNN models, Continuous Graph Neural Networks               2020). The regularization ensures the learned dynamics is
+(CGNN) (Xhonneux et al., 2020), Graph Neural Ordinary            well-conditioned and easily solvable by a numeric solver,
+Differential Equations (GDE) (Poli et al., 2019), and Ordi-      which reduced training time. We use constant initialization
+nary Differential Equations on Graphs (GODE) (Zhuang             for the attention weights, WK , WQ, so training starts from
+et al., 2020) and two versions of LanczosNet (Liao et al.,       a well-conditioned system that induces small regularization
+2019) which approximate solutions to a linear diffusion          penalty terms (Finlay et al., 2020).
+PDE.
+                                                                 Complexity For all datasets we use the adjoint method
+We study three variants of GRAND: linear, nonlinear and          described in (Chen et al., 2018). The space complexity
+nonlinear with graph rewiring. In the GRAND-l, the atten-        is dominated by evaluating Equation (10) over edges and
+tion weights are constant throughout the integration, pro-       is O(|E |d) where E is the edge set following rewiring
+ducing a coupled system of linear ODEs. In GRAND-nl,             and d is dimension of features. The runtime complexity is
+the attention weights are updated at each step of the nu-        O(|E |d)(Eb + Ef ), split between the forward and back-
+merical integration. In both cases, the given graph is used      ward pass and can be dominated by either depending on the
+as the spatial discretisation of the diffusion operator. In      number of function evaluations (Eb, Ef ).
+GRAND-nl-rw, the graph is rewired after each backward
+pass by thresholding the diffusivity attention mechanism.        Number of parameters In traditional GNNs there is a
+The rewiring is held constant throughout the integration.        linear relationship between the number of parameters and
+                                                                 depth. Conversely, GRAND shares parameters across lay-
+Datasets We report results for the most widely used cita-        ers (due to our choice of a time-independent attention) and
+tion networks Cora (McCallum et al., 2000), Citeseer (Sen        consequently, requires significantly less parameters than
+et al., 2008), Pubmed (Namata et al., 2012). These datasets      competing methods, while achieving on par or superior per-
+contain fixed splits that are often used, which we include       formance. The versions of GCN, SAGE and GAT used
+for direct comparison in Table 1. To address the limitations     for the ogb-arxiv results required 143K, 219K and 1.63M
+of this evaluation methodology (Shchur et al., 2018), we         parameters respectively, while our model only 70K.
+also report results for all datasets using 100 random splits
+with 20 random initializations. Additional datasets are the      Performance Tables 1­2 summarise the results of our ex-
+coauthor graph CoauthorCS (Shchur et al., 2018), the Ama-        periments. GRAND variants consistently perform among
+zon co-purchasing graphs Computer and Photo (McAuley             the best methods, achieving first place on all but one dataset,
+et al., 2015), and the OGB arxiv dataset (Hu et al., 2020). In   where it is second. On ogb-arxiv, our results are slightly in-
+all cases, we use the largest connected component. Dataset       ferior to the best-performing GAT, which, however, requires
+statistics are included in Appendix A.                           20 times as many parameters.
+
+Experimental setup We follow the experimental method-            6.2. Depth
+ology described in (Shchur et al., 2018) using 20 random
+weight initializations for datasets with fixed Planetoid splits  To demonstrate that our model solves the oversmoothing
+and 100 random splits for the remaining datasets. Where          problem and performs well with many layers, we performed
+available, results from (Shchur et al., 2018) were used. Hy-     an experiment using the RK4 fixed step-size solver (with
+                                                             GRAND: Graph Neural Diffusion
+
+Planetoid splits                    CORA                 CiteSeer    PubMed      a small step size of  = 0.005, while the implicit Adams
+GCN                                 81.9 ± 0.8           69.5 ± 0.9  79.0 ± 0.5  method is stable for all step sizes. Moreover, in this case
+GAT                                 82.8 ± 0.5           71.0 ± 0.6  77.0 ± 1.3  the implicit method converges to the solution faster than a
+MoNet                               82.2 ± 0.7           70.0 ± 0.6  77.7 ± 0.6  state-of-the-art adaptive step size solver for large enough
+GS-maxpool                          77.4 ± 1.0           67.0 ± 1.0  76.6 ± 0.8  step size. We note, however, that this may not always be
+Lanczos                             79.5±1.8             66.2±1.9    78.3±0.3    the case. As the step size is increased, the implicit method
+AdaLanczos                          80.4±1.1             68.7±1.0    78.1±0.4    can take fewer steps. However, as the step size is increased
+CGNN                                81.7 ± 0.7           68.1 ± 1.2  80.2 ± 0.3  the implicit equations become more difficult to solve and
+GDE*                                83.8 ± 0.5           72.5 ± 0.5  79.9 ± 0.3  require more iterations of the algorithm used to solve them.
+GODE*                               83.3 ± 0.3           72.4 ± 0.6  80.1 ± 0.3
+GRAND-l (ours)                      84.7 ± 0.6           73.3 ± 0.4  80.4 ± 0.4  Graph rewiring In this experiment, we rewired the Cora
+GRAND-nl (ours)                     83.6 ± 0.5           70.8 ± 1.1  79.7 ± 0.3  graph using the method of Klicpera et al. (2019), keeping
+GRAND-nl-rw (ours)                  82.9 ± 0.7           73.6 ± 0.3  81.0 ± 0.4  the largest K coefficients for each node. We varied K to
+                                                                                 explore the tradeoff between sparsity, computation time,
+Table 1. Test accuracy and std for 20 random initializations us-                 and accuracy (see Figure 3, right). As the graph is made
+ing the original Planetoid train-val-test splits. *GODE and GDE                  sparser (K decreases), all methods become faster. The
+comprises six and three separate models respectively. For each                   accuracy converges to similar values until the graph is so
+dataset we present the best performing variant of GODE and GDE.                  sparse that the flow of information is impeded (K < 8). We
+Results obtained running the authors' code with the hyperparam-                  observe that for implicit solvers the benefit of sparsification
+eters given in their paper using Pytorch Geometric data readers.                 is independent of the step size, and both can be combined
+                                                                                 somewhat to decrease the time per epoch without effecting
+               0.8                                                               accuracy. We hypothesize that, in general, a sparser graph is
+                                                                                 particularly desirable for implicit solvers since it may reduce
+               0.7                                                               the difficulty of solving the implicit equations (less iterations
+                                                                                 until convergence). A final observation is that we can draw
+Test Accuracy  0.6                                                               a diagram similar to Figure 1 for the computational graph of
+                                                                                 the Adams­Moulton method with predictor­corrector steps;
+               0.5                                                               it is redolent of an RNN with adaptive computation time
+                                                                                 (Graves, 2016), where the stopping rule is deterministic
+               0.4                                                               rather than learnt (that is, continue unrolling the RNN until
+                                                                                 the difference between outputs is below a cutoff).
+               0.3
+                                                                                 6.4. Diffusion on MNIST Image Data Experiments
+                       GRAND-L      Cora
+                                    Pubmed                                       We performed an experiment to illustrate the learned dif-
+               0.2     GRAND-NL     Citeseer                                     fusion characteristics of GRAND. MNIST pixel data was
+                                                                                 used to construct a superpixel representation (Achanta et al.,
+                       GCN                                                       2012) and adjacent patches were joined with edges, binary
+                                                                                 pixel labels were applied (number or background) with a
+                       ResGCN                                                    50% training mask. We evolved both GRAND-nl and a con-
+                                                                                 stant Laplacian diffusion model for T = 4.8 and  = 0.8,
+                    1            2  4                 8  16          32          equating to a 6 layer GNN. We show the attention weights
+                                                                                 by the colour and thickness of the edges. Figure 4 shows
+                                              Layers                             Non-linear GRAND performs edge detection weighting dif-
+                                                                                 fusion within a class boundary in a way that preserves the
+Figure 2. Performance of architectures of different depth.                       image after diffusion. The Laplacian diffusion is unable to
+                                                                                 preserve the features of the original image.
+step size  = 1.0), varying the integration time T while
+holding the other hyper-parameters fixed. This effectively
+produces architectures of varying depth. Figure 2 shows that
+compared to GCN and a GCN with residual connections,
+our model maintains performance as the layers increase
+whilst the baselines degrade by 50% after 4 layers.
+
+6.3. Choice of discretisation scheme
+
+We investigated the stability of explicit numerical schemes
+with a fixed step size and the tradeoff between step size
+and computational time for an equivalent implicit numer-
+ical scheme. We compared these to the Dormand­Prince
+adaptive step size scheme (DOPRI5).
+
+Method choice We ran GRAND on Cora with the explicit                             7. Conclusion
+Adams­Bashford method, an implicit Adams­Moulton
+method with a predictor-corrector algorithm, and the adap-                       We presented a new class of graph neural network called
+tive Runge-Kutta 4(5) method (see Figure 3, left), varying                       Graph Neural Diffusion (GRAND), based on the discreti-
+the step sizes for the two fixed-step size methods. We ob-                       sation of diffusion PDEs on graphs. Our framework al-
+serve that the explicit Adams method is unstable for all but                     lows leveraging vast literature on PDEs relating to discrete
+                                GRAND: Graph Neural Diffusion
+
+Random splits         CORA       CiteSeer    PubMed                 Coathor CS   Computer          Photo       ogb-arxiv
+GCN                 81.5 ± 1.3  71.9 ± 1.9  77.8 ± 2.9               91.1 ± 0.5  82.6 ± 2.4     91.2 ± 1.2   72.17 ± 0.33
+GAT                 81.8 ± 1.3  71.4 ± 1.9  78.7 ± 2.3               90.5 ± 0.6  78.0 ± 19.0    85.7 ± 20.3  73.65 ± 0.11
+GAT-ppr             81.6 ± 0.3  68.5 ± 0.2  76.7 ± 0.3               91.3 ± 0.1  85.4 ± 0.3     90.9 ± 0.3
+MoNet               81.3 ± 1.3  71.2 ± 2.0  78.6 ± 2.3               90.8 ± 0.6  83.5 ± 2.2     91.2 ± 2.3          N/A
+GS-mean             79.2 ± 7.7  71.6 ± 1.9  77.4 ± 2.2               91.3 ± 2.8  82.4 ± 1.8     91.4 ± 1.3          N/A
+GS-maxpool          76.6 ± 1.9  67.5 ± 2.3  76.1 ± 2.3               85.0 ± 1.1                 90.4 ± 1.3    71.39 ± 0.16
+CGNN                81.4 ± 1.6  66.9 ± 1.8  66.6 ± 4.4              92.3 ± 0.2       N/A        91.39 ± 1.5         N/A
+GDE                 78.7 ± 2.2  71.8 ± 1.1  73.9 ± 3.7               91.6 ± 0.1  80.29 ±2.0     92.4 ± 2.0     58.70 ± 2.5
+GRAND-l (ours)      83.6 ± 1.0  73.4 ± 0.5  78.8 ± 1.7              92.9 ± 0.4   82.9 ± 0.6     92.3 ± 0.9    56.66 ± 10.9
+GRAND-nl (ours)     82.3 ± 1.6  70.9 ± 1.0  77.5 ± 1.8              92.4 ± 0.3   83.7 ± 1.2     92.4 ± 0.8    71.87 ± 0.17
+GRAND-nl-rw (ours)  83.3 ± 1.3  74.1 ± 1.7  78.1 ± 2.1               91.3 ± 0.7  82.4 ± 2.1     92.5 ± 1.0      71.2 ± 0.2
+                                                                                 85.8 ± 1.5                  72.23 ± 0.20
+
+Table 2. Test accuracy and std for 20 random initializations and 100 random train-val-test splits. *Using labels. using 1.5M parameters.
+
+Figure 3. Performance of different solvers. Left: Test accuracy on plain Cora varying the step size, comparing explicit Adams­Bashford,
+implicit Adams­Moulton, and adaptive Runge-Kutta 4(5). We observe that the explicit fixed step size scheme is unstable for all but a
+small step size whereas the implicit scheme is stable for all step sizes tried. For a large step size, the implicit scheme is faster than a
+state-of-the-art explicit scheme with adaptive step size. Right: Diffusion-rewired Cora varying the sparsity of the graph by keeping the
+largest K coefficients for each node. Explicit Adams­Bashford has step size  = 0.005, and implicit Adams­Moulton  = 1.0. We
+observe a trade-off between sparsity, speed, and accuracy.
+
+                                                                    model is currently limited to learn only functions of the
+
+                                                                    form  x  =  f (x(t), t, ),  with  an  `attentional'  structure  of  f.
+                                                                          t
+
+                                                                    This imposes two limitations that are not present in discrete
+
+                                                                    neural networks: first, the size of the hidden state vector
+
+                                                                    must be constant for all layers (a usual situation in GNNs),
+
+                                                                    and second, the same set of parameters  must be used
+
+                                                                    for all layers. The later constraint comes as an advantage,
+
+                                                                    allowing our model to use 10-20 times less parameters than
+
+                                                                    the top performing model on ogbn-arxiv. In future work,
+
+                                                                    we intend to overcome these limitation by introducing a
+
+                                                                     = (t) as described in (Queiruga et al., 2020; Zhang
+
+Figure 4. Illustration of the effect of attention weights on pixel  et al., 2019). We will also consider more general nonlinear
+diffusion
+temporal and spatial operators and stability, and provides          diffusion equations that result in message passing `flavors'
+a blueprint for a principled design of new graph learning
+architectures. We show that appropriate choice of discreti-         of GNN architectures.
+sation and numerical schemes in GRAND allows us to train
+very deep graph neural networks and results in superior             Acknowledgements MB is supported in part by ERC
+performance on popular benchmarks.                                  Consolidator grant No. 724228 (LEMAN). We would like
+                                                                    to thank Gabriele Corso, Nils Hammerla and our reviewers
+Limitations We intentionally considered a form of the               for many helpful suggestions that improved this manuscript.
+diffusion equation that is easier to treat mathematically. Our
+                                                                 GRAND: Graph Neural Diffusion
+
+A. Datasets                                                                                      D. Stability
+
+The statistics for the largest connected components of the                                       D.1. Stability of linear ODE
+experimental datasets are given in Table 3.
+                                                                                                 In the main paper we reported the linear GRAND x = A¯x
+B. Diffusivity Formulations                                                                      has solution
+
+GRAND can use any right stochastic attention matrix. We                                                              x(t) = x(0)eA¯t.                  (19)
+performed experiments with the multiheaded Bahdanau for-
+mulation (Bahdanau et al.) of attention, which has previ-                                        As A¯ is not diagonal this matrix exponential is not analyt-
+ously been applied to graphs in (Velickovic´ et al., 2018)                                       ically recoverable. Performing eigenvalue decomposition
+                                                                                                 the solution is
+
+a(xi, xj) =   exp       LeakyReLU aT                        [W   xi W   xj ]  xk         ]))  ,                   x(t) = T¯eD¯ tT¯-1x(0).              (20)
+                       exp (LeakyReLU                       (aT  [W xi   W
+             kNi
+
+                                                                              (13)               Assuming T¯-1 exists, T¯ has full rank and both are bounded,
+                                                                                                 the test equation becomes
+where W and a are learned and is the concatenation op-
+erator. However, for all datasets, the scaled dot product                                                            y(t) = eD¯ ty(0)                  (21)
+attention performed better. This may be because GAT re-
+lies on dropout. Dropout performs poorly inside adaptive                                         where y(t) = T¯x(t). If x(t) and x^(t) are two solutions of
+timestep numerical ODE solvers as the stochasticity in the                                       the ODE then their projections in eigenspace are y(t) and
+forward pass drives   0.                                                                         y^(t). For each node i:
+
+C. Full Training Objective
+
+The full training program optimises cross entropy loss                                               |yi(t) - y^i(t)| = (yi(0) - y^i(0))e¯it           (22)
+
+                                                       n                                                             = |yi(0) - y^i(0)|eRe(¯i)t (23)
+
+     L(Y, T) = H(Y, T) = tiT log yi                                           (14)
+
+                                                       i=1                                       for this to converge as t   we require Re(¯i)  0 i.
+                                                                                                 As A is right stochastic the eigenvalues of A¯ = A-I satisfy
+where ti  Rdclass is the one-hot truth vector of the ith node                                    this property.
+with prediction
+
+                       yi = (xi(T ))                                          (15)               E. Numerical Schemes
+
+where  : Rd  Rdclass is a linear layer decoder of the                                            E.1. Proof of theorem 1: Stability of explicit Euler
+terminal value of the evolutionary PDE                                                           For linear GRAND with an Euler numerical integrator
+
+     yi = Dxi(T ) + bd                                                        (16)                        x(t+1) = I +  A¯(x(t)) x(t)
+
+                                     T X(t)                                                                                                            (24)
+
+     = D X(0) +                         t dt + bd                             (17)                                   = Q(t)x(t).                       (25)
+
+                                  0
+
+     = D (Xin) +                        T X(t)                                                   We require that the amplification factor ||Q(t)|| < 1. It
+                                             t dt + bd                        (18)               is sufficient to show that Q(t) is a right stochastic matrix,
+                                     0
+                                                                                                 which has the property that its spectral radius max  1. Q
+with the initial condition given by the linear layer encoder                                     is right stochastic if
+ : Rdin  Rd of the input data
+
+                                                       T X(t)                                    1.  N    qij  =  1
+                                                                                                     j=1
+yi = D E(Xin) + be +                                      t dt + bd
+                                                                                                 2. qij > 0 i, j
+                                                    0                                 i
+
+and  f (X(t), t, )  =  X(t)  is         the  system         dynamics    that  we
+                         t
+
+wish to learn. For the nonlinear version of GRAND this is                                        as A is right stochastic j Iij +  (Aij - Iij) = 1 proving
+                                                                                                 1). As aij = qij for i = j, to prove 2) it remains to show
+f =  X(t) = (A(X(t)) - I)X(t) = A¯ (X(t))X(t)
+      t                                                                                          that 1 +  (aii - 1) > 0   < 1.
+                                            GRAND: Graph Neural Diffusion
+
+  Dataset        Type              Classes  Features  Nodes    Edges              Label rate
+    Cora       citation               7       1433     2485     5069                 0.056
+               citation               6       3703     2120     3679                 0.057
+  Citeseer     citation               3        500    19717    44324                 0.003
+  PubMed      co-author               15      6805    18333    81894                 0.016
+Coauthor CS  co-purchase              10       767    13381   245778                 0.015
+ Computers   co-purchase              8        745     7487   119043                 0.021
+   Photos      citation               40       128    169343  1166243                  1
+OGB-Arxiv
+
+                                                  Table 3. Dataset Statistics
+
+E.2. Proof of theorem 2: Implicit methods                               Order 1 2 3 4 5 6 7 8
+                                                                         Evals 1 2 3 4 6 7 9 11
+For implicit Euler
+                                                              Table 4. Function evaluations grow super-linearly with order after
+x n          =         xn  - xn-1  =  f (xn, tn)      (26)    4.
+                            
+
+xn =  f (xn, tn) + xn-1,                              (27)    the error is a single step   p+1 and the error in the entire
+                                                              interval   p. In practice the order of a numerical method
+incrementing the indices gives                                can be determined by measuring how the error changes with
+                                                              step size for a known integral.
+xn+1 =  f (xn+1, tn+1) + xn                           (28)
+
+and now, unlike the explicit case, xn+1 now appears on both   F.2. Butcher Tableau
+sides of the equation. If f is linear
+                                                              The set of coefficients for each multi step method are given
+xn+1 =  A¯xn+1 + xn                                   (29)    by the Butcher Tableau. The simple case of forward Euler
+                                                              has 1 = -1, 1 = 1 with all other terms zero.
+xn+1 = (I -  A¯)-1xn = B-1xn = Qxn,                   (30)
+                                                              There is a law of diminishing return that relates the min-
+and the matrix B must be inverted. The inverse exists as B    imum number of function evaluations and the order of a
+is diagonally dominant                                        higher order Runge-Kutta solver. Table 4 shows why the
+                                                              Runge-Kutta 4 method (RK4) is often regarded as the op-
+     Iii -  (Aii - Iii) >  Aij =  (1 - Aii) (31)              timal trade-off between speed and accuracy for multi step
+                                                              solvers.
+                                                j=i
+                                                              F.3. Runge-Kutta 4
+By considering the action of B on w = (1, ..., 1)T it is
+clear that Bw = w = Qw = w = j Qij = 1.                       For all experiments we find that Runge-Kutta 4 (or it's
+As B is diagonally dominant it is irreducible and satisfies
+Bij  0 i = j and Bii > 0 giving Qij > 0 i, j (?) and Q        adaptive step size variants) outperforms lower order meth-
+is a Markov matrix with spectral radius bounded by unity
+and the implicit scheme is stable for all choices of  .       ods. The Runge-Kutta 4 method follows the schema: if
+                                                              f (x, t) = A¯(xt)xt
+
+F. General Multistep Methods                                  x(t+1)              x(t)     1
+                                                                                            
+                                                                               =        +     (k1  +  2k2  +  2k3  +  k4)  (33)
+                                                                                           6
+A general multistep method (combining both implicit and
+explicit methods) can be written as                           k1 = f (xt, t)                                               (34)
+
+                    s                 s                       k2 = f (xt +  k1/2, t +  /2)                                 (35)
+
+xn+1 + ixn+1-i =  ifn+1-i,                            (32)    k3 = f (xt +  k2/2, t +  /2)                                 (36)
+
+             i=1                      i=0                     k4 = f (xt +  k3, t +  )                                     (37)
+
+where f = x . If 0 = 0 then xn+1 only depends on terms        F.4. Adaptive Step Size
+up to n and the method is explicit.
+                                                              Adaptive step size solvers estimate the error in xn+1, which
+F.1. Order                                                    is compared to an error tolerance. The error is estimated
+                                                              by comparing two methods, one with order p and one with
+The order of a method gives the approximation error in        order p - 1. They are interwoven, i.e., they have common
+terms of a Taylor series expansion. If p is the order, then
+                                                            GRAND: Graph Neural Diffusion
+
+intermediate steps. As a result, estimating the error has little
+or negligible computational cost compared to a step with
+the higher-order method.
+
+s
+
+xn +1 = xn +  bi ki                   (38)
+
+i=1
+
+where ki are the same as for the higher-order method. Then
+the error is
+
+s
+
+en+1 = xn+1 - xn+1 =  (bi - bi )ki.   (39)
+
+i=1
+
+The time step is increased if the error is below tolerance and
+decreased otherwise.
+
+G. Adaptive step size implementation details
+
+Most results presented used the adaptive step size solver
+Dormand-Prince5. Key to getting this to work well is setting
+appropriate tolerances for the step size. Adaptive step size
+ODE solvers require two tolerance parameters; the relative
+tolerance rtol and the absolute atol. Both are used to assess
+the new step size
+
+etol = atol + rtol  max(|x0|, |x1|),  (40)
+
+where x0 and x1 are successive estimations of the new state.
+Dupont et al. (2019) speculate that ResNets can learn a
+richer class of functions than ODEs because "the error aris-
+ing from discrete steps allows trajectories to cross". We
+find that increasing the estimation error is also helpful when
+learning continuous diffusion functions and use value of
+rtol and etal that are ×10 - ×1000 larger than the defaults.
+This both improves prediction accuracy and reduces the
+runtime.
+
+In hyperparameter search atol and rtol were paired together
+using a tolerance scale variable ts such that atol = ts ×
+10-12 and atol = ts-6.
+
+When using the adjoint method to backpropagate deriva-
+tives, two separate ODEs are being solved. This requires
+separate tolerance scales, which may differ: the forward
+pass tolerance, ts, controls for how close the approximated
+ODE solution is compared to the true solution, while the
+backward pass tolerance, tsadj, controls the accuracy of the
+computed gradient. The hyperparameter search includes
+both ts and tsadj.
+GRAND: Graph Neural Diffusion
+
+References                                                     Defferrard, M., Bresson, X., and Vandergheynst, P. Con-
+                                                                 volutional neural networks on graphs with fast localized
+Achanta, R., Shaji, A., Smith, K., Lucchi, A., Fua, P., and       spectral filtering. In NeurIPS, 2016.
+   Süsstrunk, S. SLIC superpixels compared to state-of-the-
+   art superpixel methods. IEEE Trans. Pattern Anal. Mach.     Dupont, E., Doucet, A., and Teh, Y. W. Augmented neural
+  Intell., 34(11):2274­2282, 2012. doi: 10.1109/TPAMI.            ODEs. In NeurIPS, 2019.
+   2012.120.
+                                                               Durand, F. and Dorsey, J. Fast bilateral filtering for the
+Almeida, L. B. A learning rule for asynchronous perceptrons       display of high-dynamic-range images. In Proc Computer
+  with feedback in a combinatorial environment. In Proc          Graphics and Interactive Techniques, 2002.
+  Neural Networks, 1987.
+                                                               Fey, M. and Lenssen, J. E. Fast graph representation learning
+Alon, U. and Yahav, E. On the bottleneck of graph neural         with PyTorch Geometric. In ICLR Workshop on Repre-
+   networks and its practical implications. In ICLR, 2021.        sentation Learning on Graphs and Manifolds, 2019.
+
+Atwood, J. and Towsley, D. Diffusion-convolutional neural      Finlay, C., Jacobsen, J.-H., Nurbekyan, L., and Oberman,
+   networks. In NeurIPS, pp. 1993­2001, 2016.                    A. M. How to train your neural ode: The world of Jaco-
+                                                                  bian and kinetic regularization. In ICML, 2020.
+Avelar, P. H. C., Tavares, A. R., Gori, M., and Lamb,
+   L. C. Discrete and continuous deep residual learning        Gilmer, J., Schoenholz, S. S., Riley, P. F., Vinyals, O., and
+   over graphs. 2019.                                             Dahl, G. E. Neural message passing for quantum chem-
+                                                                  istry. In ICML, 2017.
+Bahdanau, D., Cho, K., and Bengio, Y. Neural machine
+   translation by jointly learning to align and translate. In  Graves, A. Adaptive computation time for recurrent neural
+  ICLR. ISBN 0147-006X (Print). doi: 10.1146/annurev.             networks. CoRR, abs/1603.08983, 2016.
+   neuro.26.041002.131047.
+                                                               Gu, F., Chang, H., Zhu, W., Sojoudi, S., and Ghaoui, L. E.
+Belbute-Peres, F. d. A., Economon, T., and Kolter, Z. Com-        Implicit graph neural networks. arXiv:2009.06211, 2020.
+   bining differentiable pde solvers and graph neural net-
+  works for fluid flow prediction. In ICML. PMLR, 2020.        Hamilton, W. L., Ying, R., and Leskovec, J. Inductive rep-
+                                                                  resentation learning on large graphs. In NeurIPS, 2017.
+Belkin, M. and Niyogi, P. Laplacian eigenmaps for di-
+   mensionality reduction and data representation. Neural      Henaff, M., Bruna, J., and LeCun, Y. Deep convolutional
+   computation, 15(6):1373­1396, 2003.                            networks on graph-structured data. arXiv:1506.05163,
+                                                                  2015.
+Bertalmio, M., Sapiro, G., Caselles, V., and Ballester, C.
+   Image inpainting. In Proc Computer Graphics and Inter-      Hu, W., Fey, M., Zitnik, M., Dong, Y., Ren, H., Liu,
+   active Techniques, 2000.                                       B., Catasta, M., and Leskovec, J. Open graph
+                                                                  benchmark: Datasets for machine learning on graphs.
+Bronstein, M. M. and Kokkinos, I. Scale-invariant heat            arXiv:2005.00687, 2020.
+   kernel signatures for non-rigid shape recognition. In
+  CVPR, 2010.                                                  Kelly, J., Bettencourt, J., Johnson, M. J., and Duvenaud, D.
+                                                                  Learning differential equations that are easy to solve. In
+Buades, A., Coll, B., and Morel, J.-M. A non-local algo-         NeurIPS, 2020.
+   rithm for image denoising. In ICCV, 2005.
+                                                               Kipf, T. N. and Welling, M. Semi-supervised classification
+Caselles, V., Kimmel, R., and Sapiro, G. Geodesic active         with graph convolutional networks. In ICLR, 2017.
+   contours. IJCV, 22(1):61­79, 1997.
+                                                               Klicpera, J., Weißenberger, S., and Günnemann, S. Diffu-
+Chan, T. F. and Vese, L. A. Active contours without edges.        sion improves graph learning. In NeurIPS, volume 32,
+  IEEE Trans. Image Processing, 10(2):266­277, 2001.              2019.
+
+Chen, R. T. Q., Rubanova, Y., Bettencourt, J., and Duvenaud,   Levie, R., Monti, F., Bresson, X., and Bronstein, M. M. Cay-
+   D. Neural ordinary differential equations. In NeurIPS,         leynets: Graph convolutional neural networks with com-
+   pp. 6571­6583, 2018.                                           plex rational spectral filters. arXiv:1705.07664, 2017.
+
+Coifman, R. R., Lafon, S., Lee, A. B., Maggioni, M., Nadler,   Li, X., Chen, R. T. Q., Wong, T.-K. L., and Duvenaud, D.
+   B., Warner, F., and Zucker, S. W. Geometric diffusions         Scalable gradients for stochastic differential equations. In
+   as a tool for harmonic analysis and structure definition      Artificial Intelligence and Statistics, 2020a.
+   of data: Diffusion maps. Proceedings of the national
+   academy of sciences, 102(21):7426­7431, 2005.
+GRAND: Graph Neural Diffusion
+
+Li, Z., Kovachki, N., Azizzadenesheli, K., Liu, B., Bhat-        Perona, P. and Malik, J. Scale-space and edge detection
+   tacharya, K., Stuart, A., and Anandkumar, A. Fourier             using anisotropic diffusion. PAMI, 12(7):629­639, 1990.
+   neural operator for parametric partial differential equa-
+   tions. 2020b.                                                 Pineda, F. J. Generalization of back-propagation to recurrent
+                                                                    neural networks. Physical Review Letters, 59(19):2229,
+Li, Z., Kovachki, N., Azizzadenesheli, K., Liu, B., Bhat-          1987.
+   tacharya, K., Stuart, A., and Anandkumar, A. Multipole
+   graph neural operator for parametric partial differential     Poli, M., Massaroli, S., Park, J., Yamashita, A., Asama, H.,
+   equations. In NeurIPS, 2020c.                                    and Park, J. Graph neural ordinary differential equations.
+                                                                    pp. 6571­6583, 2019.
+Liao, R., Zhao, Z., Urtasun, R., and Zemel, R. S. Lanc-
+   zosnet: Multi-scale deep graph convolutional networks.        Pontryagin, L. S. Mathematical theory of optimal processes.
+   In ICLR 2019, New Orleans, LA, USA, May 6-9, 2019.               Routledge, 2018.
+   OpenReview.net, 2019.
+                                                                 Queiruga, A. F., Erichson, N. B., Taylor, D., and Mahoney,
+Liaw, R., Liang, E., Nishihara, R., Moritz, P., Gonzalez,           M. W. Continuous-in-depth neural networks. (2), 2020.
+  J. E., and Stoica, I. Tune: A research platform for dis-
+   tributed model selection and training. 2018.                  Raissi, M., Perdikaris, P., and Karniadakis, G. E. Physics
+                                                                    informed deep learning (Part II): Data-driven discovery
+Litman, R. and Bronstein, A. M. Learning spectral descrip-          of nonlinear partial differential equations. (Part II), 2017.
+   tors for deformable shape correspondence. PAMI, 36(1):
+  171­180, 2013.                                                 Sanchez-Gonzalez, A., Bapst, V., Cranmer, K., and
+                                                                    Battaglia, P. Hamiltonian graph networks with ODE
+McAuley, J., Targett, C., Shi, Q., and Van Den Hengel, A.           integrators. 2019.
+   Image-based recommendations on styles and substitutes.
+   In Proceedings Information Retrieval, 2015.                   Scarselli, F., Gori, M., Tsoi, A. C., Hagenbuchner, M., and
+                                                                    Monfardini, G. The graph neural network model. IEEE
+McCallum, A. K., Nigam, K., Rennie, J., and Seymore,               Trans. Neural Networks, 27(8):61­80, 2009.
+   K. Automating the construction of internet portals with
+   machine learning. Information Retrieval, 3(2):127­163,        Sen, P., Namata, G., Bilgic, M., Getoor, L., Galligher, B.,
+   2000.                                                            and Eliassi-Rad, T. Collective classification in network
+                                                                    data. AI Magazine, 29(3):93­93, 2008.
+Monti, F., Boscaini, D., Masci, J., Rodolà, E., Svoboda, J.,
+   and Bronstein, M. M. Geometric deep learning on graphs        Shchur, O., Mumme, M., Bojchevski, A., and Günne-
+   and manifolds using mixture model CNNs. In CVPR,                 mann, S. Pitfalls of graph neural network evaluation.
+   2017. ISBN 978-1-5386-0457-1.                                    arXiv:1811.05868, 2018.
+
+Namata, G., London, B., Getoor, L., Huang, B., and EDU, U.       Sochen, N., Kimmel, R., and Malladi, R. A general frame-
+   Query-driven active surveying for collective classification.    work for low level vision. IEEE Trans. Image Processing,
+   In Proceedings Mining and Learning with Graphs, 2012.           7(3):310­318, 1998.
+
+NT, H. and Maehara, T. Revisiting graph neural networks:         Sun, J., Ovsjanikov, M., and Guibas, L. A concise and
+  All we have is low-pass filters. 2019.                            provably informative multi-scale signature based on heat
+                                                                    diffusion. Computer Graphics Forum, 28(5):1383­1392,
+Oono, K. and Suzuki, T. Graph neural networks exponen-              2009.
+   tially lose expressive power for node classification. In
+  ICLR, 2020.                                                    Tomasi, C. and Manduchi, R. Bilateral filtering for gray and
+                                                                    color images. In ICCV, 1998.
+Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J.,
+   Chanan, G., Killeen, T., Lin, Z., Gimelshein, N., Antiga,     Tzen, B. and Raginsky, M. Neural stochastic differential
+   L., Desmaison, A., Kopf, A., Yang, E., DeVito, Z., Rai-          equations: Deep latent gaussian models in the diffusion
+   son, M., Tejani, A., Chilamkurthy, S., Steiner, B., Fang,        limit. arXiv preprint arXiv:1905.09883, 2019.
+   L., Bai, J., and Chintala, S. Pytorch: An imperative
+   style, high-performance deep learning library. In NeurIPS.    Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, A., Jones,
+   2019.                                                            L., Gomez, A. N., Kaiser, L., and Polosukhin, I. Attention
+                                                                    is all you need. In NeurIPS, pp. 5998­6008, 2017.
+Patané, G. Laplacian spectral kernels and distances for ge-
+   ometry processing and shape analysis. Computer Graph-         Velickovic´, P., Cucurull, G., Casanova, A., Romero, A., Liò,
+   ics Forum, 35(2):599­624, 2016.                                  P., and Bengio, Y. Graph attention networks. In ICLR,
+                                                                    2018.
+                                                            GRAND: Graph Neural Diffusion
+
+Weickert, J. A review of nonlinear diffusion filtering. In
+  Proceedings ScaleSpace. Springer, 1997.
+
+Weickert, J. Anisotropic diffusion in image processing. Teub-
+   ner Stuttgart, 1998.
+
+Xhonneux, L.-p. A. C., Qu, M., and Tang, J. Continuous
+   graph neural networks. In ICML, 2020.
+
+Zhang, T., Yao, Z., Gholami, A., Keutzer, K., Gonzalez, J.,
+   Biros, G., and Mahoney, M. W. ANODEV2: A coupled
+   neural ODE framework. In NeurIPS, 2019.
+
+Zhuang, J., Dvornek, N., Li, X., and Duncan, J. S. Ordi-
+   nary differential equations on graph networks. Technical
+   Report 1, 2020.
+

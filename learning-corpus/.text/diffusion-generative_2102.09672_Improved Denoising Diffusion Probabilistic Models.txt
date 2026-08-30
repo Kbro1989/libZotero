@@ -1,0 +1,173 @@
+Improved Denoising Diffusion Probabilistic Models
+
+arXiv:2102.09672v1 [cs.LG] 18 Feb 2021
+
+Alex Nichol * 1 Prafulla Dhariwal * 1
+
+Abstract
+Denoising diffusion probabilistic models (DDPM) are a class of generative models which have recently been shown to produce excellent samples. We show that with a few simple modifications, DDPMs can also achieve competitive loglikelihoods while maintaining high sample quality. Additionally, we find that learning variances of the reverse diffusion process allows sampling with an order of magnitude fewer forward passes with a negligible difference in sample quality, which is important for the practical deployment of these models. We additionally use precision and recall to compare how well DDPMs and GANs cover the target distribution. Finally, we show that the sample quality and likelihood of these models scale smoothly with model capacity and training compute, making them easily scalable. We release our code at https://github.com/ openai/improved-diffusion.
+1. Introduction
+Sohl-Dickstein et al. (2015) introduced diffusion probabilistic models, a class of generative models which match a data distribution by learning to reverse a gradual, multi-step noising process. More recently, Ho et al. (2020) showed an equivalence between denoising diffusion probabilistic models (DDPM) and score based generative models (Song & Ermon, 2019; 2020), which learn a gradient of the logdensity of the data distribution using denoising score matching (Hyva¨rinen, 2005). It has recently been shown that this class of models can produce high-quality images (Ho et al., 2020; Song & Ermon, 2020; Jolicoeur-Martineau et al., 2020) and audio (Chen et al., 2020b; Kong et al., 2020), but it has yet to be shown that DDPMs can achieve loglikelihoods competitive with other likelihood-based models such as autoregressive models (van den Oord et al., 2016c) and VAEs (Kingma & Welling, 2013). This raises various questions, such as whether DDPMs are capable of capturing all the modes of a distribution. Furthermore, while Ho et al.
+*Equal contribution 1OpenAI, San Francisco, USA. Correspondence to: <alex@openai.com>, <prafulla@openai.com>.
+
+(2020) showed extremely good results on the CIFAR-10 (Krizhevsky, 2009) and LSUN (Yu et al., 2015) datasets, it is unclear how well DDPMs scale to datasets with higher diversity such as ImageNet. Finally, while Chen et al. (2020b) found that DDPMs can efficiently generate audio using a small number of sampling steps, it has yet to be shown that the same is true for images.
+In this paper, we show that DDPMs can achieve loglikelihoods competitive with other likelihood-based models, even on high-diversity datasets like ImageNet. To more tightly optimise the variational lower-bound (VLB), we learn the reverse process variances using a simple reparameterization and a hybrid learning objective that combines the VLB with the simplified objective from Ho et al. (2020).
+We find surprisingly that, with our hybrid objective, our models obtain better log-likelihoods than those obtained by optimizing the log-likelihood directly, and discover that the latter objective has much more gradient noise during training. We show that a simple importance sampling technique reduces this noise and allows us to achieve better log-likelihoods than with the hybrid objective.
+After incorporating learned variances into our model, we surprisingly discovered that we could sample in fewer steps from our models with very little change in sample quality. While DDPM (Ho et al., 2020) requires hundreds of forward passes to produce good samples, we can achieve good samples with as few as 50 forward passes, thus speeding up sampling for use in practical applications. In parallel to our work, Song et al. (2020a) develops a different approach to fast sampling, and we compare against their approach, DDIM, in our experiments.
+While likelihood is a good metric to compare against other likelihood-based models, we also wanted to compare the distribution coverage of these models with GANs. We use the improved precision and recall metrics (Kynka¨a¨nniemi et al., 2019) and discover that diffusion models achieve much higher recall for similar FID, suggesting that they do indeed cover a much larger portion of the target distribution.
+Finally, since we expect machine learning models to consume more computational resources in the future, we evaluate the performance of these models as we increase model size and training compute. Similar to (Henighan et al.,
+
+Improved Denoising Diffusion Probabilistic Models
+
+2
+
+2020), we observe trends that suggest predictable improvements in performance as we increase training compute.
+
+2. Denoising Diffusion Probabilistic Models
+We briefly review the formulation of DDPMs from Ho et al. (2020). This formulation makes various simplifying assumptions, such as a fixed noising process q which adds diagonal Gaussian noise at each timestep. For a more general derivation, see Sohl-Dickstein et al. (2015).
+
+2.1. Definitions
+
+Given a data distribution x0  q(x0), we define a forward noising process q which produces latents x1 through xT by adding Gaussian noise at time t with variance t  (0, 1) as follows:
+
+T
+
+q(x1, ..., xT |x0) := q(xt|xt-1)
+
+(1)
+
+t=1
+
+q(xt|xt-1) := N (xt; 1 - txt-1, tI) (2)
+
+Given sufficiently large T and a well behaved schedule of t, the latent xT is nearly an isotropic Gaussian distribution. Thus, if we know the exact reverse distribution q(xt-1|xt), we can sample xT  N (0, I) and run the process in reverse to get a sample from q(x0). However, since q(xt-1|xt) depends on the entire data distribution, we approximate it using a neural network as follows:
+p(xt-1|xt) := N (xt-1; µ(xt, t), (xt, t)) (3)
+
+The combination of q and p is a variational auto-encoder (Kingma & Welling, 2013), and we can write the variational lower bound (VLB) as follows:
+
+Lvlb := L0 + L1 + ... + LT -1 + LT
+
+(4)
+
+L0 := - log p(x0|x1)
+
+(5)
+
+Lt-1 := DKL(q(xt-1|xt, x0) || p(xt-1|xt)) (6)
+
+LT := DKL(q(xT |x0) || p(xT ))
+
+(7)
+
+Aside from L0, each term of Equation 4 is a KL divergence between two Gaussians, and can thus be evaluated in closed form. To evaluate L0 for images, we assume that each color component is divided into 256 bins, and we compute the probability of p(x0|x1) landing in the correct bin (which is tractable using the CDF of the Gaussian distribution). Also note that while LT does not depend on , it will be close to zero if the forward noising process adequately destroys the data distribution so that q(xT |x0)  N (0, I).
+As noted in (Ho et al., 2020), the noising process defined in Equation 2 allows us to sample an arbitrary step of the
+
+noised latents directly conditioned on the input x0. With
+
+t := 1 - t and ¯t :=
+
+t s=0
+
+s,
+
+we
+
+can
+
+write
+
+the
+
+marginal
+
+
+
+q(xt|x0) = N (xt; ¯tx0, (1 - ¯t)I)
+
+(8)
+
+
+
+
+
+xt = ¯tx0 + 1 - ¯t
+
+(9)
+
+where  N (0, I). Here, 1 - ¯t tells us the variance of the noise for an arbitrary timestep, and we could equivalently use this to define the noise schedule instead of t.
+
+Using Bayes theorem, one can calculate the posterior q(xt-1|xt, x0) in terms of ~t and µ~t(xt, x0) which are de-
+fined as follows:
+
+~t
+
+:=
+
+1 - ¯t-1
+
+1 
+
+-
+
+¯t
+
+t
+
+
+
+(10)
+
+µ~t(xt, x0) :=
+
+¯t-1t 1 - ¯t
+
+x0
+
++
+
+t(1 - ¯t-1) 1 - ¯t
+
+xt
+
+(11)
+
+q(xt-1|xt, x0) = N (xt-1; µ~(xt, x0), ~tI)
+
+(12)
+
+2.2. Training in Practice
+The objective in Equation 4 is a sum of independent terms Lt-1, and Equation 9 provides an efficient way to sample from an arbitrary step of the forward noising process and estimate Lt-1 using the posterior (Equation 12) and prior (Equation 3). We can thus randomly sample t and use the expectation Et,x0, [Lt-1] to estimate Lvlb. Ho et al. (2020) uniformly sample t for each image in each mini-batch.
+There are many different ways to parameterize µ(xt, t) in the prior. The most obvious option is to predict µ(xt, t) directly with a neural network. Alternatively, the network could predict x0, and this output could be used in Equation 11 to produce µ(xt, t). The network could also predict the noise and use Equations 9 and 11 to derive
+
+1
+
+µ(xt, t)
+
+=
+
+ t
+
+xt
+
+-
+
+ t 1-
+
+¯t
+
+(xt, t)
+
+(13)
+
+Ho et al. (2020) found that predicting worked best, especially when combined with a reweighted loss function:
+
+Lsimple = Et,x0, || - (xt, t)||2
+
+(14)
+
+This objective can be seen as a reweighted form of Lvlb (without the terms affecting ). The authors found that optimizing this reweighted objective resulted in much better sample quality than optimizing Lvlb directly, and explain this by drawing a connection to generative score matching (Song & Ermon, 2019; 2020).
+
+One subtlety is that Lsimple provides no learning signal for
+(xt, t). This is irrelevant, however, since Ho et al. (2020) achieved their best results by fixing the variance to t2I rather than learning it. They found that they achieve similar
+
+

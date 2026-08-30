@@ -1,0 +1,101 @@
+LLM in a flash: Efficient Large Language Model Inference with Limited Memory
+Keivan Alizadeh, Iman Mirzadeh* , Dmitry Belenko* , S. Karen Khatamifard, Minsik Cho, Carlo C Del Mundo, Mohammad Rastegari, Mehrdad Farajtabar
+Apple 
+
+arXiv:2312.11514v3 [cs.CL] 30 Jul 2024 Inference Latency (ms)
+
+Abstract
+Large language models (LLMs) are central to modern natural language processing, delivering exceptional performance in various tasks. However, their substantial computational and memory requirements present challenges, especially for devices with limited DRAM capacity. This paper tackles the challenge of efficiently running LLMs that exceed the available DRAM capacity by storing the model parameters in flash memory, but bringing them on demand to DRAM. Our method involves constructing an inference cost model that takes into account the characteristics of flash memory, guiding us to optimize in two critical areas: reducing the volume of data transferred from flash and reading data in larger, more contiguous chunks. Within this hardware-informed framework, we introduce two principal techniques. First, "windowing" strategically reduces data transfer by reusing previously activated neurons, and second, "row-column bundling", tailored to the sequential data access strengths of flash memory, increases the size of data chunks read from flash memory. These methods collectively enable running models up to twice the size of the available DRAM, with up to 4x and 20x increase in inference speed compared to naive loading approaches in CPU and GPU, respectively. Our integration of sparsity awareness, context-adaptive loading, and a hardware-oriented design paves the way for effective inference of LLMs on devices with limited memory.
+1 Introduction
+In recent years, large language models (LLMs) have demonstrated strong performance across a wide range of natural language tasks (Brown et al., 2020; Chowdhery et al., 2022; Touvron et al., 2023a; Jiang et al., 2023; Gemini Team, 2023).
+* Major Contribution  {kalizadehvahid, imirzadeh, d_belenko, skhatamifard, minsik, cdelmundo, mrastegari, farajtabar}@apple.com
+
+Compute 3100
+
+Load From Flash
+
+Memory Management
+
+2250
+
+1000 700 450
+100 Naive Ours
+Llama 2-7B (CPU)
+
+Naive Ours
+OPT-6.7B (CPU)
+
+Naive Ours
+OPT-6.7B (GPU)
+
+Figure 1: Average inference latency for a single token when only half of the model's memory is available: Our method selectively loads parameters on demand for each token generation step. The latency represents the time required to repeatedly load parameters from flash memory, combined with the time needed for computations.
+
+However, the unprecedented capabilities of these models come with substantial computational and memory requirements for inference. LLMs can contain hundreds of billions or even trillions of parameters, which makes them challenging to load and run efficiently, especially on personal devices.
+Currently, the standard approach is to load the entire model into DRAM (Dynamic Random Access Memory) for inference (Rajbhandari et al., 2021; Aminabadi et al., 2022). However, this severely limits the maximum model size that can be run. For example, a 7 billion parameter model requires over 14GB of memory just to load the parameters in half-precision floating point format, exceeding the capabilities of most personal devices such as smartphones. While it is possible to employ techniques such as quantization to reduce the model size, still, this cannot address the main limitation of loading the entire model into DRAM.
+To address this limitation, we propose to store the model parameters in flash memory, which is
+
+~100 GB/s
+Random Read Throughput (MB/s)
+
+Flash Memory
+
+GPU
+
+CPU
+
+~100 GB
+
+~ 1 GB/s
+
+DRAM ~10 GB
+
+(a) Bandwidth in a unified memory architecture
+
+6000
+Upper Bound (Sequential Read)
+
+5000 Threads 32
+
+4000
+
+16
+
+8
+
+3000
+
+4
+
+2 2000
+
+1000
+
+0
+
+4 8 16
+
+32
+
+64
+
+Chunk Size (KB)
+
+(b) Random read throughput of flash memory
+
+Figure 2: (a) Flash memory offers significantly higher capacity but suffers from much lower bandwidth compared to DRAM and CPU/GPU caches and registers. (b) The throughput for random reads in flash memory increases with the size of sequential chunks and the number of threads.
+
+at least an order of magnitude larger than DRAM. Then, during inference, we directly load the required subset of parameters from the flash memory, avoiding the need to fit the entire model in DRAM. To this end, our work makes several contributions:
+· First, we study the hardware characteristics of storage systems (e.g., flash, DRAM). We show that hardware constraints such as capacity and bandwidth limitations can have significant considerations when designing efficient algorithms for serving LLMs from flash (Section 2).
+· Motivated by our findings, we propose several techniques that can help with (i) reducing the required data transfer, (ii) increasing the transfer throughput, and (iii) managing loaded parameters efficiently in DRAM (Section 3).
+· Finally, as partially demonstrated in Figure 1, we show that our proposed techniques for optimizing the cost model and selectively loading parameters on demand allows us to run models 2x larger than the device's DRAM capacity and speed up inference up to 4x, 7x, and 20x compared to naive implementation in CPU, Metal and NVIDIA GPU backends, respectively (Section 4).
+2 Flash Memory & LLM Inference
+In this section, we explore the characteristics of memory storage systems (e.g., flash, DRAM), and their implications for large language model (LLM) inference. We aim to understand the challenges and hardware-specific considerations essential for algorithm design, particularly in optimizing inference when working with flash memory.
+
+2.1 Bandwidth and Energy Constraints
+While modern NAND flash memories offer high bandwidth and low latency, they fall well short of the performance levels of DRAM (Dynamic Random-Access Memory), in terms of both latency and throughput. Figure 2a illustrates these differences. A naive inference implementation that relies on NAND flash memory might necessitate reloading the entire model for each forward pass. This process is not only time-consuming, often taking seconds for even compressed models, but it also consumes more energy than transferring data from DRAM to the CPU or GPU's internal memory.
+Load times for the models can be a problem even in the traditional DRAM-resident setup where weights are not reloaded partially ­ the initial, full load of the model still incurs a penalty, particularly in situations requiring rapid response times for the first token. Our approach, leveraging activation sparsity in LLMs, addresses these challenges by enabling selective reading of model weights, thereby reducing the response latency.
+2.2 Read Throughput
+Flash memory systems perform optimally with large sequential reads. For instance, benchmarks on an Apple MacBook M1 Max with 1TB flash memory demonstrate speeds exceeding 6 GiB/s for a 1GiB linear read of an uncached file. However, this high bandwidth cannot be achieved for smaller, random reads due to the inherent multi-phase nature of these reads, encompassing the operating system, drivers, interrupt handling, and the flash controller, among others. Each phase introduces latency, disproportionately affecting smaller reads.
+To circumvent these limitations, we advocate two primary strategies, which can be employed
+
+

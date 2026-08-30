@@ -1,0 +1,152 @@
+LightGCN: Simplifying and Powering Graph Convolution Network for Recommendation
+
+arXiv:2002.02126v4 [cs.IR] 7 Jul 2020
+
+Xiangnan He
+University of Science and Technology of China
+xiangnanhe@gmail.com
+
+Kuan Deng
+University of Science and Technology of China
+dengkuan@mail.ustc.edu.cn
+
+Xiang Wang
+National University of Singapore xiangwang@u.nus.edu
+
+Yan Li
+Beijing Kuaishou Technology Co., Ltd.
+liyan@kuaishou.com
+
+Yongdong Zhang
+University of Science and Technology of China
+zhyd73@ustc.edu.cn
+
+Meng Wang
+Hefei University of Technology eric.mengwang@gmail.com
+
+ABSTRACT
+Graph Convolution Network (GCN) has become new state-ofthe-art for collaborative filtering. Nevertheless, the reasons of its effectiveness for recommendation are not well understood. Existing work that adapts GCN to recommendation lacks thorough ablation analyses on GCN, which is originally designed for graph classification tasks and equipped with many neural network operations. However, we empirically find that the two most common designs in GCNs -- feature transformation and nonlinear activation -- contribute little to the performance of collaborative filtering. Even worse, including them adds to the difficulty of training and degrades recommendation performance.
+In this work, we aim to simplify the design of GCN to make it more concise and appropriate for recommendation. We propose a new model named LightGCN, including only the most essential component in GCN -- neighborhood aggregation -- for collaborative filtering. Specifically, LightGCN learns user and item embeddings by linearly propagating them on the user-item interaction graph, and uses the weighted sum of the embeddings learned at all layers as the final embedding. Such simple, linear, and neat model is much easier to implement and train, exhibiting substantial improvements (about 16.0% relative improvement on average) over Neural Graph Collaborative Filtering (NGCF) -- a state-of-the-art GCN-based recommender model -- under exactly the same experimental setting. Further analyses are provided towards the rationality of the simple LightGCN from both analytical and empirical perspectives. Our implementations are available in both TensorFlow1 and PyTorch2.
+Meng Wang is the corresponding author. 1 https://github.com/kuandeng/LightGCN 2 https://github.com/gusye1234/pytorch- light- gcn
+Permission to make digital or hard copies of all or part of this work for personal or classroom use is granted without fee provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and the full citation on the first page. Copyrights for components of this work owned by others than the author(s) must be honored. Abstracting with credit is permitted. To copy otherwise, or republish, to post on servers or to redistribute to lists, requires prior specific permission and/or a fee. Request permissions from permissions@acm.org. SIGIR '20, July 25­30, 2020, Virtual Event, China © 2020 Copyright held by the owner/author(s). Publication rights licensed to ACM. ACM ISBN 978-1-4503-8016-4/20/07. . . $15.00 https://doi.org/10.1145/3397271.3401063
+
+CCS CONCEPTS
+· Information systems  Recommender systems.
+KEYWORDS
+Collaborative Filtering, Recommendation, Embedding Propagation, Graph Neural Network
+ACM Reference Format: Xiangnan He, Kuan Deng, Xiang Wang, Yan Li, Yongdong Zhang, and Meng Wang. 2020. LightGCN: Simplifying and Powering Graph Convolution Network for Recommendation. In Proceedings of the 43rd International ACM SIGIR Conference on Research and Development in Information Retrieval (SIGIR '20), July 25­30, 2020, Virtual Event, China. ACM, New York, NY, USA, 10 pages. https://doi.org/10.1145/3397271.3401063
+1 INTRODUCTION
+To alleviate information overload on the web, recommender system has been widely deployed to perform personalized information filtering [7, 45, 46]. The core of recommender system is to predict whether a user will interact with an item, e.g., click, rate, purchase, among other forms of interactions. As such, collaborative filtering (CF), which focuses on exploiting the past user-item interactions to achieve the prediction, remains to be a fundamental task towards effective personalized recommendation [10, 19, 28, 39].
+The most common paradigm for CF is to learn latent features (a.k.a. embedding) to represent a user and an item, and perform prediction based on the embedding vectors [6, 19]. Matrix factorization is an early such model, which directly projects the single ID of a user to her embedding [26]. Later on, several research find that augmenting user ID with the her interaction history as the input can improve the quality of embedding. For example, SVD++ [25] demonstrates the benefits of user interaction history in predicting user numerical ratings, and Neural Attentive Item Similarity (NAIS) [18] differentiates the importance of items in the interaction history and shows improvements in predicting item ranking. In view of user-item interaction graph, these improvements can be seen as coming from using the subgraph structure of a user -- more specifically, her one-hop neighbors -- to improve the embedding learning.
+To deepen the use of subgraph structure with high-hop neighbors, Wang et al. [39] recently proposes NGCF and achieves state-of-the-art performance for CF. It takes inspiration from the Graph Convolution Network (GCN) [14, 23], following the same
+
+propagation rule to refine embeddings: feature transformation, neighborhood aggregation, and nonlinear activation. Although NGCF has shown promising results, we argue that its designs are rather heavy and burdensome -- many operations are directly inherited from GCN without justification. As a result, they are not necessarily useful for the CF task. To be specific, GCN is originally proposed for node classification on attributed graph, where each node has rich attributes as input features; whereas in user-item interaction graph for CF, each node (user or item) is only described by a one-hot ID, which has no concrete semantics besides being an identifier. In such a case, given the ID embedding as the input, performing multiple layers of nonlinear feature transformation -- which is the key to the success of modern neural networks [16] -- will bring no benefits, but negatively increases the difficulty for model training.
+To validate our thoughts, we perform extensive ablation studies on NGCF. With rigorous controlled experiments (on the same data splits and evaluation protocol), we draw the conclusion that the two operations inherited from GCN -- feature transformation and nonlinear activation -- has no contribution on NGCF's effectiveness. Even more surprising, removing them leads to significant accuracy improvements. This reflects the issues of adding operations that are useless for the target task in graph neural network, which not only brings no benefits, but rather degrades model effectiveness. Motivated by these empirical findings, we present a new model named LightGCN, including the most essential component of GCN -- neighborhood aggregation -- for collaborative filtering. Specifically, after associating each user (item) with an ID embedding, we propagate the embeddings on the user-item interaction graph to refine them. We then combine the embeddings learned at different propagation layers with a weighted sum to obtain the final embedding for prediction. The whole model is simple and elegant, which not only is easier to train, but also achieves better empirical performance than NGCF and other state-of-the-art methods like Mult-VAE [28].
+To summarize, this work makes the following main contributions:
+· We empirically show that two common designs in GCN, feature transformation and nonlinear activation, have no positive effect on the effectiveness of collaborative filtering.
+· We propose LightGCN, which largely simplifies the model design by including only the most essential components in GCN for recommendation.
+· We empirically compare LightGCN with NGCF by following the same setting and demonstrate substantial improvements. In-depth analyses are provided towards the rationality of LightGCN from both technical and empirical perspectives.
+2 PRELIMINARIES
+We first introduce NGCF [39], a representative and state-of-the-art GCN model for recommendation. We then perform ablation studies on NGCF to judge the usefulness of each operation in NGCF. The novel contribution of this section is to show that the two common designs in GCNs, feature transformation and nonlinear activation, have no positive effect on collaborative filtering.
+
+Table 1: Performance of NGCF and its three variants.
+
+Gowalla Amazon-Book recall ndcg recall ndcg
+
+NGCF NGCF-f NGCF-n NGCF-fn
+
+0.1547 0.1686 0.1536 0.1742
+
+0.1307 0.1439 0.1295 0.1476
+
+0.0330 0.0368 0.0336 0.0399
+
+0.0254 0.0283 0.0258 0.0303
+
+2.1 NGCF Brief
+
+In the initial step, each user and item is associated with an ID embedding. Let eu(0) denote the ID embedding of user u and ei(0) denote the ID embedding of item i. Then NGCF leverages the user-
+item interaction graph to propagate embeddings as:
+
+eu(k+1) =  W1eu(k) +
+i Nu
+
+1 |Nu |
+
+|Ni
+
+|
+
+(W1
+
+ei(k
+
+)
+
++ W2(ei(k)
+
+
+
+eu(k ) ))
+
+,
+
+ei(k+1) =  W1ei(k) +
+u Ni
+
+1
+
+(W1 eu(k )
+
+|Nu ||Ni |
+
++ W2(eu(k)
+
+ ei(k)))
+
+,
+
+(1)
+
+where eu(k) and ei(k) respectively denote the refined embedding of
+
+user u and item i after k layers propagation,  is the nonlinear
+
+activation function, Nu denotes the set of items that are interacted by user u, Ni denotes the set of users that interact with item i,
+
+and W1 and W2 are trainable weight matrix to perform feature
+transformation in each layer. By propagating L layers, NGCF obtains L + 1 embeddings to describe a user (eu(0), eu(1), ..., eu(L)) and an item (ei(0), ei(1), ..., ei(L)). It then concatenates these L + 1 embeddings to obtain the final user embedding and item embedding, using inner
+
+product to generate the prediction score.
+
+NGCF largely follows the standard GCN [23], including the use
+
+of nonlinear activation function  (·) and feature transformation
+
+matrices W1 and W2. However, we argue that the two operations
+
+are not as useful for collaborative filtering. In semi-supervised
+
+node classification, each node has rich semantic features as input,
+
+such as the title and abstract words of a paper. Thus performing
+
+multiple layers of nonlinear transformation is beneficial to feature
+
+learning. Nevertheless, in collaborative filtering, each node of user-
+
+item interaction graph only has an ID as input which has no
+
+concrete semantics. In this case, performing multiple nonlinear
+
+transformations will not contribute to learn better features; even
+
+worse, it may add the difficulties to train well. In the next subsection,
+
+we provide empirical evidence on this argument.
+
+2.2 Empirical Explorations on NGCF
+We conduct ablation studies on NGCF to explore the effect of nonlinear activation and feature transformation. We use the codes released by the authors of NGCF3, running experiments on the same data splits and evaluation protocol to keep the comparison as fair as possible. Since the core of GCN is to refine embeddings by propagation, we are more interested in the embedding quality under the same embedding size. Thus, we change the way of obtaining final embedding from concatenation (i.e., eu = eu(0) · · · eu(L)) to sum (i.e., eu = eu(0) + · · · + eu(L)). Note that this change has little effect
+3 https://github.com/xiangwang1223/neural_graph_collaborative_filtering
+
+

@@ -1,0 +1,1478 @@
+arXiv:2605.24652v1 [cs.AI] 23 May 2026      AVBench: Human-Aligned and Automated
+                                               Evaluation Benchmark for Audio-Video
+                                                              Generative Models
+
+                                        Jialiang Yang1, Bin Xia2, Ruihang Chu1, Dingdong Wang2, Wanke Xia1, Zhun
+                                                   Mou1, Tianyang Zhong1, Yiting Zhao1, and Wenming Yang1
+
+                                                                                   1 Tsinghua University
+                                                                      2 The Chinese University of Hong Kong
+                                                      Project Page: https://yajialiang.github.io/AVBench-site/
+
+                                                 Abstract. Rapid advances in audio-video (AV) generation have en-
+                                                 abled high-fidelity synthesis with synchronized sound, particularly for
+                                                 human-related scenarios involving speech and interactions. Yet evalua-
+                                                 tion for AV generation remains at an early stage, with only a few coarse-
+                                                 grained benchmarks for human-related scenarios and relying on limited
+                                                 preset evaluations with generic multimodal LLMs, leading to inaccu-
+                                                 rate assessments of model capabilities. To address these issues, we intro-
+                                                 duce AVBench, a fully automated benchmark tailored for human-centric
+                                                 AV generation. AVBench is built on two key designs for comprehen-
+                                                 sive and accurate evaluation: (i) Human-centric and fine-grained
+                                                 metrics. AVBench integrates ten evaluation dimensions designed for
+                                                 human-centered real-world scenarios, covering visual quality, audio qual-
+                                                 ity, and multi-level consistency across modalities. These practical metrics
+                                                 capture human-related details that existing benchmarks often overlook.
+                                                 (ii) Specialized evaluators via preference learning. To address the
+                                                 lack of specialized training data, we construct large-scale supervision by
+                                                 transforming real-world videos into diverse training pairs with controlled
+                                                 perturbations. After fine-tuning on this high-quality dataset, the evalua-
+                                                 tors learn to reliably detect subtle cross-modal inconsistencies. Crucially,
+                                                 instead of producing discrete textual judgment, AVBench derives contin-
+                                                 uous evaluation scores from the model's prediction confidence on binary
+                                                 decisions. This probabilistic scoring mechanism enables a more reliable
+                                                 assessment than traditional VQA-style evaluation and aligns closely with
+                                                 human judgment. Taken together, AVBench offers automated evaluation
+                                                 for AV generation, demonstrates strong potential for data filtering and
+                                                 serving as a differentiable reward signal for Reinforcement Learning from
+                                                 Human Feedback (RLHF).
+
+                                                 Keywords: Audio-Video Generation · Automated Evaluation · Human
+                                                 Alignment
+
+                                         Corresponding author
+2  F. Author et al.
+
+   AVBench Evaluation Dimension Suite        Hierarchical AV Prompt    Automated Evaluation Suite
+                                                                                ü SFT on 100K AV Pairs
+   Cross-modal    ü Audio-Text Consistency   Normal          Hard-              ü Custom Qwen Evaluators
+   Consistency    ü Video-Text Consistency   -subset         subset             ü RLHF Reward Ready
+                  ü Audio-Video Consistency
+                  ü Lip Sync Consistency                                      Alignment Verification
+                                                                      Human Preference Annotation
+                  ü Audio Quality            Video Generation
+                  ü Audio Aesthetics                                            ü Extensive Human Validation
+                  ü Speech Realism           Models          xxxx...            ü High Subjective Alignment
+                  ü Speech Content Accuracy                                     ü Reliable Perceptual Proxy
+   Audio Metrics                                      E.g.,
+
+   Video Metrics  ü Video Quality
+                  ü Video Aesthetics
+
+Fig. 1: Overview of our AVBench. It integrates a multi-dimensional evaluation
+suite covering cross-modal consistency, audio metrics, and video metrics for human-
+centered real-world scenarios, together with a hierarchical AV prompt design containing
+normal and hard subsets. The framework supports automated large-scale assessment
+and human preference-based alignment verification to ensure reliable perceptual align-
+ment.
+
+1 Introduction
+
+Text-to-Audio-Video (T2AV) generation offers more natural audio results com-
+pared to previous Text-to-Video (T2V) generation, providing users with a better
+experience and achieving widespread success, such as Veo3 [10], and has become
+a new trend in industrial development. State-of-the-art (SOTA) systems like
+Sora2 [22], Wan2.6 [29], Veo3, and Seedance1.5 [26] can now generate coher-
+ent audio-video streams, possessing immense potential to transform the field of
+intelligent creation. However, T2AV, as an emerging direction, currently lacks
+a comprehensive and automated evaluation benchmark. Existing benchmarks,
+such as VBench [15], primarily focus on single-modality video quality, neglect-
+ing essential audio-video synchronization. The VABench [14] lacks fine-grained
+human-related evaluations, which are critical, widely used, industry-focused, and
+prone to errors. It also lacks models specifically designed for the automated evalu-
+ation of AV generation. Specifically, current evaluation methods suffer from three
+major deficiencies: 1) Neglect of fine-grained human-centric evaluation:
+Human-related content is the most frequently generated in T2AV applications
+and is a key focus for research and development companies [4, 11]. Moreover,
+humans are the most perceptually sensitive subjects in video [36]. However,
+complex scenarios such as voice-character consistency in multi-person conver-
+sations, alignment of emotions, actions, and storyline, tone matching, realism
+of synthesized voices, lip synchronization, emotional vocal expression, and more
+are often overlooked in existing evaluations. 2) The rough use of existing
+generic models: Pretrained embeddings (e.g., CLAP [8], ViCLIP [31]) capture
+global semantics but lack the granularity to detect fine-grained cross-modal er-
+rors. Since these models are optimized for broad semantic matching, they often
+overlook subtle inconsistencies as long as the overarching audio and video themes
+remain conceptually consistent. 3) Lack of precise and continuous scor-
+ing: Mainstream evaluations rely on generic Visual Question Answering (VQA)
+AVBench  3
+
+pipelines. Crucially, existing MLLMs are not specifically trained for audio-video
+evaluation, and their evaluation capabilities are limited. For example, off-the-
+shelf MLLMs lack targeted training on fine-grained hard negatives, making them
+blind to subtle cross-modal misalignments [3]. Furthermore, they typically yield
+discrete textual outputs rather than continuous probabilistic scores, rendering
+them ill-suited for direct model optimization.
+
+    To address these critical gaps, we introduce AVBench, a fully automated
+evaluation suite specifically designed for human-centric audio-video generation,
+as shown in Figure 1. First, we added detailed evaluations of human-related as-
+pects, including cross-modal consistency, speech-related factors, and video per-
+ceptual quality in human-centered scenarios. These dimensions are carefully de-
+signed to capture the key perceptual factors in human-centered scenarios, en-
+abling our evaluation framework to comprehensively assess a model's capability
+to generate coherent, realistic, and perceptually consistent audio­video outputs
+in the most common human-centric settings.
+
+    In addition, we trained specialized MLLMs for the automated evaluation of
+AV generation. We curated 30K high-fidelity human-centric real-world video
+clips and expanded them into a 100K training set for each dimension by in-
+jecting carefully designed hard negatives, including sub-second temporal shifts,
+subtle emotional mismatches, and LLM-driven semantic mutations. By perform-
+ing full supervised fine-tuning (SFT) on this meticulously designed dataset, the
+model becomes capable of detecting subtle cross-modal inconsistencies in gen-
+erated content, achieving significantly higher precision than generic evaluators.
+On this foundation, we fully SFT-trained 7B-parameter multimodal models to
+obtain three specialized consistency evaluators: Audio-Video (AV), Audio-
+Text (AT), and Video-Text (VT). These evaluators generate fine-grained
+continuous scores by normalizing the predicted probabilities of the Yes/No to-
+kens. This fine-grained, differentiable output reflects the evaluator's confidence
+with high precision, aligning closely with human perception. Finally, we designed
+a two-level evaluation pipeline with Normal and Hard subsets to test model per-
+formance in different situations. This structure helps to clearly identify weak-
+nesses in both everyday and more challenging scenarios, giving a clearer and
+more complete view of the model's generative ability.
+
+    In conclusion, our main contributions can be summarized as follows:
+
+ ­ Human-Centric and Comprehensive Metrics: We have expanded upon
+     comprehensive standard metrics by adding a wide range of fine-grained,
+     human-centric evaluation indicators. This ensures our benchmark better
+     meets the complex demands of real-world application scenarios.
+
+ ­ Specialized SFT Evaluators with Continuous Scoring: We developed
+     a strategy to create negative samples and built a large, diverse training
+     dataset across multiple dimensions. Based on this data, we trained an eval-
+     uation model that outputs continuous scores,providing a more granular and
+     precise assessment than traditional discrete outputs.
+
+ ­ Automated and Human-Aligned Benchmark: AVBench uses a hier-
+     archical structure with Normal and Hard test subsets to automatically and
+4            F. Author et al.
+
+Table 1: Comparison of AVBench with existing AV generation evaluation benchmarks.
+Moving beyond the constraints of generic zero-shot metrics and non-automated VQA
+systems, AVBench establishes a specialized SFT paradigm. By leveraging 300K curated
+pairs with hard negative mining, AVBench provides a fully automated, human-centric
+framework that demonstrates superior human alignment and offers a differentiable
+evaluation signal.
+
+Benchmark     Evaluation Paradigm  Training Data    Human-Centric Automated Eval Human Aligned Differentiable Signal
+
+VBench [15]   Zero-shot Encoders   None                   
+                                   None
+T2AV-Compass [1] VQA-based         None                   
+                                   None
+VABench [14]  VQA-based                                   
+
+JointAVBench [2] VQA-based                                
+
+AVBench (Ours) Specialized SFT 300K (w/ Hard Negs)        
+
+   comprehensively evaluate model capabilities across various difficulty levels.
+   This framework allows for a thorough assessment, specifically in core human-
+   centric scenarios. Extensive experiments demonstrate that AVBench achieves
+   remarkable alignment with human judgment.
+
+2 Related Work
+
+2.1 Evolution of Native audio-video Generation
+
+The pursuit of high-fidelity video synthesis has evolved from silent visual gener-
+ation to the unified modeling of audio-video streams. Early approaches to Text-
+to-audio-video (T2AV) generation predominantly adopted a cascaded paradigm,
+where a video is first generated by a Text-to-Video (T2V) model, followed by a
+separate Video-to-Audio (V2A) model conditioned on the visual frames [16, 19].
+While flexible, this disjointed process often leads to temporal misalignment and
+semantic dissonance, as the audio generator lacks access to the latent dynamics
+of the video generation process.
+
+    Recent advancements have shifted toward native audio-video generation, aim-
+ing to model the joint distribution of visual and auditory modalities within a uni-
+fied framework [12,13,20,30]. This paradigm shift is driven by the scaling of Diffu-
+sion Transformers (DiT) [23] and multimodal tokenizers. State-of-the-art systems
+such as Sora 2 [22] and Veo 3 [10] utilize unified spatiotemporal-audio patches,
+enabling the simultaneous synthesis of pixel and waveform data. Similarly, Wan
+2.6 [29] employs a hybrid attention mechanism to ensure coarse-grained seman-
+tic alignment. In the domain of human-centric generation, Seedance 1.5 [26]
+has demonstrated establishing precise synchronization between character mo-
+tion and complex audio cues (e.g., music beats or speech prosody). These native
+models significantly improve global coherence but introduce new challenges in
+fine-grained control, particularly in maintaining identity consistency and lip-sync
+accuracy during complex multi-talker scenarios.
+                                                                                            AVBench               5
+
+        Data Preparation            Annotation                                              Automated Evaluators
+
+OpenHumanVid                       Qwen3-Omni               LLM rewrite caption
+    Dataset Filter                 Annotation
+                                   Dense caption  Positive
+                                                  sample
+
+                                                              A/V mismatch
+
+                                                  Negative                  SFT training    Robust Automated
+                                                  sample                    (100K+Samples)  Evaluators
+
+Filtered Criteria:  Filtered Data                                                           Generation Prompts
+· 8~12s duration    8~12s clips
+· Synced audio      with audio
+channel
+                                                  GenerationDataset Heuristic Human         Generation Prompt
+
+                                                  Curation  Sampling Verification
+
+Fig. 2: Overview of the AVBench construction pipeline. Our framework com-
+prises two parallel workflows. The upper branch illustrates the training of the auto-
+mated evaluators: 8­12 s clips filtered from OpenHumanVid [18] are densely annotated
+using Qwen-Omni, and then branched into positive and hard-negative samples (via
+LLM rewriting and artificial A/V mismatches) for SFT. The lower branch outlines the
+curation of our benchmark test set: textual generation prompts are heuristically sam-
+pled from a generation dataset and strictly filtered via manual verification. Together,
+the robust SFT evaluators and the high-quality test prompts form our fully automated
+evaluation framework.
+
+2.2 Evaluation Paradigms for Audio-Video generation
+
+Table 1 illustrates the paradigm shift in recent evaluation frameworks. Early
+benchmarks, such as VBench [15], primarily rely on generic zero-shot embeddings
+(e.g., CLAP [8]). While efficient in measuring global semantic similarity, these
+methods lack the temporal granularity necessary to detect fine-grained synchro-
+nization errors. However, as shown in Table 1, they rely on zero-shot encoders
+and focus on single-modality, neglecting the complex synchronization required in
+audio-video (AV) generation. To address cross-modal alignment, recent bench-
+marks such as T2AV-Compass [1], VABench [14], and JointAVBench [2] have
+introduced VQA-based pipelines. While these improve human alignment, they
+often suffer from high inference costs and discrete outputs. Furthermore, they
+lack a specialized focus on human-centric scenarios, such as emotional and vocal
+consistency. Unlike existing post-hoc evaluators, AVBench introduces a special-
+ized SFT framework trained on 100K pairs for each evaluation dimension using
+hard-negative mining. It is the first to provide a differentiable evaluation signal
+through continuous probabilistic scoring, bridging the gap between automated
+assessment and active model optimization (e.g., RLHF).
+
+3 AVBench
+
+As illustrated in Figure 2, AVBench is structurally founded on two parallel pil-
+lars: (1) We developed a benchmark test set to systematically evaluate genera-
+tive performance in diverse human-centric scenarios. (2) We developed special-
+ized automated evaluators by SFT on a novel 300K-sample dataset containing
+6  F. Author et al.
+
+                                 Normal Subset                                                      Hard Subset
+
+                     L9o.4n%g    3C3h.i4n%ese                                                       Clo1s0e.-8u%p  C44h.i2n%ese      2E6n.g7l%ish
+               M1ed3..C7%U               E32n.g3l%ish                                                                                   9Ja.2p%anese
+         Clo3s4e.-0u%p                           1O9th.4e%rs                           Me7d5i.u8m%
+   Me3d4i.u6m%
+                                                                          O2t5h.e0r%s                                                1O3th.3e%rs
+
+   O3t9h.e7r%s                   NSuorbmseatl                     148.3%  E1xc4i.t2e%d                             SHuabrsdet                     340.0%
+                                                               240.3%        2T5e.n8s%e
+   9S.7a%d                                          4S6im.0p%le                  H29a.p2p%y                             2S5im.8p%le              223.3%
+   H10a.p9p%y                                                                    Mono1lo1g.7u%e                                               204.8%
+   Se1r7i.o4u%s                                          Speakers                       Co2m5p.8le%x                                       115.8%
+                2T2e.n3s%e                                                                                                           M36u.7lt%i-turn
+                Mult1i-5t.u4r%n
+                            Mono3lo8g.6uL%eanguage
+                                                                          Interaction  Emotion                     Shot Type
+
+Fig. 3: Data distribution of AVBench's normal and hard subsets. The multi-
+layered pie charts illustrate the comprehensive diversity of our curated evaluation
+dataset. The dimensions represent key human-centric attributes: Language, Number
+of Speakers, Interaction Complexity, Emotional Expression, and Camera Shot Type.
+Notably, the hard subset incorporates a higher proportion of challenging scenarios,
+such as multi-turn dialogues, tense/excited emotions, and close-up shots, to rigorously
+test fine-grained cross-modal alignments.
+
+multi-dimensional hard negatives, which directly produce continuous and highly
+accurate alignment scores.
+
+3.1 Human-Centric Data Curation
+
+AVBench employs two parallel workflows: constructing a large-scale training
+corpus for automated evaluators and designing a high-quality test set.
+
+    Evaluator Training Corpus. We extract 30K real-world clips (8­12 s)
+from OpenHumanVid [18] to train our evaluator models. The collected clips
+are predominantly human-centric, featuring people as the primary subjects. To
+ensure high-fidelity semantic grounding, we utilize Qwen3-Omni [34] for auto-
+mated dense annotation. After heuristic filtering, each clip is annotated with
+multi-dimensional captions describing its visual, motion, and acoustic attributes.
+These constitute the positive samples used for evaluator SFT.
+
+    Test Set Curation. We curate 470 high-definition ( 720p) prompts from
+an independent pool. To ensure diversity, we employ a Hard Quota-Based Greedy
+Sampling algorithm that enforces a 50% upper bound on any single attribute
+(e.g., language, shot size). All prompts are manually verified for semantic clarity.
+In terms of data integrity, we adopt a strict isolation strategy to prevent leakage.
+Hash-based deduplication ensures no overlap between evaluator training clips
+and test scenarios. Qwen3-Omni annotations are used only for SFT and are never
+reused as benchmark prompts. In addition, test prompts are manually rewritten
+to remove training-specific artifacts and ensure semantic independence.
+AVBench  7
+
+    Hierarchical Difficulty Evaluation. To rigorously test the performance
+limits and robustness of different models, we stratify the test set into two tiers
+based on environmental and interaction complexity (Fig. 3):
+
+ ­ Normal Subset: This subset includes 1­2 speakers in stable, neutral envi-
+     ronments with clean backgrounds, serving as a baseline test for the model's
+     fundamental capabilities in common, everyday scenarios.
+
+ ­ Hard Subset: This subset is designed to test the model's robustness un-
+     der challenging scenarios, including rapid/overlapping speech, noisy back-
+     grounds, heavy occlusions, 3­4 speaker interactions, and intense emotional
+     transitions.
+
+3.2 Multi-Dimensional Hard Negative Mining
+
+To optimize discriminative training and address the scarcity of high-quality data,
+we propose a systematic strategy for constructing multi-dimensional negative
+samples. As detailed in Figure 4, this approach provides extensive coverage of
+diverse failure modes, ranging from broad semantic shifts to fine-grained, subtle
+misalignments that are often imperceptible to generic models. To ensure the
+reliability of these complex samples, we employ an algorithmic filtering and
+verification pipeline that guarantees high data fidelity, providing a robust and
+precise foundation for sharpening the model's judgment.
+
+Automated Hard Negative Generation Pipeline. To train our model on
+textual misalignments for Video-Text (VT) and Audio-Text (AT) modalities, we
+design a pipeline focusing on fine-grained, human-centric features across three
+stages: 1) Dimension-Balanced Strategy. For each sample, we select three
+distinct perturbation dimensions from our taxonomy. By rotating these dimen-
+sions, we ensure a balanced distribution of error types and avoid model bias. 2)
+Minimal Modification via LLM. We use the Qwen-3 Max [35] pipeline to
+make minimal changes to the original descriptions. The LLM modifies only 1­3
+words while maintaining 90%­95% of the original structure, ensuring positive
+and negative pairs are similar in form but different in meaning. 3) Algorith-
+mic Quality Control. We apply an automated validation filter using sequence
+matching to ensure the quality of the hard negatives. Samples are accepted if their
+character-level similarity to the original text is within the [0.70, 0.995] range. If a
+sample fails, it is regenerated up to three times. This dual-layer approach, com-
+bining LLM modifications with algorithmic validation, ensures the model focuses
+on meaningful cross-modal reasoning rather than surface-level word patterns.
+
+Audio-Video (AV) Misalignment: To train the evaluator to effectively rec-
+ognize discrepancies in physical, temporal, and environmental alignment be-
+tween audio and video, we designed an automated pipeline that introduces three
+categories of fine-grained perturbations, each addressing common challenges in
+generative models. First, to rigorously test temporal synchronization, we apply
+8                 F. Author et al.
+
+                  Audio-Video            NegativF5ei.l0tDe%rimensions            Video-Text Negative Dimensions                                  Audio-Text Negative Dimensions
+
+                  Tim17e.0S%hift                           No1is0e.0A%dd.                                     Age1&3.G2e%nder                                                 Soun1d2.E5%ffects
+
+                                                                Pit1c0h.0S%hift                                                   Emo1ti0o.n8%Expr.                              Mu1s0ic.0A%ttr.
+
+Spee1d5.C0h%ange                         NAeugd.ioS-aVmidpeloe                                              NVeigd.eSoa-Tmexptle                     NAeugd. iSoa-Tmepxtle       Speec1h0.C0%ontent
+
+                                                                Inte6r.a7c%tion                                                   S1a0li.e1n%cy
+
+                  MSe1ism8m.a0an%ttcich                         MR2ias5nm.d0ao%tmch L7og.0i%cal M7o.5ti%on                        Te1m0p.0o%ral  Spee7c.5h%Attr.                         Logic7a.l5(%Audio)
+                                                                                                                                                         ActiAo7nl.i5-gS%no.und  Count7in.5g%& Deg.
+                                                                                                            S9p.a5t%ial
+
+Fig. 4: Taxonomy of multi-dimensional hard negatives in AVBench. The chart
+illustrates the comprehensive distribution of our constructed negative samples across
+three primary alignment axes. Rather than arbitrary random sampling, these fine-
+grained perturbation dimensions are explicitly designed to target the common failure
+modes of T2AV models , ensuring a robust evaluation of cross-modal consistency.
+
+Temporal Shifts, introducing micro-shifts (0.2­1.0 seconds) and medium shifts
+(1.0­3.0 seconds) to challenge the model's ability to detect even subtle misalign-
+ments. Second, we simulate Acoustic Corruptions to assess physical alignment,
+incorporating variations in playback speed (0.8x­1.2x), pitch shifts (±2­3 semi-
+tones), and highpass/lowpass frequency filtering--typical sources of distortion in
+generated content. Finally, to assess Semantic and Environmental Mismatches,
+we utilize video metadata to introduce deliberate contradictions. These include
+introducing human-centric noise (e.g., overlapping speech or babbling), creating
+conflicts in speaker count, or mismatching ambient sounds (e.g., pairing indoor
+visuals with outdoor rain). By training the model on these realistic perturba-
+tions, we enable it to discern and handle complex audio-video alignment issues
+that are often overlooked by current generative models.
+
+Video-Text (VT) Misalignment: Building on our previously discussed neg-
+ative sample generation pipeline, we design perturbations along key dimensions
+that frequently lead to errors in current audio-video generation models. These
+errors are critical for model performance, and by training on these targeted neg-
+ative samples, our model develops a robust ability to distinguish fine-grained
+misalignments. Specifically, we introduce inconsistencies in Appearance, Age &
+Gender, Emotion Expression, and Interaction to challenge human-centric per-
+ception. Additionally, we modify Spatial relations, State transitions, and Motion
+trajectories, addressing common structural hallucinations in diffusion models.
+By training on these negative perturbations, the model is equipped with an
+enhanced capacity to handle the complex and subtle misalignments often over-
+looked by current-generation systems.
+
+Audio-Text (AT) Misalignment: Our AT strategy targets semantic hallu-
+cinations and contextual discrepancies in human-centric scenarios, shifting the
+AVBench  9
+
+evaluator from simple keyword matching to more nuanced auditory reasoning.
+We emphasize Speech Attributes and Content (e.g., speaker_identity, seman-
+tic_polarity) to address common issues such as identity inconsistency and logical
+reversals, compelling the model to accurately interpret the underlying linguis-
+tic intent behind the audio. To enhance the model's ability to detect physical
+inaccuracies, we manipulate Action­Sound Alignment and Sound Effects (e.g.,
+temporal_sync, material_cue), introducing mismatches where the acoustic tex-
+tures deviate from the described physical events. Additionally, perturbations in
+Acoustic Environment, Temporal Structure, and World Knowledge (e.g., rever-
+beration, physical_plausibility) help the model identify subtle environmental and
+logical inconsistencies. These targeted training strategies equip the discrimina-
+tive model with enhanced sensitivity to fine-grained cross-modal discrepancies,
+which are often overlooked by zero-shot encoders. By focusing on violations of
+both semantic coherence and physical plausibility, the model is trained to rigor-
+ously assess and distinguish between valid and invalid audio-text alignments.
+
+3.3 Evaluator Model Optimization via Supervised Fine-Tuning
+
+Based on our multi-dimensional hard-negative generation strategy, we construct
+three balanced datasets for Audio-Text (AT), Video-Text (VT), and Audio-
+Video (AV) alignment, each comprising 100K high-quality positive and negative
+pairs,totaling 300K samples. We perform SFT on specialized multimodal back-
+bones: Qwen2.5-Omni [33] for the VT and AV models, and Qwen2-Audio [5] for
+the AT model.
+
+    To enhance the discriminative performance of the models, we fine-tune the
+LLM portion for both the AV and VT models, freezing the other components.
+This strategy allows us to leverage the pre-trained visual encoders and projec-
+tors, which already capture robust information representation, while focusing
+on adapting the LLM to internalize the alignment logic. For the AT model, we
+also fine-tune the connector layers in addition to the LLM. This is because the
+audio-text alignment involves a larger semantic gap, and training the connectors
+enables more flexible mapping between raw auditory features and the nuanced
+textual information found in the hard negatives.
+
+    During training, we employ an instruction-following template that constrains
+the models to generate a single token: "Yes" for alignment or "No" for misalign-
+ment. The input consists of the multimodal content paired with a task-specific
+query (e.g., "Does the audio accurately match the video content? Answer only
+Yes or No."). By supervising the models to concentrate probability mass on
+these two specific tokens, we derive a normalized scoring signal S, which is de-
+fined as the ratio of the probability of the model outputting "Yes" to the sum of
+the probabilities of outputting "Yes" and "No". This differentiable signal pro-
+vides a continuous evaluation score, allowing for a more accurate assessment of
+the alignment between different modalities and serving as a reliable metric for
+model performance.
+10  F. Author et al.
+
+3.4 The Comprehensive Evaluation Suite
+
+To provide a more comprehensive and precise evaluation, AVBench enhances
+our SFT evaluators by incorporating lip-sync analysis and unimodal quality
+metrics. This integration bridges the gap between high-level semantic alignment
+and low-level signal fidelity, ensuring a thorough assessment of both physical
+realism and structural integrity. The framework is divided into two modules:
+Cross-Modal Alignment & Synchronization and Unimodal Generation Quality,
+which encompass 10 distinct dimensions to fully capture and reflect the diverse
+capabilities of audio-video generation models.
+
+Cross-Modal Alignment & Synchronization This module assesses both the
+semantic alignment and temporal synchronization between different modalities,
+which are key challenges for current native T2AV models. It focuses on the
+following four dimensions:
+
+ ­ AT, VT, and AV Consistency: We leverage our specialized SFT-optimized
+     evaluators to assess alignment across the Audio-Text, Video-Text, and Audio-
+     Video axes. By capturing fine-grained semantic and temporal dependencies,
+     these models provide a highly accurate and comprehensive measure of cross-
+     modal consistency, effectively identifying subtle misalignments that tradi-
+     tional metrics often overlook.
+
+ ­ Lip Sync Consistency: A critical component of human-centric generation
+     is the precise physical alignment between mouth movements and emitted
+     speech. To evaluate this, we utilize the SyncNet architecture [6] implemented
+     via the LatentSync framework [17]. By integrating alignment confidence with
+     temporal offset analysis, we derive a holistic fidelity score that effectively
+     reflects the accuracy of lip-sync alignment in the generated video, ensuring
+     a more comprehensive and systematic evaluation of cross-modal alignment.
+
+Unimodal Generation Quality This module rigorously assesses the signal-
+level fidelity, physical realism, and overall aesthetics of the generated audio and
+video streams independently across the remaining six dimensions:
+
+ ­ Speech Content Accuracy: current audio-video generation models fre-
+     quently suffer from nonsensical vocalizations or fail to faithfully reflect spec-
+     ified textual prompts, making this dimension crucial for verifying the accu-
+     racy of spoken content. We utilize Whisper-large-v3 [24] for transcription and
+     compute a comprehensive final score by weighting three specific components:
+     keyword completeness (Scomp), lexical accuracy (Sacc), and a hallucination
+     penalty(Shall) for extraneous content. The final weighted aggregation en-
+     sures that the benchmark captures both missing information and spurious
+     auditory hallucinations.
+
+ ­ Speech Realism: Generated speech should exhibit natural prosody, coher-
+     ent intonation, and realistic timbral characteristics. To assess voice-cloning
+AVBench  11
+
+     fidelity and overall speech naturalness, we employ DF_Arena [7], a high-
+     capacity discriminator specifically designed to differentiate authentic human
+     speech from synthetic generative artifacts.
+ ­ Audio Quality: To comprehensively evaluate overall audio quality across
+     both speech and natural acoustic signals, we employ the NISQAv2 met-
+     ric [21]. In our assessment framework, the mean opinion score (MOS) pre-
+     dicted by NISQAv2 is adopted as the principal indicator of perceptual audio
+     quality, as it provides a holistic measure of overall speech quality.
+ ­ Audio Aesthetics: To measure the aesthetic value of audio, we employ
+     the Audiobox-Aesthetics [28] module, which holistically assesses audio pro-
+     duction quality across four key dimensions: Content Enjoyment (CE), Con-
+     tent Usefulness (CU), Production Complexity (PC), and Production Quality
+     (PQ). Following the evaluation framework in [27], which suggests that pro-
+     duction complexity is inversely correlated with perceived quality, we define
+     our aggregated audio aesthetic score as (CE + CU + P Q - P C)/4. This
+     score provides a balanced metric to quantify the overall aesthetic value of
+     the audio production.
+ ­ Video Quality: To provide a comprehensive assessment of the generated
+     videos, we utilize DOVER++ [32]. As a state-of-the-art multi-perspective
+     metric, it generates a holistic technical score that accurately reflects the
+     overall quality and signal-level fidelity of the video content.
+ ­ Video Aesthetics: We utilize the LAION-Aesthetics predictor [25] to assess
+     the overall artistic composition and visual appeal of the generated content.
+     This metric provides a robust measure of high-level aesthetic quality, offering
+     a comprehensive appraisal of the video's overall aesthetic value.
+
+    By unifying these ten fine-grained dimensions, AVBench establishes a rig-
+orous, multi-faceted evaluation framework.
+
+4 Experiments and Analysis
+
+4.1 Main Results: Evaluating State-of-the-Art T2AV Models
+
+Based on the data in Table 2 and Figure 5b, the evaluation reveals clear per-
+formance differences among the five T2AV models, particularly under the Hard
+Split conditions.
+
+    Cross-Modal Alignment & Synchronization.
+    The data identifies Video-Text (VT) consistency as the main bottleneck for
+all models. In the Normal Split, Sora 2 achieves an AT score of 0.8675 but a lower
+VT score of 0.7599. While Sora 2 improves its AV score to 0.9320 in the Hard
+Split, its VT score drops to 0.7190. This suggests that as prompts become more
+complex, models prioritize audio-video synchronization over strict adherence to
+detailed text instructions. Across all models, VT scores consistently lag behind
+AV scores, indicating that following text instructions in the visual modality
+remains a major challenge.
+12          F. Author et al.
+
+Table 2: Quantitative evaluation of state-of-the-art T2AV models on the AVBench test
+set across normal and hard splits. We report Cross-Modal Alignment & Synchro-
+nization via specialized SFT evaluators (AV, AT, and VT Consistency) and Lip Sync
+Consistency (SyncNet). Unimodal Generation Quality is assessed through speech
+content accuracy (SC), speech realism (DF-Arena), audio quality (NISQA MOS), au-
+dio aesthetics (Audiobox), video technical quality (DOVER++), and video aesthetics.
+ indicates higher is better.
+
+              Cross-Modal Alignment & Sync                      Unimodal Generation Quality
+
+Model         AV  AT  VT  SyncNet  SC  DF-Arena  NISQA  Audiobox  DOVER++  Aesthetic 
+
+Normal Split
+
+Sora 2        0.8713 0.8675 0.7599     4.9057  87.8391  0.4328  2.3784  3.1759  60.0125      4.0704
+                                       6.5943  77.4950  0.3043  2.8191  3.5877  69.2275      4.9967
+Veo 3 Fast    0.6924 0.8300 0.7235     4.5016  91.5568  0.0441  3.0289  3.9271  71.6473      4.7790
+                                       8.1027  68.7844  0.1665  3.3141  3.8082  65.6786      5.4885
+Wan 2.6       0.8207 0.8227 0.7556     5.0146  84.9268  0.1602  3.6411  4.1686  71.7205      4.7373
+
+Kling 2.6     0.7626 0.8061 0.7501
+
+Seedance 1.5 Pro 0.6536 0.8554 0.7363
+
+Hard Split
+
+Sora 2        0.9320 0.8575 0.7190     3.7932  76.7905  0.5498  2.0564  3.1339  58.1538      4.0434
+                                       3.4535  70.3144  0.3827  2.3321  3.6113  67.0833      5.1438
+Veo 3 Fast    0.7766 0.8117 0.6943     3.0488  84.4512  0.0498  3.0726  4.0924  71.5229      4.7721
+                                       3.9844  69.0691  0.1469  3.2425  3.8912  62.9994      5.5033
+Wan 2.6       0.8780 0.8418 0.7482     3.3239  80.8029  0.2059  3.4093  4.1618  69.4430      4.7707
+
+Kling 2.6     0.8813 0.7602 0.7105
+
+Seedance 1.5 Pro 0.7409 0.8646 0.7398
+
+    Lip-Sync, Speech Content, & Realism. Results show a clear decoupling
+between synchronization, content accuracy, and vocal realism. Kling 2.6 achieves
+the best lip-sync performance (8.1027 in Normal, 3.9844 in Hard) but performs
+weaker in speech content accuracy and realism. Wan 2.6 attains the highest SC
+scores (91.5568 in Normal, 84.4512 in Hard) despite having the lowest vocal
+realism. Sora 2 presents a more balanced profile, producing the most natural
+voices while maintaining competitive content accuracy across both splits.
+
+    Technical Quality and Aesthetics. Seedance 1.5 Pro leads in technical
+quality, achieving the highest scores in audio quality (NISQA), audio aesthetics
+(Audiobox), and video technical quality (DOVER++), with consistently strong
+results in the Hard Split. In contrast, Kling 2.6 produces the most visually ap-
+pealing outputs, obtaining the highest aesthetic scores across both splits.
+
+    Summary of Model Trends.
+    The results highlight that T2AV models struggle with precise text instruc-
+tion following, particularly in VT consistency, which remains a notable bottle-
+neck across all models. This issue is exacerbated in the Hard Split, showing
+that current systems cannot yet fully handle complex, human-centric scenarios.
+While models often excel in technical quality and aesthetics , these surface-level
+strengths do not compensate for the lack of realism and semantic depth required
+for high-fidelity generation.
+
+4.2 Effectiveness of the SFT Evaluator
+
+To demonstrate the necessity of our SFT paradigm, we compare our special-
+ized evaluators against zero-shot foundational models (CLAP, ViCLIP, Image-
+Bind [9]) and non-finetuned MLLMs on hard-negative test sets.
+                                                                                                                       AVBench  13
+
+          1.0  Zero-shot Models                                        0.9817
+               Qwen (no fine-tune)  0.9144
+               Ours 0.8437
+
+          0.8
+
+Accuracy  0.6                       0.54940.4891 Ours  0.4991          Ours
+                                    ViCLIP
+                0.4888
+                                       Qwen2.5-Omni
+          0.4               Ours                               0.3606
+                                       Video-Text      ImageBind
+               CLAP 0.2500
+
+          0.2                                          Qwen2.5-Omni
+
+               Qwen2-Audio                             Audio-Video
+
+          0.0  Audio-Text
+
+                        (a) Evaluator Reliability                              (b) Holistic Model Performance
+
+Fig. 5: Comprehensive evaluation framework and model benchmarking. (a)
+Detection accuracy on hard-negative test sets: A comparison between our spe-
+cialized SFT evaluators and generic MLLM baselines. (b) Multi-dimensional eval-
+uation radar chart: A holistic profile of five T2AV models across Normal (left) and
+Hard (right) splits. Metrics are independently Min-Max normalized [0, 1] within each
+split (1.0 indicates the best).
+
+    As illustrated in Figure 5a, zero-shot encoders struggle significantly with
+fine-grained discrimination, often hovering around random chance. For instance,
+CLAP yields only 0.4888 accuracy on Audio-Text, and ImageBind achieves
+0.4991 on Audio-Video alignment. Similarly, directly prompting base MLLMs
+without SFT results in poor performance due to a severe positive bias. These
+models tend to default to Yes and habitually output positive judgments regard-
+less of the actual alignment. Qwen2-Audio, for example, achieves only 0.2500 on
+Audio-Text consistency.
+
+    Conversely, by training on 100K curated pairs with hard negatives, the dis-
+criminative capability of our specialized SFT evaluators is significantly enhanced.
+We achieve high accuracies across all dimensions: 0.8437 for Audio-Text, 0.9144
+for Video-Text, and a peak of 0.9817 for Audio-Video consistency. These results
+demonstrate that targeted fine-tuning is essential for detecting the specific flaws
+in native T2AV generation.
+
+4.3 Human Alignment Validation
+
+To verify AVBench's reliability, we conduct a Pearson correlation analysis be-
+tween human win ratios and automated scores (Figure 6). Four domain ex-
+perts performed pairwise comparisons (2AFC) on videos generated from the
+same prompt, selecting the superior model per dimension with a tie option. The
+model-level win ratio is computed as
+
+                                                                 \mathrm {WinRatio} = \frac {W + 0.5\,T}{W + T + L},            (1)
+
+where W , T , and L denote the numbers of wins, ties, and losses, respectively.
+Both the human preference axis and the automated metric axis adopt this pair-
+wise win-ratio formulation. Pearson correlation is then computed at the model
+14  F. Author et al.
+
+Fig. 6: Pearson Correlation between AVBench automated scores and human
+preference. Each subplot corresponds to one of the 10 evaluation dimensions. The x-
+axis denotes the human win ratio per model, and the y-axis shows metric win ratio.
+Each point represents one model family (Kling 2.6, Sora 2, Veo 3 Fast, Wan 2.6), and
+the red line shows the least-squares linear fit.
+
+level between the two resulting win-ratio sequences using the standard Pearson
+correlation coefficient.
+
+    As shown in Figure 6, AVBench exhibits strong human alignment. Our SFT-
+trained evaluators achieve high correlation for AT Consistency ( = 0.9488) and
+VT Consistency ( = 0.9653). Speech realism and quality metrics also align
+closely, notably Speech Content ( = 0.9779), DF Arena Bonafide ( = 0.9668),
+and NISQA MOS ( = 0.8012). Furthermore, the SyncNet Score exhibits a
+strong correlation ( = 0.8194). These findings highlight AVBench as a robust
+and reliable evaluation framework for characterizing the comprehensive capabil-
+ities of audio-video generation models, providing a high-fidelity and fine-grained
+assessment signal for audio-video quality and consistency.
+
+5 Limitation
+
+Despite providing a comprehensive and automated evaluation framework, AVBench
+currently focuses primarily on short-form video clips of 5­12 s, which aligns with
+the default output lengths of state-of-the-art models such as Sora 2 and Veo
+3. In future work, the same framework can be naturally extended to construct
+training data and evaluation benchmarks for longer videos, enabling systematic
+assessment of longer-duration video generation using the same methodology.
+
+6 Conclusion
+
+In this paper, we introduced AVBench, a fully automated evaluation frame-
+work specifically designed for human-centric audio-video generation. By utiliz-
+ing a specialized SFT pipeline trained on 300K samples with multi-dimensional
+AVBench  15
+
+hard negatives, the framework effectively captures subtle cross-modal misalign-
+ments that traditional metrics often overlook. AVBench provides a comprehen-
+sive assessment of model capabilities across ten distinct dimensions, integrating
+semantic consistency, signal-level quality, and aesthetics. Furthermore, by de-
+riving continuous, differentiable scores from model confidence, our framework
+demonstrates significant potential as a scalable reward signal for reinforcement
+learning-based alignment. Validated by its strong correlation with human judg-
+ment, AVBench serves as a robust proxy for the systematic evaluation and op-
+timization of audio-video generation systems.
+
+References
+
+ 1. Cao, Z., Wang, T., Wang, J., Wang, Y., Zhang, Y., Chen, J., Deng, M., Wang,
+     J., Guo, Y., Liao, C., et al.: T2av-compass: Towards unified evaluation for text-to-
+     audio-video generation. arXiv preprint arXiv:2512.21094 (2025)
+
+ 2. Chao, J., Gao, J., Tan, W., Sun, Y., Song, R., Ru, L.: Jointavbench: A benchmark
+     for joint audio-visual reasoning evaluation. arXiv preprint arXiv:2512.12772 (2025)
+
+ 3. Chen, C.: Training generative judge with hard negative mining: A metric learning
+     perspective. In: 2025 IEEE 37th International Conference on Tools with Artificial
+     Intelligence (ICTAI). pp. 778­785. IEEE (2025)
+
+ 4. Chen, L., Ma, T., Liu, J., Li, B., Chen, Z., Liu, L., He, X., Li, G., He, Q., Wu, Z.:
+     Humo: Human-centric video generation via collaborative multi-modal conditioning.
+     arXiv preprint arXiv:2509.08519 (2025)
+
+ 5. Chu, Y., Xu, J., Yang, Q., Wei, H., Wei, X., Guo, Z., Leng, Y., Lv, Y., He, J., Lin,
+     J., et al.: Qwen2-audio technical report. arXiv preprint arXiv:2407.10759 (2024)
+
+ 6. Chung, J.S., Zisserman, A.: Out of time: automated lip sync in the wild. In: Work-
+     shop on Multi-view Lip-reading, ACCV (2016)
+
+ 7. Dowerah, S., Kulkarni, A., Kulkarni, A., Tran, H.M., Kalda, J., Fedorchenko, A.,
+     Fauve, B., Lolive, D., Alumäe, T., Magimai.-Doss, M.: Speech df arena: A leader-
+     board for speech deepfake detection models. IEEE Open Journal of Signal Pro-
+     cessing pp. 1­9 (2026). https://doi.org/10.1109/OJSP.2026.3652496
+
+ 8. Elizalde, B., Deshmukh, S., Al Ismail, M., Wang, H.: Clap learning audio con-
+     cepts from natural language supervision. In: ICASSP 2023-2023 IEEE Interna-
+     tional Conference on Acoustics, Speech and Signal Processing (ICASSP). pp. 1­5.
+     IEEE (2023)
+
+ 9. Girdhar, R., El-Nouby, A., Liu, Z., Singh, M., Alwala, K.V., Joulin, A., Misra, I.:
+     Imagebind: One embedding space to bind them all. In: CVPR (2023)
+
+10. Google DeepMind: Veo 3. https://deepmind.google/technologies/veo/ (2025),
+     accessed: 2026-03-05
+
+11. Guo, X., Ye, F., Sun, Q., Chen, L., Li, B., Zhang, P., Liu, J., Zhao, S., He, Q., Hou,
+     X.: Dreamid-omni: Unified framework for controllable human-centric audio-video
+     generation. arXiv preprint arXiv:2602.12160 (2026)
+
+12. Haji-Ali, M., Menapace, W., Siarohin, A., Skorokhodov, I., Canberk, A., Lee, K.S.,
+     Ordonez, V., Tulyakov, S.: Av-link: Temporally-aligned diffusion features for cross-
+     modal audio-video generation. In: Proceedings of the IEEE/CVF International
+     Conference on Computer Vision. pp. 19373­19385 (2025)
+
+13. Hayakawa, A., Ishii, M., Shibuya, T., Mitsufuji, Y.: Mmdisco: Multi-modal
+     discriminator-guided cooperative diffusion for joint audio and video generation.
+     arXiv preprint arXiv:2405.17842 (2024)
+16  F. Author et al.
+
+14. Hua, D., Wang, X., Zeng, B., Huang, X., Liang, H., Niu, J., Chen, X., Xu, Q.,
+     Zhang, W.: Vabench: A comprehensive benchmark for audio-video generation.
+     arXiv preprint arXiv:2512.09299 (2025)
+
+15. Huang, Z., He, Y., Yu, J., Zhang, F., Si, C., Jiang, Y., Zhang, Y., Wu, T., Jin, Q.,
+     Chanpaisit, N., Wang, Y., Chen, X., Wang, L., Lin, D., Qiao, Y., Liu, Z.: VBench:
+     Comprehensive benchmark suite for video generative models. In: Proceedings of
+     the IEEE/CVF Conference on Computer Vision and Pattern Recognition (2024)
+
+16. Iashin, V., Rahtu, E.: Taming visually guided sound generation (2021), https:
+
+     //arxiv.org/abs/2110.08791
+17. Li, C., Zhang, C., Xu, W., Lin, J., Xie, J., Feng, W., Peng, B., Chen, C., Xing,
+
+     W.: Latentsync: Taming audio-conditioned latent diffusion models for lip sync with
+     syncnet supervision. arXiv preprint arXiv:2412.09262 (2024)
+18. Li, H., Xu, M., Zhan, Y., Mu, S., Li, J., Cheng, K., Chen, Y., Chen, T., Ye, M.,
+     Wang, J., et al.: Openhumanvid: A large-scale high-quality dataset for enhanc-
+     ing human-centric video generation. In: Proceedings of the Computer Vision and
+     Pattern Recognition Conference. pp. 7752­7762 (2025)
+19. Liu, H., Chen, Z., Yuan, Y., Mei, X., Liu, X., Mandic, D., Wang, W., Plumbley,
+     M.D.: AudioLDM: Text-to-audio generation with latent diffusion models. Proceed-
+     ings of the International Conference on Machine Learning pp. 21450­21474 (2023)
+20. Low, C., Wang, W., Katyal, C.: Ovi: Twin backbone cross-modal fusion for audio-
+     video generation. arXiv preprint arXiv:2510.01284 (2025)
+21. Mittag, G., Naderi, B., Chehadi, A., Möller, S.: Nisqa: A deep cnn-self-attention
+     model for multidimensional speech quality prediction with crowdsourced datasets.
+     In: Interspeech (2021), https://api.semanticscholar.org/CorpusID:233296150
+22. OpenAI: Sora 2 Is Here. https://openai.com/index/sora-2/ (2025), accessed:
+     2026-03-03
+23. Peebles, W., Xie, S.: Scalable diffusion models with transformers. In: Proceedings of
+     the IEEE/CVF international conference on computer vision. pp. 4195­4205 (2023)
+24. Radford, A., Kim, J.W., Xu, T., Brockman, G., McLeavey, C., Sutskever, I.: Robust
+     speech recognition via large-scale weak supervision. In: International conference on
+     machine learning. pp. 28492­28518. PMLR (2023)
+25. Schuhmann, C., Beaumont, R., Vencu, R., Gordon, C., Wightman, R., Cherti,
+     M., Coombes, T., Katta, A., Mullis, C., Wortsman, M., Schramowski, P., Kun-
+     durthy, S., Crowson, K., Schmidt, L., Kaczmarczyk, R., Jitsev, J.: Laion-5b:
+     An open large-scale dataset for training next generation image-text models.
+     ArXiv abs/2210.08402 (2022), https://api.semanticscholar.org/CorpusID:
+
+     252917726
+26. Seedance, T., Chen, H., Chen, S., Chen, X., Chen, Y., Chen, Y., Chen, Z., Cheng,
+
+     F., Cheng, T., Cheng, X., et al.: Seedance 1.5 pro: A native audio-visual joint
+     generation foundation model. arXiv preprint arXiv:2512.13507 (2025)
+27. Shan, S., Li, Q., Cui, Y., Yang, M., Wang, Y., Yang, Q., Zhou, J., Zhong, Z.:
+     Hunyuanvideo-foley: Multimodal diffusion with representation alignment for high-
+     fidelity foley audio generation (2025), https://arxiv.org/abs/2508.16930
+28. Vyas, A., Shi, B., Le, M., Tjandra, A., Wu, Y.C., Guo, B., Zhang, J., Zhang,
+     X., Adkins, R., Ngan, W., Wang, J., Cruz, I., Akula, B., Akinyemi, A., Ellis, B.,
+     Moritz, R., Yungster, Y., Rakotoarison, A., Tan, L., Summers, C., Wood, C., Lane,
+     J., Williamson, M., Hsu, W.N.: Audiobox: Unified audio generation with natural
+     language prompts (2023), https://arxiv.org/abs/2312.15821
+29. Wan, T., Wang, A., Ai, B., Wen, B., Mao, C., Xie, C.W., Chen, D., Yu, F., Zhao,
+     H., Yang, J., et al.: Wan: Open and advanced large-scale video generative models.
+     arXiv preprint arXiv:2503.20314 (2025)
+AVBench  17
+
+30. Wang, J., Qiang, C., Guo, Y., Wang, Y., Zeng, X., Zhang, C., Wan, P.: Klear:
+     Unified multi-task audio-video joint generation. arXiv preprint arXiv:2601.04151
+     (2026)
+
+31. Wang, Y., He, Y., Li, Y., Li, K., Yu, J., Ma, X., Chen, X., Wang, Y., Luo, P., Liu,
+     Z., Wang, Y., Wang, L., Qiao, Y.: Internvid: A large-scale video-text dataset for
+     multimodal understanding and generation. arXiv preprint arXiv:2307.06942 (2023)
+
+32. Wu, H., Zhang, E., Liao, L., Chen, C., Hou, J., Wang, A., Sun, W., Yan, Q., Lin, W.:
+     Exploring video quality assessment on user generated contents from aesthetic and
+     technical perspectives. In: Proceedings of the IEEE/CVF international conference
+     on computer vision. pp. 20144­20154 (2023)
+
+33. Xu, J., Guo, Z., He, J., Hu, H., He, T., Bai, S., Chen, K., Wang, J., Fan, Y., Dang,
+     K., Zhang, B., Wang, X., Chu, Y., Lin, J.: Qwen2.5-omni technical report (2025),
+
+     https://arxiv.org/abs/2503.20215
+34. Xu, J., Guo, Z., Hu, H., Chu, Y., Wang, X., He, J., Wang, Y., Shi, X., He, T., Zhu,
+
+     X., et al.: Qwen3-omni technical report. arXiv preprint arXiv:2509.17765 (2025)
+35. Yang, A., Li, A., Yang, B., Zhang, B., Hui, B., Zheng, B., Yu, B., Gao, C., Huang,
+
+     C., Lv, C., et al.: Qwen3 technical report. arXiv preprint arXiv:2505.09388 (2025)
+36. Yang, S., Lyu, Y., Chen, Z., Li, Y., Dong, B., Han, X., Yang, P., Wang, Z., Rao, A.,
+
+     Liu, Z., et al.: Human-centric content generation with diffusion models: A survey.
+     Authorea Preprints (2026)
+18  F. Author et al.
+
+7 Extended Details on Negative Sample Construction
+
+7.1 Negative Sample Construction Pipeline
+
+To systematically evaluate the fine-grained alignment capabilities of Text-to-
+Audio-Video (T2AV) models, we employ a rigorous negative sample construction
+pipeline. Specifically, we utilize Large Language Models (LLMs) to modify the
+original textual descriptions, intentionally introducing fine-grained mismatches
+between text and video, as well as between text and audio.
+
+    Audio-Video Mismatch Construction: As illustrated in Fig. 7 and de-
+tailed in Table 3, negative samples are generated by manipulating video and
+audio tracks across eight specific dimension levels. Specifically, to construct se-
+mantic conflicts, we utilize random_mismatch (e.g., Cat vs. Plane) to create a
+Basic Semantic Negative, and semantic_mismatch (e.g., Dog vs. Wolf) for a
+High-level Semantic Negative. For temporal and physical synchronizations,
+we employ time_shift_micro (< 0.1s) to generate a High-precision Temporal
+Negative, and time_shift_medium (0.5­2s) for a standard Temporal Nega-
+tive. Additionally, speed_change is applied to introduce a Temporal-Physical
+Negative. Auditory identity attributes are perturbed via pitch_shift to con-
+struct a Speaker/Physical Negative. Finally, acoustic environment consis-
+tency is disrupted using noise_addition to generate an Acoustic Scene Neg-
+ative, and spectral filter (e.g., low-pass) to create an Acoustic Structural
+Negative.
+
+    Audio-Text and Video-Text Mismatch Construction: For cross-modal
+text consistency, we leverage Large Language Models to systematically perturb
+the original ground-truth captions based on our predefined dimensions. To ef-
+fectively capture the distinct characteristics of different modalities, we design
+specific prompt templates that instruct the LLM to alter target attributes while
+keeping the rest of the description logically coherent.
+
+    For audio-text mismatch construction, the prompt instructs the model to
+generate a "MISMATCHED" negative sample by altering the original audio de-
+scription. As shown in Figure 8, this process is governed by critical constraints
+such as "Structural Isolation," which requires the LLM to 100% preserve all
+original structural markers and section labels. Furthermore, "Collateral Preser-
+vation" ensures that no acoustic or semantic information outside the target di-
+mension is altered, and the resulting description must maintain "Physical &
+Logical Plausibility" to avoid surreal or contradictory internal logic.
+
+    Conversely, for video­text mismatch construction, the prompt is designed to
+generate hard negative samples by introducing minimal yet critical errors into
+the original video descriptions. As illustrated in Figure 9, this is achieved through
+a Strict Word Limit, which constrains modifications to at most 1­3 words. To
+prevent the LLM from introducing trivial variations, the prompt further enforces
+Syntactic Isomorphism, prohibiting any rephrasing or structural changes so that
+the original grammatical structure is strictly preserved. In addition, Categorical
+Proximity requires that substituted words belong to the same semantic category
+                                                              AVBench                          19
+
+Semantic Mismatches(Basic)       Semantic Mismatches (High-level) Temporal Dimension
+
+      Video               Audio     Video             Audio   Shift <0.1s             Shift 0.5-2s
+Cat Meowing        Plane Engine  Dog Barking       Wolf Howl
+
+Temporal-Physical                Speaker-Physical             Acoustic Scene & Structure
+                                                                                    Filtering
+
+Video                Audio                                    Add noise
+
+       Speed Change              Pitch Shift
+
+Fig. 7: Overview of audio-video negative sample construction across diverse dimen-
+sion levels. The strategies include Basic and High-level Semantic Negatives via
+random_mismatch and semantic_mismatch, alongside High-precision Temporal
+and Temporal Negatives utilizing micro and medium time shifts. Furthermore,
+physical and acoustic properties are perturbed to generate Temporal-Physical and
+Speaker/Physical Negatives (speed_change, pitch_shift), as well as Acoustic
+Scene and Acoustic Structural Negatives (noise_addition, filter ).
+
+as the original terms, ensuring that the resulting mismatches remain subtle and
+semantically plausible.
+
+    We execute these modality-specific prompts across all secondary dimensions
+defined in our taxonomy, followed by a manual verification phase to ensure the
+generated negatives do not inadvertently become false positives.
+
+7.2 Detailed Taxonomy of Negative Samples
+
+Our benchmark categorizes multimodal inconsistencies into highly granular di-
+mensions to probe the exact weaknesses of current foundation models.
+
+    Table 3 details the taxonomy for audio-video consistency, focusing heavily
+on temporal, and semantic synchronization. Table 5 provides a comprehensive
+hierarchy for audio-text inconsistencies, ranging from speech attributes to high-
+level cultural cues. Finally, Table 4 outlines the video-text dimensions, covering
+aspects from visual appearance to complex logical reasoning.
+
+    Regarding the data distribution, we ensure a balanced representation across
+the primary categories to prevent evaluation bias. However, slightly more weight
+(approx. 25%) is allocated to temporal and semantic alignments, as these are
+the most fundamental capabilities required for robust multimodal understanding.
+The remaining samples are uniformly distributed among fine-grained dimensions
+such as counting, state, and spatial relations.
+20  F. Author et al.
+
+      Audio-text consistency negative sample prompt template
+
+                ü You are an expert in data generation for multimodal contrastive learning.
+                   ü Your task is to generate a **MISMATCHED** negative sample by altering the original audio description.
+
+                   ü TARGET MODIFICATION
+                   ü - Target Dimension: {dimension} - Modification Strategy: {modification_strategy}
+                   ü ORIGINAL INPUT {original_audio_description}
+
+                   ü CRITICAL CONSTRAINTS (MUST STRICTLY FOLLOW)
+                   ü 1. [Targeted Execution]: The modification MUST perfectly reflect the "Modification Strategy". It must create a genuine and
+
+                       significant contradiction to the original audio, not merely a paraphrase or a synonym substitution.
+                   ü 2. [Structural Isolation]: You must 100% preserve all original structural markers, including separators (e.g., '|') and section labels
+
+                       (e.g., "Audio Observation:", "Speech Content:"). Do not add, merge, or drop any segments.
+                   ü 3. [Collateral Preservation]: Do not alter any acoustic or semantic information outside the target dimension. For example, if
+
+                       modifying "Speaker Identity", you must leave the "Background Noise" or "Music" descriptions completely untouched.
+                   ü 4. [Physical & Logical Plausibility]: The generated mismatch must still describe a physically possible and logically sound acoustic
+
+                       environment. Do not create surreal, impossible, or contradictory internal logic within the new description.
+                   ü 5. [Linguistic Consistency]: The transcript/dialogue section MUST remain in its original language. If the modification strategy alters
+
+                       the speaker's dialect or demographic, adjust the tone appropriately while strictly keeping structural tags in English.
+
+                   ü OUTPUT FORMAT
+                   ü{
+                   ü "modified_description": "the complete modified text here",
+                   ü "modification_detail": "A precise, 1-sentence explanation of the exact change made"
+                   ü}
+
+Fig. 8: Prompt template for generating audio-text consistency negative samples. The
+template instructs the model to construct mismatched descriptions for multimodal con-
+trastive learning by enforcing critical constraints such as targeted execution, structural
+isolation, and collateral preservation.
+
+      Video-text consistency negative sample prompt template
+
+                ü You are an expert in data generation for multimodal contrastive learning.
+                   ü Your task is to generate a **HARD NEGATIVE** sample by introducing a minimal error into the original video description.
+
+                   ü TARGET MODIFICATION
+                   ü - Target Dimension: {dimension} - Reference Error Types: {error_types_list}
+                   ü ORIGINAL INPUT {original_video_description}
+
+                   ü CRITICAL CONSTRAINTS (MUST STRICTLY FOLLOW)
+                   ü 1. [Strict Word Limit]: You are strictly confined to changing a MAXIMUM of 1 to 3 words. Over 90-95% of the characters must
+
+                       remain exactly identical to the original text.
+                   ü 2. [Syntactic Isomorphism]: You are FORBIDDEN from rephrasing, reordering, or restructuring the sentence. The grammatical
+
+                       skeleton (including active/passive voice and clause structures) must be 100% preserved.
+                   ü 3. [Targeted Isolation]: Modify only the exact concept dictated by the target dimension and reference error types. Zero collateral
+
+                       changes are allowed. If changing "Color", do not accidentally alter "Size" or "Action".
+                   ü 4. [Categorical Proximity]: To create a high-quality "HARD" negative, the substituted word MUST belong to the exact same
+
+                       semantic category as the original word (e.g., replacing one specific color with another, or one specific vehicle with another).
+                   ü 5. [Grammatical Fluency]: The newly inserted words must perfectly match the surrounding syntax. Ensure correct verb tenses,
+
+                       singular/plural agreement, and proper articles (e.g., changing 'a apple' to 'an apple' if necessary) without altering the rest of the
+                       sentence.
+
+                   ü OUTPUT FORMAT
+                   ü{
+                   ü "modified_description": "the exactly matched text with only 1-3 words changed",
+                   ü "modification_detail": "Specify the exact word swap (e.g., 'Changed X to Y')"
+                   ü}
+
+Fig. 9: Prompt template for generating video-text consistency negative samples. The
+template instructs the model to construct hard negative samples by introducing a min-
+imal error into the original description, strictly guided by constraints such as syntactic
+isomorphism and categorical proximity.
+                                                             AVBench       21
+
+Table 3: A detailed taxonomy of audio-video consistency negative samples, mapping
+conceptual dimension levels to their specific manipulation strategies and code imple-
+mentations.
+
+Dimension Level                     Main Strategy       Code Strategy
+
+Basic Semantic Negative             Random Mismatch random_mismatch
+High-level Semantic Negative        Semantic Mismatch semantic_mismatch
+
+High-precision Temporal Negative Micro Time Shift time_shift_micro
+
+Temporal Negative                   Medium Time Shift time_shift_medium
+
+Temporal-Physical Negative          Speed Change        speed_change
+
+Speaker/Physical Negative           Pitch Shift         pitch_shift
+
+Acoustic Scene Negative             Noise Addition noise_addition
+Acoustic Structural Negative        Spectral Filtering filter
+
+Table 4: A comprehensive taxonomy of video-text consistency negative samples, out-
+lining the evaluated dimensions, core focus areas, and typical error types generated for
+mismatch construction.
+
+Dimension        Core Focus              Typical Error Types
+Appearance       Visual attributes
+                                         Color, shape, material, clothing, de-
+
+                                         tails
+
+Emotion & Expres- Emotional expressions  Emotion, facial expression, body
+
+sion                                     language
+
+Age & Gender     Age and gender          Age change, gender swap
+
+Social Relation  Social relationships    Relationship type, intimacy, inter-
+
+                                         action context
+
+Counting         Quantity                Number of people/objects, object
+
+                                         existence
+
+Motion           Movement and actions    Action, phase, trajectory, speed,
+
+                                         frequency
+
+Interaction      Interactions            Human-object, object-object rela-
+
+                                         tionships
+
+State            Object state            Open/closed,         intact/broken,
+
+                                         dry/wet
+
+Spatial          Spatial arrangement     Left/right, front/back, occlusion,
+
+                                         relative positions
+
+Saliency         Visual saliency         Main subject omission, partial
+
+                                         missing
+
+Temporal         Temporal logic          Order, sequence of steps, occur-
+
+                                         rence
+
+Camera           Camera language         Viewing angle, camera movement,
+
+                                         shot type
+
+Logical          Logical reasoning       Causality, containment, contrast
+
+World Knowledge Commonsense              Object function, character role,
+
+                                         physical laws
+22  F. Author et al.
+
+Table 5: A comprehensive taxonomy of audio-text consistency negative samples, out-
+lining the primary categories, secondary dimensions of mismatch, and detailed descrip-
+tions for each type.
+
+Primary Category   Secondary Dimension                 Description
+
+Speech Attributes Speaker Identity                     Change in speaker identity (gender, age,
+                                                       timbre, accent)
+                   Speaker Count                       Change in number of speakers (monologue
+                                                        dialogue  group)
+                   Speaking Role                       Change in speaking role (narrator, host, re-
+                                                       porter, lecturer)
+
+Speech Content     Semantic Polarity                   Semantic polarity reversal (positive  neg-
+
+                                                       ative)
+
+                   Entity Reference                    Entity       reference      error  (per-
+
+                                                       son/place/object replacement)
+
+                                   Causality           Causality mismatch
+                                   Emotional Polarity
+                                                       Emotion direction reversal
+Emotion & Prag- Emotional Intensity
+matics                                                 Change in emotional intensity
+
+                                   Speech Act          Change in pragmatic function (statement
+                                                        command)
+Counting & Degree Numerical Value
+                                   Frequency           Numerical change
+                                   Degree              Frequency change
+                                                       Change in degree/intensity
+Sound Effects      Action-Sound Mapping
+                   Sound Source                        Action-sound mismatch
+                   Material Cue                        Incorrect sound source
+                   Trigger Existence                   Material acoustic property mismatch
+                   Visual-Audio Sync                   Presence/absence of key sound effect
+                                                       Visual-audio sync error
+Action­Sound       Temporal Sync
+Align.                                                 Action-sound temporal mismatch
+                   Repetition
+                   Background Presence                 Repetition pattern change
+                                                       Background sound change
+Acoustic Environ. Reverberation
+                                   Distance Cue        Reverberation environment mismatch
+                                                       Distance cue mismatch
+Music Attributes   Instrumentation
+                   Genre & Style                       Instrument replacement
+                   Tempo & Rhythm                      Genre/style mismatch
+                   Emotional Alignment                 Tempo/rhythm change
+                                                       Music emotion alignment disruption
+Music­Content Rel. Narrative Support
+                                                       Music-narrative relation mismatch
+Audio Saliency     Foreground/Back.
+                   Focus Consistency                   Foreground/background reversal
+                                                       Focus stability disruption
+Temporal Structure Event Order
+                                   Continuity          Event order shuffled
+                                                       Continuity disruption
+Logical (Audio)    Part-Whole
+                   Completeness                        Part-whole relation disruption
+                   Physical Plausibility               Completeness disruption
+                                                       Acoustic physical plausibility disruption
+World Knowledge Scene Consistency
+                                   Role Knowledge      Scene-audio conflict
+                                                       Role knowledge conflict
+Cultural / Social  Cultural Cue
+                   Social Norms                        Cultural audio cue mismatch
+                                                       Social norm conflict
+Language & Annot. Language Label
+                                   Content Alignment   Language label error
+                                                       Description-content mismatch
+                              AVBench  23
+
+7.3 Negative Sample Examples
+
+To provide a clearer understanding of our generation strategies, we present con-
+crete examples of the synthesized negative samples for both video and audio
+modalities.
+
+    Figure 10 illustrates the construction of a video-text hard negative. In this
+example, the generation strictly adheres to the syntactic isomorphism constraint
+by introducing a minimal semantic perturbation--specifically, replacing the word
+"woman" with "boy". This subtle substitution creates a highly challenging mis-
+matched pair while perfectly preserving the grammatical skeleton and word
+count of the original description.
+
+    Conversely, Figure 11 demonstrates the audio-text negative construction,
+which relies on more pronounced semantic and acoustic deviations. The orig-
+inal description of a distressed male voice in a silent environment is transformed
+by altering the emotional state to "calm and steady" and introducing "soft back-
+ground music." This approach successfully generates a clear, challenging contra-
+diction that completely flips the acoustic narrative while remaining physically
+and logically plausible.
+
+8 Extended Details on the Evaluation Dataset
+
+The evaluation dataset is partitioned into two subsets: a Normal Subset (N =
+350) and a Hard Subset (N = 120). This structured design is intended to
+provide a comprehensive assessment of the model's capabilities across varying
+levels of difficulty. Fig. 12 illustrates the significant distribution shifts across six
+key dimensions.
+
+8.1 Linguistic and Interaction Complexity
+
+The dataset exhibits high linguistic diversity, covering 15 languages in the Nor-
+mal subset and 12 in the Hard subset.
+
+ ­ Speaker Density: A major shift occurs in the number of participants.
+     While the Normal subset is dominated by single-speaker scenarios (48.3%)
+     , the Hard subset is characterized by multi-speaker environments, with  3
+     speakers accounting for 60.8% of the samples.
+
+ ­ Interaction Depth: Interaction complexity moves from simple interactions
+     (46.0%) in the Normal set to a focus on Multi-turn Coherent (36.7%) and
+     Complex Multi-person Overlap (25.8%) in the Hard set.
+
+ ­ Speech Overlap: In the Normal set, 90.3% of samples contain no over-
+     lap. Conversely, the Hard set introduces significant challenges with frequent
+     overlap and interruptions appearing in 47.5% of the data.
+24  F. Author et al.
+
+ Original_description
+
+               The video shows a man and a woman conversing at a counter in a brightly lit, modern hallway
+               with large windows and seating areas. The man, wearing glasses and a gray jacket, gestures
+
+            while speaking, then walks away. The woman, in a white top, holds papers and watches
+
+               him leave. Other people are seated or walking in the background, creating a calm, everyday
+               public space atmosphere.
+
+ Modified_description
+  The videTohsehvoidweso ashmowasnaamndanaabnodyacboonyvceornsvinegrsiantgaatcaoucnoutenrteinr ina abrbirgighhtltylylilitt,, mmooddeerrnnhhaallwllwayay
+
+       with lawritghelawrginedwoiwndsowansdansdeasetiantgingaraeraesa.s.TThheemman, wweeaarrininggglgalsassesseasnadnadgaragyrjayckjeatc, ket,
+      gestugreestuwrhesilewshpileeaspkeinagk,intgh,etnhewnawlkaslksawawaayy..TThhee bbooyy, ,ininaawwhhiite toopp,,hhooldldsspappaepresrasnadnd
+  watches whiamtchleeasvheim. Oletahveer. pOethoeprlepeaorpelesearaetesdeaoterdwoarlkwianlgkining tihnethbeabcakcgkrgorouunndd,,ccrreeatinnggaaccaalmlm, ,
+
+             everyday public spaceevaetmryodsapyheprue.blic space atmosphere.
+
+Fig. 10: An illustrative example of video-text hard negative construction. The original
+description accurately depicts a man and a woman. To create a challenging mismatched
+sample, a minimal semantic error is introduced by replacing the word "woman" with
+"boy", while keeping the rest of the sentence's grammatical structure perfectly intact.
+
+ Original_description
+
+             A male voice speaks with a trembling, hesitant tone, indicating emotional distress and
+             uncertainty. The speech is slow and punctuated by pauses and repetitions, suggesting
+             internal conflict or fear. There is no background noise or other voices, creating an intimate,
+             tense atmosphere focused solely on the speaker's psychological state.
+ Modified_description
+  wTahtegcwehvitseihdtsuelcrAcarhoeeohrimlmgssenaaehetxwllroereewohfwadvuliiln.osvelaTdiecaansho.endpewmOdsesssptuaaehpepnakleeabfine-rkaneacdsnpaghstwde,ssiaotesiuaththpamserbltmaeeoninodsocagywpoadrhtacaelheemolrmkrsaenes,eneavstdaaashetnt.warreeohsTtaadryic.hndytohToeg.ynmhrTtmaetrwihocatranee,saaenwtlisbks,,citiocwonhwsoyoiugteon,hfntcaviinntctberehaiaynatersihcngiiksweonggpnghrbceaaloiaaaotlubekslcnniregsktidfrhgeogi'dstmhsprloet,iaunalunyuhstnengciolcdrihdeltndp,t,aaeaslmcalrng,yrmpodesrianaoduaegpngyetm,ieogrnjaonlearogdstscgihdotakauiiannneenagclglt.dwla,aalamy,
+
+                                       everyday public space atmosphere.
+
+Fig. 11: An illustrative example of audio-text mismatched negative construction. The
+original description depicts a distressed male voice in a silent environment. To create
+a challenging negative sample, significant semantic and acoustic mismatches are intro-
+duced by altering the speaker's emotional state to "calm and steady" and adding "soft
+background music," creating a clear contradiction while remaining physically plausible.
+                                                                                                                                         AVBench                             25
+
+                      (a) Number of Speakers                                (b) Interaction Complexity                              100  (c) Speech Overlap
+
+Percentage (%)  50                                       Percentage (%)50                                           Percentage (%)  80
+                40                                                     40
+                30                                                     30                                                           60
+                20                                                     20
+                10                                                     10                                                           40
+                10Speaker2 Speakers3 Speakers4 Speakers                M0onologue Simple Multi-turn Complex
+                                                                                                                                    20
+
+                                                                                                                                    No0Overlap Slight FrequentVery Freq.
+
+                80  (d) Speech Rate                                                (e) Time of Day                                          (f) Speech Activity
+
+                                                                         80                                                         80
+
+Percentage (%)  60                                       Percentage (%)  60                                         Percentage (%)  60
+
+                40                                                       40                                                         40
+
+                20                                                       20                                                         20
+
+                0 Slow Medium  Fast Very Fast                            0       Day  SuDbusske/tDawn   Night                       M0onologue Dialogue ShoutinDgebate/Arg.
+
+                                                                             Normal                    Hard Subset
+
+Fig. 12: Comparison of data distributions between the Normal Subset and Hard Subset
+across: (a) Number of Speakers, (b) Interaction Complexity, (c) Speech Overlap, (d )
+Speech Rate, (e) Time of Day, and (f ) Speech Activity.
+
+8.2 Acoustic and Visual Environmental Challenges
+
+The Hard subset is engineered to simulate "in-the-wild" difficulties that stress
+audio-video alignment:
+
+ ­ Temporal Dynamics: The speech rate shifts from predominantly moderate
+     (67.7%) to include a higher proportion of Fast and Very Fast speech in the
+     Hard subset (26.6% total).
+
+ ­ Lighting and Composition: Visual difficulty is heightened in the Hard
+     subset through a larger share of Night and Evening scenes (53.3% com-
+     bined) , compared to the Normal set where daytime scenes are more preva-
+     lent (42.0%).
+
+ ­ Acoustic Background: The audio environment in the Normal set is mostly
+     Clean (45.4%). The Hard set introduces complex Crowd Noise (22.5%) and
+     Outdoor Ambience (18.3%), demanding higher noise-robustness from the
+     models.
+
+8.3 Character Attributes and Emotional Breadth
+
+Both subsets maintain a wide range of human attributes. The Hard subset em-
+phasizes intense emotional states, with Tense (25.8%) and Excited (14.2%) be-
+ing the most frequent non-neutral emotions, whereas the Normal set features
+a broader distribution of Serious and Happy states. This emotional diversity,
+coupled with varying vocal textures like Sharp and Hoarse, provides a rigorous
+benchmark for fine-grained audio-video perception.
+26  F. Author et al.
+
+9 Additional Experimental Results
+
+9.1 Human Preference Prediction Accuracy
+
+Building upon the model-level Pearson correlation analysis in Section 4.3 of the
+main paper, we further evaluate the reliability of AVBench by calculating the
+instance-level prediction accuracy of our automated metrics against human pair-
+wise preferences. While the correlation coefficient validates the overall trend of
+win ratios, the accuracy metric directly measures how frequently the automated
+evaluator agrees with human experts in a direct side-by-side comparison (2AFC).
+
+    For each pair of videos generated from the same prompt, we define the human
+consensus as the ground-truth preference. The automated metric's prediction is
+considered accurate if it assigns a strictly higher score to the video preferred by
+the human experts.
+
+    As illustrated in Figure 13, AVBench consistently achieves high prediction
+accuracy across seven objective evaluation dimensions. The automated metrics
+exhibit strong discriminative capabilities, achieving an overall average accuracy
+of 85.4% and peaking at 98.1% for Speech Content.
+
+    Furthermore, to evaluate the complex multi-modal alignment capabilities, we
+compare our fine-tuned evaluator against zero-shot models and the base Qwen
+model (without fine-tuning) across the three consistency dimensions. As shown in
+Figure 14, our SFT-trained model ("Ours") significantly outperforms the base-
+lines. Notably, in Video-Text consistency, our model achieves an accuracy of
+92.31%, compared to merely 47.44% for the base model. These instance-level
+accuracy results demonstrate that our specialized fine-tuning procedure enables
+the evaluation framework to reliably approximate human judgment, effectively
+capturing subtle differences in fine-grained consistency.
+
+Fig. 13: Prediction accuracy of AVBench's automated metrics compared to human
+expert preferences across seven objective evaluation dimensions. The bar chart displays
+the percentage of instances where the automated metric correctly assigned a higher
+score to the human-preferred video in a 2AFC setup (ties excluded). The framework
+achieves an overall average accuracy of 85.4%, peaking at 98.1% for Speech Content,
+indicating a highly robust capability to mirror human perceptual judgments.
+AVBench  27
+
+Fig. 14: Comparison of prediction accuracy for multi-modal consistency dimensions.
+The grouped bar chart evaluates the performance of our SFT-trained model ("Ours")
+against zero-shot models and the base Qwen model across Audio-Text, Video-Text, and
+Audio-Video consistency. Our fine-tuned framework demonstrates significant improve-
+ments over the baselines, peaking at 92.31% for Video-Text consistency, successfully
+validating the efficacy of our fine-tuning strategy.
+
+9.2 Qualitative Case Studies
+
+To further illustrate the effectiveness of our proposed evaluation framework, we
+present three qualitative case studies covering audio-text, video-text, and audio-
+video consistency. These examples demonstrate how existing baseline models
+frequently fail to detect fine-grained mismatches, whereas our SFT-enhanced
+evaluator consistently aligns with human perception.
+
+    Figure 15 presents an audio-text consistency scenario involving a speaker
+identity mismatch. The text describes two young women communicating with a
+little girl. However, in the negative sample (Audio B), the little girl incorrectly
+speaks the dialogue meant for the young women. While baseline models such
+as CLAP and the base Qwen Audio2 7B fail to detect this semantic error and
+erroneously assign higher scores to Audio B, our SFT-enhanced model correctly
+identifies the discrepancy, perfectly aligning with the human preference for Audio
+A.
+
+    Similarly, Figure 16 highlights a video-text evaluation focusing on fine-grained
+numerical reasoning. The prompt explicitly specifies "four people" in a vehicle,
+yet Video A clearly depicts five. Baseline models like ViCLIP and the base
+Qwen Omni2.5 7B overlook this subtle counting error. Conversely, our model
+successfully captures the numerical mismatch and penalizes the incorrect video,
+matching human judgment.
+
+    Finally, Figure 17 addresses the temporal aspect of audio-video synchroniza-
+tion. In this example, Video A suffers from a noticeable audio-video delay. Tra-
+ditional baselines (ImageBind and base Qwen Omni2.5 7B) struggle to capture
+this temporal misalignment and incorrectly score the delayed video higher. Our
+28  F. Author et al.
+
+SFT-trained evaluator, however, accurately detects the desynchronization and
+correctly prefers the well-synchronized Video B. Collectively, these cases high-
+light the robustness of our approach in capturing complex, multi-dimensional
+consistency errors that traditional metrics miss.
+
+Audio_Text_Consistency          Audio A : 0.9976        Audio A : 0.2337
+                                Audio B : 0.9978        Audio B : 0.2493
+              Audio A : 0.5621
+              Audio B : 0.5467
+
+Qwen Audio2 7B with SFT         Qwen Audio2 7B    CLAP
+
+           Audio A is  The correct audio should show two young women communicating with a
+           better.     little girl. However, in audio B, what was supposed to be the words of the
+                       young women were actually said by the little girl in her own voice. The
+Human Preference       characters do not match.
+
+Fig. 15: A case study on audio-text consistency evaluation. The original text describes
+two young women communicating with a little girl. In Audio B, the young women's
+dialogue is incorrectly spoken by the little girl, creating a character mismatch. While
+baseline models like CLAP and the base Qwen Audio2 7B fail to recognize this error,
+our SFT-enhanced evaluator correctly penalizes Audio B and aligns with the human
+preference for Audio A.
+                                                            AVBench                             29
+
+Video_Text_Consistency
+
+Video A : 0.3208                  Video A : 0.9099          Video A : 0.2310
+Video B : 0.4378                  Video B: 0.7879           Video B : 0.2153
+
+Qwen Omni2.5 7B with SFT Qwen Omni2.5 7B            Viclip
+
+            Video B is  The text indicates that there should be four people in the vehicle, but
+            better.     in Video A, there are actually five people inside. The number does
+                        not match the text description, so Video B is better.
+Human Preference
+
+Fig. 16: A case study on video-text consistency evaluation, our SFT-enhanced eval-
+uator correctly penalizes Video A and aligns perfectly with the human preference for
+Video B.
+
+Video_Audio_Consistency           Video A : 0.9046          Video A : 0.1589
+                                  Video B : 0.7662          Video B : 0.1499
+                Video A : 0.5000
+                Video B: 0.9982
+
+Qwen Omni2.5 7B with SFT Qwen Omni2.5 7B            Imagebind
+
+            Video B is  The audio of the speaker in Video A does not match the video, and
+            better.     there is a significant delay. Video B, on the other hand, has a better
+                        match between the audio and the video. From a human perspective,
+Human Preference        there is no obvious mismatch, so Video B is better.
+
+Fig. 17: A case study on audio-video consistency evaluation, our SFT-enhanced eval-
+uator successfully identifies the desynchronization and aligns perfectly with human
+judgment.
+

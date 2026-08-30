@@ -1,0 +1,519 @@
+                                           VL-DPO: Vision-Language-Guided Finetuning for
+                                                 Preference-Aligned Autonomous Driving
+
+                                        Zhefan Xu1, Ghassen Jerfel2, Marina Haliem2, Qi Zhao2, Jeonhyung Kang2, and Khaled S. Refaat2
+
+arXiv:2605.20082v1 [cs.CV] 19 May 2026     Abstract-- The rapid growth of autonomous driving datasets    Fig. 1. Illustration of the proposed training stages of the motion forecasting
+                                        has enabled the scaling of powerful motion forecasting models.   model. (a) Multi-agent pretraining via imitation learning on large-scale data.
+                                        While large-scale pretraining provides strong performance,       (b) Single-agent (ego-vehicle) preference finetuning using VLM-generated
+                                        the standard imitation objective may not fully capture the       pairs, which replace human annotation.
+                                        complex nuances of human driving preferences. Meanwhile,
+                                        recent advances in vision-language models (VLMs) have demon-     forgetting [12], eroding the general world knowledge that
+                                        strated impressive reasoning and commonsense understanding.      initially underpins their effectiveness [13]. Third, the black-
+                                        Building on these capabilities, this paper presents VL-DPO, a    box nature of these end-to-end models makes it difficult
+                                        vision-language-guided framework that aligns ego-vehicle mo-     to interpret individual decisions, posing a critical barrier
+                                        tion forecasting models with human preferences. Our approach     for safety-sensitive applications such as autonomous driving.
+                                        leverages a VLM as a zero-shot reasoner to automatically         Fourth, the computational demands of large VLMs often lead
+                                        generate preference pairs from a pretrained model's rollouts,    to high inference latency, making them impractical for real-
+                                        which are then used to finetune the model via Direct Preference  time onboard deployment in autonomous vehicles.
+                                        Optimization (DPO). We finetune our models on the Waymo
+                                        Open End-to-End Driving Dataset (WOD-E2E) and evaluate              To address the limitations of finetuning VLMs as Vision-
+                                        performance against held-out human preference annotations        Language-Action models, we propose a more modular
+                                        using rater feedback score (RFS) and average displacement        paradigm that decouples high-level reasoning from low-
+                                        error (ADE). Our experiments confirm that the VLM's trajec-      level motion forecasting by leveraging the VLM not as
+                                        tory selection is a high-quality proxy for human preference.     an integrated component, but as a frozen zero-shot rea-
+                                        Our final model, VL-DPO, yields an 11.94% increase in RFS        soner and critic. This design preserves the VLM's world
+                                        and a 10.01% reduction in ADE over the pretrained model.         knowledge and avoids catastrophic forgetting while enabling
+                                                                                                         a more interpretable and efficient finetuning process. In
+                                                                 I. INTRODUCTION                         this role, the VLM generates supervisory signals, including
+                                                                                                         fine-grained trajectory preference pairs--our main contri-
+                                           Deep neural networks, empowered by the proliferation of       bution--and coarser discrete High-Level Actions (HLAs),
+                                        large-scale datasets, have demonstrated strong performance       which we also investigate as a simpler supervision method.
+                                        in motion forecasting for autonomous driving [1][2][3][4][5].
+                                        Despite their effectiveness, the standard imitation learning        This culminates in VL-DPO: a vision-language-guided
+                                        objectives prioritize local geometric accuracy, often via next-  framework that aligns a pretrained motion forecasting model
+                                        token prediction accuracy. This fails to capture the holistic    with human preferences, as illustrated in Fig. 1. The frame-
+                                        preferences that characterize human driving behavior, creat-     work builds on Direct Preference Optimization (DPO) [14],
+                                        ing an alignment gap.                                            where the VLM evaluates candidate trajectories from model
+                                                                                                         rollouts to automatically generate preference pairs for fine-
+                                           The recent emergence of Vision-Language Models                tuning. Our empirical study on the Waymo Open End-to-End
+                                        (VLMs), with their strong commonsense reasoning and con-         Driving Dataset (WOD-E2E) shows that VL-DPO consis-
+                                        textual understanding, offers a promising path to bridge this    tently outperforms the coarser HLA-based supervision and
+                                        gap. We hypothesize that a VLM's vast world knowledge can
+                                        serve as a high-quality proxy for nuanced human preferences.
+
+                                           However, the prevailing trend for leveraging this capability
+                                        has been to adopt VLMs as monolithic end-to-end backbones
+                                        for ego-vehicle motion prediction [6][7][8][9][10]. While
+                                        these approaches benefit from the large-scale pretrained
+                                        knowledge embedded in VLMs and have shown promising
+                                        results, they still face several key challenges. First, these
+                                        models often require large-scale, high-quality, and diverse
+                                        datasets with aligned language and action (as exemplified by
+                                        the data curation process in [11]), which can be expensive
+                                        and time-consuming to collect and annotate. Second, without
+                                        careful data curation, finetuning large pretrained models on
+                                        domain-specific driving datasets can lead to catastrophic
+
+                                          1 zhefanx@andrew.cmu.edu
+                                          2 {ghassen,mhaliem,zhaqi,jeonhyung,krefaat}@waymo.com
+achieves state-of-the-art alignment with human preferences.         In contrast, our work adopts the less-explored modular
+The main contributions of this work are:                         paradigm of using VLMs as frozen, zero-shot reasoners.
+                                                                 Prior work in this area focused on auxiliary tasks like safety-
+   ∑ VLM as a Zero-Shot Preference Annotator: We                 aware decision verification for perception and planning mod-
+      propose the novel use of a VLM as a zero-shot reasoner     ules [27] or hard-example mining [28]. The most closely
+      to generate preference pairs for supervising a separate    related work to ours is VLM-AD [29] which leverages VLM-
+      motion forecasting model. We validate this approach by     generated reasoning text to construct an auxiliary classifi-
+      demonstrating that the VLM's trajectory selections are     cation loss. Another line of work explores aligning BEV
+      more human-aligned than the model's own most-likely        features with LM-derived expectation embeddings (ALP)
+      predictions, establishing it as an effective and scalable  and extending this alignment to ego-vehicle query features
+      proxy for human feedback.                                  for planning (SLP) via contrastive learning [30]. While this
+                                                                 paradigm enriches perception and planning with semantically
+   ∑ VL-DPO for Motion Forecasting: We present the               meaningful representations, it remains an auxiliary training
+      first framework that leverages vision-language-guided      signal for feature refinement, rather than a direct mechanism
+      preferences within direct preference optimization to sig-  for aligning autonomous driving decisions with human pref-
+      nificantly improve the alignment of ego-vehicle motion     erences. OmniDrive [31] generates a counterfactual Q&A
+      forecasting models with human driving preferences.         dataset by simulating alternative trajectories and prompting
+                                                                 GPT-4 for safety reasoning, offering denser supervision for
+   ∑ Comprehensive Empirical Study: On WOD-E2E, our              perception and planning but focusing on dataset quality
+      proposed VL-DPO framework demonstrates significant         rather than preference alignment. Our work explores a novel
+      improvements over both a pretrained model and a            and complementary direction focusing on simpler and more
+      strong imitation learning baseline (finetuned on the       interpretable forms of supervision: we investigate direct
+      single highest-rated human preference trajectory), while   model conditioning on discrete HLAs and, most critically, the
+      consistently outperforming alternative VLM-guidance        generation of explicit preference pairs for human preference
+      strategies like HLA-based supervision.                     alignment. This approach is simpler, as it avoids hand-
+                                                                 crafting intricate loss functions, and more interpretable, as
+   The rest of this paper is structured as follows: we review    the quality of the VLM's discrete outputs--a chosen action
+related work in Section II, detail our methodology in Sec-       or a preference--can be directly evaluated.
+tion III, present our experimental results in Section IV, and
+finally conclude with a discussion of our findings.                 Preference Alignment: The standard paradigm for align-
+                                                                 ing models with human preferences is Reinforcement Learn-
+                        II. RELATED WORK                         ing from Human Feedback (RLHF) [32][33]. While power-
+                                                                 ful, this multi-stage process of reward modeling and rein-
+   Motion forecasting, crucial for autonomous driving, has       forcement learning is notoriously complex and can suffer
+advanced from CNNs on rasterized scenes [15][16][17], and        from training instability. To avoid these issues, our work
+GNNs on scene graphs [18][19], to powerful Transformer-          employs direct preference optimization, a more direct and
+based architectures [3][20][21]. Paradigms like MotionLM         stable offline method that optimizes a policy via a simple
+[2], reformulate it as a language modeling for motion tokens,    classification loss on preference pairs [14]. DPO has recently
+effectively capturing complex interactions and multimodal        been applied to embodied agent tasks, such as motion
+motion distributions. While achieving high accuracy, its         forecasting with implicit preferences from heuristics [34] and
+standard next-token imitation training objective is primarily    robotic manipulation [35]. Our work introduces a fundamen-
+optimized for replicating expert-demonstrated trajectories.      tally different approach for generating the supervisory signal.
+This focus on local fidelity means it remains misaligned         We leverage a VLM in a zero-shot capacity to generate
+with the long-term consistency and holistic nature of human      explicit, semantically-grounded preference pairs based on its
+driving behavior, as it does not explicitly account for nuanced  commonsense understanding of the scene.
+preferences or explore alternative, equally valid or even
+preferred paths that may deviate from the exact expert trace.                           III. METHODOLOGY
+This motivates our work on human preference alignment in
+motion forecasting.                                              A. Generative Motion Forecasting Model
+
+   VLM-based Approaches: The dominant approach in                   The motion forecasting model in our framework is pre-
+leveraging VLMs for autonomous driving involves finetuning       trained on a joint autoregressive prediction task for 8 agents:
+them as monolithic end-to-end models [22][23][24]; for           the ego vehicle and its 7 nearest neighbors. Following the
+instance, DriveLM [6] trains a VLM for trajectory prediction     MotionLM paradigm [2], we adopt an encoder≠decoder
+via a VQA framework, WiseAD [8] enriches this with               transformer architecture and formulate motion forecasting
+explicit driving knowledge, and EMMA [9] finetunes a VLM         as a sequence generation task conditioned on a rich scene
+to output both reasoning traces and trajectory predictions.      context, S, comprising the road graph, traffic light states,
+Others, like VDT-Auto [25], use a VLM to output embed-           and historical agent trajectories (see Fig. 2). The model
+dings for a policy module while DiMa [26] relies on the          generates fine-grained sequences of discrete action tokens for
+joint-training of a VLM and a vision-based policy model.         each agent from a finite vocabulary. These tokens represent
+All of these approaches share the common trait of directly
+modifying the VLM's weights for the driving task which can
+erode its world knowledge and reasoning capabilities.
+quantized changes in the agent's position, which can be                       Fig. 2. The architecture of MotionLM [2]. It adopts an encoder≠decoder
+deterministically converted back into a continuous trajectory.                transformer that takes scene features as input and autoregressively generates
+By sampling and aggregating multiple trajectories, the model                  discrete action tokens from a predefined vocabulary, followed by postpro-
+produces a multi-modal set of 12 predictions for each agent.                  cessing to convert these tokens into trajectories across multiple modalities.
+
+   The pretraining objective is imitation learning, where                     cascade--progressing from scene understanding to the final
+parameters are optimized to maximize the log-probability                      high-level action output and preference trajectory selection.
+of expert-demonstrated trajectories. This allows the model
+to learn a rich implicit distribution over possible fu-                          1) Scene Understanding: The designed prompt begins
+tures P (a11, a21, ..., a81, . . . , a1T , aT2 , ..., a8T |S) capturing com-         by establishing general context, with the VLM describ-
+plex multi-agent interactions and yielding a foundational                            ing the overall driving environment, including road
+representation suitable for diverse downstream tasks. Impor-                         type, prevailing weather, and time of day.
+tantly, this generative formulation enables the model to score
+candidate trajectories by computing their log-probabilities.                     2) Critical Object Perception: The next step identifies
+                                                                                     critical objects in the camera image together with their
+   During preference finetuning, we restrict the task to                             relative positions to the ego vehicle.
+single-agent (ego-vehicle) trajectory prediction since the au-
+tonomous vehicle is the only agent whose perception data                         3) Object-Scene Relation Identification: For each crit-
+can be directly processed by the VLM.                                                ical object, the reasoning process determines interac-
+                                                                                     tions with other objects and environmental conditions.
+B. VLM as a Zero-Shot Driving Reasoner
+                                                                                 4) Dynamic Object Behavior Prediction: For each criti-
+   1) Multimodal Scene Representation                                                cal moving object detected in previous steps, high-level
+   To enable the VLM to perform robust context-aware rea-                            future actions are predicted from a predefined set.
+soning, we construct a rich multimodal scene representation
+that provides a holistic view of the driving environment by                      5) Potential Risk Analysis: The VLM analyzes the scene
+combining three modalities as illustrated in Fig. 3.                                 to identify potential risks or hazards to the ego vehicle
+                                                                                     and explains why each poses a threat.
+   ∑ Egocentric and Temporal Vision. A panoramic image
+      is constructed by stitching the front, front-left, and                     6) Driving Decision Prediction: Based on the preceding
+      front-right camera feeds into a wide egocentric view.                          analysis, a high-level action is recommended for the
+      To capture scene dynamics, we represent this view                              ego vehicle from a predefined set (see Section III-C.1).
+      as a sequence comprising the current frame and four
+      historical frames sampled at 1 Hz.                                         7) Preference Trajectory Selection: Finally, using the
+                                                                                     full reasoning trace together with the stitched top-down
+   ∑ Spatial Reasoning and Visual Grounding. We gen-                                 visualization of candidate trajectories, the framework
+      erate a top-down, bird's-eye-view (BEV) visualization                          selects the most preferred trajectory for the scenario.
+      that renders the local road graph, the positions of other
+      agents, and, most importantly, candidate ego-trajectory                 C. VLM-Guided Finetuning Framework
+      predictions from motion forecasting model rollouts. By
+      presenting the candidate trajectories visually within a                    To leverage the VLM's supervisory signals, we propose
+      geometrically precise ego-centric frame, we transform                   and evaluate two distinct finetuning methodologies: direct
+      the abstract preference selection task into a more direct               supervision on discrete High-Level Actions in Sec. III-C.1,
+      visual comparison problem, enabling the VLM to reason                   and a more holistic alignment on trajectory-level preferences
+      about spatial conflicts and path suitability. To present all            via direct preference optimization in Sec. III-C.2.
+      options in a single input, we generate a BEV image for
+      each of the 12 candidate trajectories and combine them                     1) Supervision with High-Level Actions (HLAs)
+      into a composite visualization, then the VLM selects the                   To transform the VLM's free-form reasoning into a struc-
+      preferred trajectory by image index. Sec. III-C provides                tured format, we experiment with three categories of high-
+      details on using this for preference finetuning.                        level action vocabularies defined as follows:
+
+   ∑ Textual Grounding. To ground the VLM's reasoning in                         ∑ Maneuver Action: This action set provides a holistic
+      both long-term goals and immediate dynamics, we add                           semantic label for complete driving behaviors, combin-
+      structured text describing key scene features, including                      ing both directional and speed intent. It includes: [Move
+      the route planner's navigational command and the ego                          to stop, Stop to move, Left turn, Right turn, Backup,
+      vehicle's current speed.                                                      Left lane change, Right lane change, Remain stopped,
+                                                                                    U-turn, Pullover, Lane following].
+   2) Chain-of-Thought Prompting for Driving Supervision
+   To generate high-quality supervisory signals for pref-
+erence finetuning, we apply Chain-of-Thought prompting,
+which elicits a structured and interpretable reasoning trace
+from the VLM. As illustrated in Fig. 3, this multi-step
+process guides the model through a hierarchical reasoning
+Fig. 3. Illustration of the VLM's Chain-of-Thought (CoT) reasoning process. The VLM takes as input the sequence of image history, top-down view
+images with sampled trajectories, along with speed and route information. The reasoning flows from perception to driving decision prediction and ultimately
+to preference-based trajectory selection. The model outputs both the high-level action and the selected trajectory, which serve as finetuning signals.
+
+   ∑ Direction Action: This action set specifies the ego               Algorithm 1: VL-DPO Loss Computation
+      vehicle's directional intent while omitting explicit speed
+      information. It includes: [Stop, Go straight, Turn left,     1 ref  pretrained motion forecasting model;
+      Turn right, Left lane change, Right lane change].
+                                                                   2 target  target motion forecasting model;
+   ∑ Speed Action: This action set captures the dynamic            3 SrTollout  sampleRollouts(ref , inputs, Nsamples);
+      aspect of motion by describing the intended change in        4 Tselect  getVLMSelectedTraj(SrTollout, prompts);
+      the ego vehicle's speed profile. It includes: [Maintain      5 SuTnselect  SrTollout \ Tselect;
+      speed, Accelerate, Decelerate, Hard brake].                  6 rwef  computeProb(ref , Tselect);
+                                                                   7 w  computeProb(target, Tselect);
+In our framework, the maneuver category serves as the
+default action definition. We also explore an alternative          8 LVL-DPO  0;
+formulation where direction and speed actions are combined
+to represent driving intent. These different definitions are       9 for Tuinselect in SuTnselect do
+primarily evaluated to investigate whether the choice of               rl ef  computeProb(ref , Tuinselect);
+action representation influences finetuning performance.           10
+
+   With the HLAs from the VLM, we propose two integration          11  l  computeProb(target, Tuinselect);
+strategies: (i) incorporating them in an auxiliary loss, and (ii)
+conditioning the motion forecasting model on them as input.        12 LDPO  DPOLoss(rwef , w, rl ef , l);
+
+   HLAs as an Auxiliary Loss. The first approach treats            13  LVL-DPO  LVL-DPO + LDPO;
+HLA prediction as an auxiliary task within a multi-task
+learning framework. The underlying hypothesis is that en-          14 Npairs  Nsamples - 1;
+forcing the model's latent representations to be predictive
+of the VLM's high-level semantic intent encourages a more          15 LVL-DPO  LVL-DPO / Npairs;
+structured and context-aware representation space, thereby
+improving the quality of trajectory prediction. To implement       16 return LVL-DPO;
+this, we attach a lightweight multi-layer perceptron (MLP)
+head to the decoder's final hidden state embeddings. This          the semantic maneuver it is expected to execute.
+classification head, followed by a softmax layer, is trained          2) Supervision with VLM Trajectory Selections
+to predict the VLM-provided HLA token using cross-entropy             The standard next-token prediction objective--central to
+loss. The resulting auxiliary loss is combined with the
+primary imitation learning loss during finetuning.                 paradigms such as MotionLM [2]--is effective at capturing
+                                                                   locally coherent behaviors but does not guarantee long-term
+   HLAs as Conditional Input. The second approach lever-           consistency. This results in a misalignment, as the model may
+ages the VLM-provided HLA as a conditional input, fram-            optimize for trajectory prediction accuracy while neglecting
+ing the problem as goal-conditioned trajectory generation.         aspects humans value, such as yielding to pedestrians, main-
+The hypothesis is that explicitly conditioning on the high-        taining safe gaps, or avoiding overly aggressive maneuvers.
+level goal reduces the size of the output space, simplifying       Direct preference optimization [14] addresses this limitation
+prediction and improving accuracy. Concretely, the VLM-            by training on preference pairs, each consisting of a pre-
+generated HLA is encoded as a one-hot vector, projected            ferred and an unpreferred behavior. The objective increases
+into the model's embedding dimension, and concatenated             the likelihood of the preferred example (in our case, the
+with other scene context features before entering the encoder.     VLM-selected trajectory) while decreasing the likelihood of
+This design ensures that the entire model is conditioned on        the unpreferred ones. Building on this idea, we propose a
+                                                                   vision≠language-guided DPO (VL-DPO) loss that leverages
+                                                                   VLM-generated preference pairs to align motion forecasting
+                                                                   models with human preferences as detailed in Alg. 1.
+
+                                                                      To compute the VL-DPO loss, we use a pretrained
+                                                                   reference motion forecasting model, ref , which remains
+                                                                   frozen during finetuning, along with a target model, target,
+initialized from the same pretrained weights (Lines 1-2).             Method         RFS  ADE (5S) [m] 
+Specifically, we first sample Nsamples = 12 rollout trajectories
+from the reference model, render the corresponding top-               Most Likely Selection 7.2279  3.1948
+                                                                                                    2.9460
+down BEV representations with surrounding agents and the              VLM Selection  7.2970
+
+roadgraph, and then apply the CoT method described in Sec.            VLM Selection Gain +0.96%     -7.79%
+
+III-B.2 to select the most preferred trajectory (Lines Alg.                                              TABLE I
+3≠4). This yields a single selected trajectory, Tselect, and a        COMPARISON OF VLM-SELECTED TRAJECTORY WITH THE MOST
+set of 11 unselected trajectories, SuTnselect (Line 5). From this,
+we construct 11 preference pairs, each comparing the VLM-                 LIKELY TRAJECTORY FROM BASELINE MODEL ROLLOUTS.
+
+selected trajectory against one of the unselected trajectories:
+
+{(Tselect, Tuinselect) | Tunselect = Trollout \ Tselect}.        (1)
+
+For each preference pair, the DPO loss requires computing
+the probabilities, , of both the selected and unselected
+trajectories under the reference and target models (Lines 6≠8
+and 10≠11 in Alg. 1). DPO loss for a single pair is:
+
+w  l
+LDPO = - log   log rwef -  log rl ef ,                           (2)
+
+where  denotes the sigmoid function and  is a scaling
+parameter that regulates how much the target model is
+permitted to deviate from the reference model. The final VL-
+DPO loss for each example is obtained by averaging the DPO
+losses over all 11 preference pairs (Lines 13≠15).
+
+                 IV. RESULT AND DISCUSSION                            Fig. 4. Example of VLM Chain-of-Thought reasoning. For clarity, the full
+                                                                      VLM response is simplified, and the trajectory selection step is omitted.
+A. Dataset and Model Configurations
+                                                                         ∑ Average Displacement Error (ADE): A geometric
+   The motion forecasting model is pretrained on a large-                   accuracy metric, computed as the mean L2 distance be-
+scale internal dataset. Our model adopts the encoder≠decoder                tween the predicted trajectory and the target ego-vehicle
+architecture of MotionLM [2], pretrained for multi-agent                    trajectory at each timestep over a predefined prediction
+prediction and finetuned for single-agent ego forecasting.                  horizon. Lower values indicate higher performance.
+For finetuning and evaluation, we use the Waymo Open
+End-to-End Driving Dataset (WOD-E2E)1, which contains                 B. VLM Reasoning Evaluation
+2,037 training and 479 validation examples. In each example,
+our model is given a 4-second observation window and                     To evaluate the VLM-generated supervisory signals, we
+tasked with predicting the ego-vehicle trajectory over the            perform both qualitative and quantitative analyses.
+next 5 seconds. To ensure compatibility with the pretrained
+backbone, we augment WOD-E2E with features extracted                     Qualitative Reasoning Analysis. Fig. 4 provides a repre-
+using proprietary systems, including road graph information,          sentative example of the VLM's Chain-of-Thought reasoning
+traffic light states, and historical agent trajectories. For the      with simplified prompt questions, intermediate reasoning
+VLM, we use Gemini 2.5 Pro [36] in its zero-shot setting.             steps, and final high-level action outputs. For brevity, the
+Performance is assessed on the post-aggregation (12) trajec-
+tories using the human-annotated preference labels based on:
+
+   ∑ Rater Feedback Score (RFS): The primary metric for
+      human preference alignment. Each example in WOD-
+      E2E provides three human-annotated trajectories ranked
+      from most to least preferred, with raters assigning scores
+      from 0 (worst) to 10 (best). The model's predictions
+      are then evaluated against these annotated preferences,
+      where higher scores indicate better alignment. Our
+      motion forecasting model outputs 12 trajectories, so
+      we report three RFS metrics: RFS (central-mode tra-
+      jectory2), avgRFS (average over all trajectories), and
+      mlRFS (most-likely trajectory).
+
+1https://waymo.com/open/challenges/2025/e2e-driving/
+2centrally located trajectory among all predicted trajectories.
+Method              RFS  avgRFS  mlRFS  ADE (5s) 
+
+MotionLM [2]        7.292  7.083  7.227  3.195
+Imitation Learning  7.844  7.861  7.855  3.075
+IL+VL-HLA (Loss)    7.841  7.799  7.779  2.825
+IL+VL-HLA (Input)   8.060  8.032  8.096  2.715
+IL+VL-DPO           8.163  8.069  8.138  2.875
+
+                                   TABLE II
+PERFORMANCE COMPARISON OF MOTIONLM [2] BASELINE AND
+FINETUNED VARIANTS ON RFS, AVGRFS, MLRFS AND 5-S ADE.
+
+trajectory selection step (as in Fig. 3) is omitted. In the       Fig. 5. Comparison of RFS, avgRFS, mlRFS across the finetuning methods.
+complex construction-zone scenario of Fig. 4, the VLM
+correctly identifies the street condition and analyzes critical   the need for preference alignment.
+objects in the scene. It successfully reasons about object           2) Finetuning with High-Level Actions (IL+VL-HLA)
+relations and forecasts the motion of moving agents. Impor-          Next, we explore augmenting the IL baseline with VLM-
+tantly, it highlights potential risks such as lane narrowing
+due to construction, the possibility of unexpected motion         generated HLAs. We find that using HLAs as a model input
+from an oncoming SUV, and the presence of construction            (IL+VL-HLA(input)) provides a significant boost, particu-
+workers. Based on this reasoning, the VLM predicts a              larly to ADE, achieving our best geometric accuracy of 2.715
+reasonable maneuver: lane following while going straight and      in table II. This shows that providing a coarse semantic
+maintaining speed.                                                anchor answering the question "WHAT is the correct maneu-
+                                                                  ver?" helps regularize the model and simplifies the prediction
+   Quantitative Selection Performance. We compare the             task. In contrast, the auxiliary loss approach (IL+VL-HLA
+quality of the VLM's final trajectory choice against the          (Loss)) yielded no notable improvement, likely because the
+motion prediction model's own probabilistic ranking (i.e.,        gradients from a small classification head are insufficient to
+its most likely rollout). As shown in Table I, the trajectory     meaningfully influence the model's primary representations.
+selected by the VLM is demonstrably better aligned with
+human preferences, yielding an improved RFS (+0.96%)                 3) Vision-Language Guided Preference Tuning (VL-DPO)
+and a significant reduction in ADE (≠7.79%). We note                 Finally, we apply our primary contribution, augmenting
+that the zero-shot VLM selection in Table I yields a much         the IL baseline with VLM-generated preference pairs via
+larger improvement in ADE than in RFS. This is a direct           DPO. This method, IL+VL-DPO, achieves the highest RFS3
+consequence of how the two metrics are defined. ADE is            (Fig. 5) and competitive ADE. It demonstrates improvements
+computed against the single most-preferred human trajectory,      of 11.94% and 4.07% in RFS, and reductions of 10.01%
+so choosing smoother and safer rollouts translates directly       and 6.5% in ADE as compared to the baseline and imita-
+into lower error. RFS, however, is assigned by matching to        tion learning≠finetuned models, respectively. This superiority
+one of three annotated trajectories with their scores, using      demonstrates that the greatest gains are unlocked by provid-
+trust regions. Once the prediction falls inside the trust region  ing a fine-grained, trajectory-level comparative signal that
+of a given rater trajectory, further geometric improvements       answers the nuanced question: "HOW should this maneuver
+(which strongly reduce ADE) do not necessarily change the         be executed safely and comfortably?" This approach also
+RFS score, making the gain appear small. Importantly, our         holds a critical practical advantage: While the IL+VL-HLA
+finetuning results (Table II) demonstrate that this limitation    (Input) model achieves a slightly lower ADE, it requires the
+is overcome when VLM selections are turned into preference        VLM at inference time, whereas our VL-DPO framework
+pairs for DPO training: the pairwise supervision signal           only requires the VLM for offline dataset creation.
+targets ranking consistency across all annotated trajectories,       To demonstrate the effect of RFS improvements, Fig. 6
+leading to much stronger RFS improvements.                        shows an example of central-mode trajectory predictions
+                                                                  from the MotionLM baseline, imitation learning≠finetuned
+C. Finetuning Results                                             models, and our IL+VL-DPO. In this scenario, a jaywalking
+                                                                  pedestrian has nearly finished crossing the street. While base-
+   Having validated our supervisory signals, we now present       line models exhibit conservative behavior, our IL+VL-DPO
+the main finetuning results, building from a simple baseline      model generates a more efficient and human-like trajectory,
+to our final proposed method as summarized in Table II.           demonstrating its superior situational understanding.
+
+   1) Imitation Learning (IL)                                     D. Discussion and Ablation Studies
+   The pretrained MotionLM model serves as our initial
+baseline. As a first step, we finetune it using Imitation            1) Impact of HLA Representation
+Learning (IL) on the single, highest-rated human trajectory          The effectiveness of HLA supervision is highly dependent
+in each example. This establishes a very strong baseline,         on both the training strategy (auxiliary loss vs. conditional
+dramatically improving both RFS (avgRFS increases from
+7.08 to 7.86) and ADE (from 3.19 to 3.07) and confirming             3As of August 2025, the leading RFS score is 7.986. These scores are
+                                                                  not comparable to WOD-E2E leaderboard scores due to differences in
+                                                                  pretraining data and finetuning features.
+Fig. 6. Comparison of central-mode trajectory prediction plots in top-down images from MotionLM [2], the imitation learning≠finetuned model, and our
+proposed IL+VL-DPO finetuned model, shown alongside the ground-truth human-annotated preference trajectory in an example driving scenario.
+
+Method                 RFS  avgRFS  ADE (5s)                     Method              RFS  avgRFS  ADE (5S) [m] 
+
+Imitation Learning     7.8446 7.8613 3.0752                      MotionLM [2]        7.2926  7.0839  3.1121
+                                                                 VL-DPO only         7.4432  7.3681  3.7895
+Maneuver Loss          7.8160          7.7994  2.8284            Imitation Learning  7.8446  7.8613  3.0752
+                                       7.8699  2.8655            IL+Preference-DPO   8.0140  7.9784  2.6689
+Direction+Speed Loss   7.8915          7.8178  2.8634            IL+VL-DPO (Ours)    8.1637  8.0694  2.8756
+
+Maneuver+Direction+Speed Loss 7.9240
+
+Maneuver Input         8.0604          8.0324  2.7232
+                                       7.8962  2.9185
+Direction+Speed Input  7.8743          7.8733  2.8626                                                TABLE IV
+                                                                 ABLATION STUDY OF DPO VARIANTS IN TERMS OF RFS AND ADE.
+Maneuver+Direction+Speed Input 7.8841
+
+                                      TABLE III                  provides a powerful gradient.
+ABLATION STUDY ON VLM HLAS WITH DIFFERENT DEFINITIONS AND           This leads to our central finding: the combination, IL+VL-
+
+      TRAINING STRATEGIES, EVALUATED BY RFS AND 5-S ADE.         DPO, surpasses both standalone methods. This underscores
+                                                                 that DPO's strength is not in replacing imitation learning,
+input) and the semantic representation (Maneuver vs. Direc-      but in augmenting it. While IL learns from the single "best"
+tion+Speed). Our ablation (Table III) reveals a clear conclu-    trajectory, DPO leverages all 11 comparisons, teaching the
+sion: using HLAs as an auxiliary loss provides an insufficient   model a nuanced understanding of failure modes that is
+signal, regardless of the definition. In contrast, when used as  critical for improving human preference scores.
+a conditional input, the holistic Maneuver action provides a
+powerful inductive bias, substantially improving both RFS           Next, we compare the data sources for the DPO signal. In
+and ADE. This finding suggests that for conditioning, a          Table IV, IL+VL-DPO model outperforms IL+Preference-
+single, comprehensive semantic token is a more effective and     DPO (which uses human oracle preferences) in RFS. This
+direct signal than multiple, disentangled ones.                  suggests that the VLM, guided by its structured CoT process,
+                                                                 provides a more diverse and informative set of "what not
+   To analyze the sources of performance gains, we conduct       to do" signals than the human annotator. Human preference
+ablation studies on our two finetuning strategies.               data is limited to 3 pairs and can be noisy, whereas our
+                                                                 VLM generates up to 11 systematic comparisons per scene,
+   2) Dissecting the Efficacy of DPO                             offering a richer and more effective optimization signal.
+
+   We now analyze the key components of our best-                            V. CONCLUSION AND FUTURE WORK
+performing model, IL+VL-DPO, with results in Table IV.
+                                                                    This work introduces VL-DPO, a vision-language-guided
+   First, we investigate the relationship between preference     preference finetuning framework, and establishes a clear hier-
+optimization and simple imitation learning. When evaluated       archy for leveraging VLM-generated signals. While imitation
+as a standalone method, VL-DPO only improves RFS over            learning on a human-preferred trajectory provides a strong
+the MotionLM baseline, confirming that the VLM's pref-           baseline, we show that augmenting it with VLM-generated
+erence signal is effective for alignment even without any        High-Level Actions yields further improvements by provid-
+human data. However, this comes at the cost of a regression      ing a coarse semantic anchor on "WHAT" maneuver to
+in geometric accuracy (ADE). In contrast, we observe that        execute. However, our primary finding is that the greatest
+pure Imitation Learning yields higher RFS gains while            gains are unlocked by the fine-grained, comparative feedback
+improving ADE over VL-DPO. This is expected: a direct
+supervised signal on the top human preference trajectory
+of VL-DPO, which addresses the critical question of "HOW"                     [15] H. Cui, V. Radosavljevic, F.-C. Chou, T.-H. Lin, T. Nguyen, T.-K.
+a maneuver should be performed safely and comfortably.                              Huang, J. Schneider, and N. Djuric, "Multimodal trajectory predictions
+                                                                                    for autonomous driving using deep convolutional networks," in IEEE
+   These findings lead to two powerful conclusions. Method-                         International Conference on Robotics and Automation (ICRA), 2019.
+ologically, the most effective approach is a combination
+of imitation learning on high-quality positive examples and                   [16] J. Hong, B. Sapp, and J. Philbin, "Rules of the road: Predicting driving
+DPO on a rich set of comparative examples. This dual signal                         behavior with a convolutional model of semantic interactions," in
+teaches the model both what to do and, critically, the nuanced                      CVPR, 2019.
+details of what to avoid. Architecturally, our results validate
+a modular paradigm where a frozen zero-shot VLM provides                      [17] Y. Chai, B. Sapp, M. Bansal, and D. Anguelov, "Multipath: Multiple
+state-of-the-art alignment for a specialized motion model.                          probabilistic anchor trajectory hypotheses for behavior prediction," in
+                                                                                    Conference on Robot Learning, 2020, pp. 86≠99.
+                     ACKNOWLEDGMENT
+                                                                              [18] S. Casas, C. Gulino, R. Liao, and R. Urtasun, "Spagnn: Spatially-
+   We thank Kate Tolstaya, Kratarth Goel, and Neerja                                aware graph neural networks for relational behavior forecasting from
+Thakkar for their valuable contributions to this work.                              sensor data," in ICRA, 2020.
+
+                            REFERENCES                                        [19] M. Liang, B. Yang, R. Hu, Y. Chen, R. Liao, S. Feng, and R. Urta-
+                                                                                    sun, "Learning lane graph representations for motion forecasting," in
+ [1] X. Huang, E. M. Wolff, P. Vernaza, T. Phan-Minh, H. Chen, D. S. Hay-           European Conference on Computer Vision, 2020.
+      den, M. Edmonds, B. Pierce, X. Chen, P. E. Jacob, X. Chen, C. Tair-
+      bekov, P. Agarwal, T. Gao, Y. Chai, and S. Srinivasa, "DriveGPT:        [20] S. Shi, L. Jiang, D. Dai, and B. Schiele, "Motion transformer with
+      Scaling autoregressive behavior models for driving," in Forty-second          global intention localization and local movement refinement," Ad-
+      International Conference on Machine Learning, 2025.                           vances in Neural Information Processing Systems, 2022.
+
+ [2] A. Seff, B. Cera, D. Chen, M. Ng, A. Zhou, N. Nayakanti, K. S. Refaat,   [21] X. Jia, P. Wu, L. Chen, H. Li, Y. Liu, and J. Yan, "Hdgt: Heterogeneous
+      R. Al-Rfou, and B. Sapp, "Motionlm: Multi-agent motion forecasting            driving graph transformer for multi-agent trajectory prediction via
+      as language modeling," in Proceedings of the IEEE/CVF International           scene encoding," CoRL, 2022.
+      Conference on Computer Vision, 2023, pp. 8579≠8590.
+                                                                              [22] A. Prakash, K. Chitta, and A. Geiger, "Multi-modal fusion transformer
+ [3] N. Nayakanti, R. Al-Rfou, A. Zhou, K. Goel, K. S. Refaat, and                  for end-to-end autonomous driving," in 2021 IEEE/CVF Conference
+      B. Sapp, "Wayformer: Motion forecasting via simple & efficient                on Computer Vision and Pattern Recognition (CVPR), 2021.
+      attention networks," in ICRA, 2023.
+                                                                              [23] B. Jiang, S. Chen, Q. Xu, B. Liao, J. Chen, H. Zhou, Q. Zhang, W. Liu,
+ [4] B. Varadarajan, A. Hefny, A. Srivastava, K. S. Refaat, N. Nayakanti,           C. Huang, and X. Wang, "Vad: Vectorized scene representation for
+      A. Cornman, K. Chen, B. Douillard, C. Lam, D. Anguelov, and                   efficient autonomous driving," in ICCV, 2023, pp. 8306≠8316.
+      B. Sapp, "Multipath++: Efficient information fusion and trajectory
+      aggregation for behavior prediction," in ICRA, 2022.                    [24] Y. Hu, J. Yang, L. Chen, K. Li, C. Sima, X. Zhu, S. Chai, S. Du,
+                                                                                    T. Lin, W. Wang et al., "Planning-oriented autonomous driving," in
+ [5] M. Baniodeh, K. Goel, S. Ettinger, C. Fuertes, A. Seff, T. Shen,               CVPR, 2023.
+      C. Gulino, C. Yang, G. Jerfel, D. Choe et al., "Scaling laws of
+      motion forecasting and planning≠a technical report," arXiv preprint     [25] Z. Guo, K. Gubernatorov, S. Asfaw, Z. Yagudin, and D. Tsetserukou,
+      arXiv:2506.08228, 2025.                                                       "Vdt-auto: End-to-end autonomous driving with vlm-guided diffusion
+                                                                                    transformers," arXiv preprint arXiv:2502.20108, 2025.
+ [6] C. Sima, K. Renz, K. Chitta, L. Chen, H. Zhang, C. Xie,
+      J. Beiﬂwenger, P. Luo, A. Geiger, and H. Li, "Drivelm: Driving          [26] D. Hegde, R. Yasarla, H. Cai, S. Han, A. Bhattacharyya, S. Mahajan,
+      with graph visual question answering," in European conference on              L. Liu, R. Garrepalli, V. M. Patel, and F. Porikli, "Distilling multi-
+      computer vision. Springer, 2024.                                              modal large language models for autonomous driving," in Proceedings
+                                                                                    of the Computer Vision and Pattern Recognition Conference, 2025.
+ [7] X. Tian, J. Gu, B. Li, Y. Liu, Y. Wang, Z. Zhao, K. Zhan, P. Jia,
+      X. Lang, and H. Zhao, "DriveVLM: The convergence of autonomous          [27] Y. Wang, R. Jiao, S. S. Zhan, C. Lang, C. Huang, Z. Wang, Z. Yang,
+      driving and large vision-language models," in 8th Annual Conference           and Q. Zhu, "Empowering autonomous driving with large language
+      on Robot Learning, 2024.                                                      models: A safety perspective," in ICLR 2024 Workshop on Large
+                                                                                    Language Model (LLM) Agents, 2024.
+ [8] S. Zhang, W. Huang, Z. Gao, H. Chen, and C. Lv, "Wisead: Knowl-
+      edge augmented end-to-end autonomous driving with vision-language       [28] Y. Yang, Q. Zhang, K. Ikemura, N. Batool, and J. Folkesson, "Hard
+      model," arXiv preprint arXiv:2412.09951, 2024.                                cases detection in motion prediction by vision-language foundation
+                                                                                    models," in 2024 IEEE Intelligent Vehicles Symposium (IV), 2024.
+ [9] J.-J. Hwang, R. Xu, H. Lin, W.-C. Hung, J. Ji, K. Choi, D. Huang,
+      T. He, P. Covington, B. Sapp, Y. Zhou, J. Guo, D. Anguelov, and         [29] Y. Xu, Y. Hu, Z. Zhang, G. P. Meyer, S. K. Mustikovela, S. Srini-
+      M. Tan, "EMMA: End-to-end multimodal model for autonomous                     vasa, E. M. Wolff, and X. Huang, "Vlm-ad: End-to-end autonomous
+      driving," Transactions on Machine Learning Research, 2025.                    driving through vision-language model supervision," arXiv preprint
+                                                                                    arXiv:2412.14446, 2024.
+[10] X. Zhou, X. Han, F. Yang, Y. Ma, and A. C. Knoll, "Opendrivevla:
+      Towards end-to-end autonomous driving with large vision language        [30] C. Pan, B. Yaman, T. Nesti, A. Mallik, A. G. Allievi, S. Velipasalar,
+      action model," arXiv preprint arXiv:2503.23463, 2025.                         and L. Ren, "Vlp: Vision language planning for autonomous driving,"
+                                                                                    in CVPR, 2024.
+[11] B. Zitkovich, T. Yu, S. Xu, P. Xu, T. Xiao, F. Xia, J. Wu, P. Wohlhart,
+      S. Welker, A. Wahid et al., "Rt-2: Vision-language-action models        [31] S. Wang, Z. Yu, X. Jiang, S. Lan, M. Shi, N. Chang, J. Kautz, Y. Li,
+      transfer web knowledge to robotic control," in Conference on Robot            and J. M. Alvarez, "Omnidrive: A holistic vision-language dataset for
+      Learning, 2023.                                                               autonomous driving with counterfactual reasoning," in Proceedings of
+                                                                                    the Computer Vision and Pattern Recognition Conference, 2025.
+[12] S. Yang, H. Li, Y. Chen, B. Wang, Y. Tian, T. Wang, H. Wang,
+      F. Zhao, Y. Liao, and J. Pang, "Instructvla: Vision-language-action     [32] L. Ouyang, J. Wu, X. Jiang, D. Almeida, C. Wainwright, P. Mishkin,
+      instruction tuning from understanding to manipulation," arXiv preprint        C. Zhang, S. Agarwal, K. Slama, A. Ray et al., "Training language
+      arXiv:2507.17520, 2025.                                                       models to follow instructions with human feedback," Advances in
+                                                                                    neural information processing systems, vol. 35, 2022.
+[13] Z. Zhou, Y. Zhu, M. Zhu, J. Wen, N. Liu, Z. Xu, W. Meng, R. Cheng,
+      Y. Peng, C. Shen et al., "Chatvla: Unified multimodal understanding     [33] P. F. Christiano, J. Leike, T. Brown, M. Martic, S. Legg, and
+      and robot control with vision-language-action model," arXiv preprint          D. Amodei, "Deep reinforcement learning from human preferences,"
+      arXiv:2502.14420, 2025.                                                       Advances in neural information processing systems, vol. 30, 2017.
+
+[14] R. Rafailov, A. Sharma, E. Mitchell, C. D. Manning, S. Ermon, and        [34] T. Tian and K. Goel, "Direct post-training preference alignment for
+      C. Finn, "Direct preference optimization: Your language model is              multi-agent motion generation model using implicit feedback from
+      secretly a reward model," in Thirty-seventh Conference on Neural              pre-training demonstrations," in The Thirteenth International Confer-
+      Information Processing Systems, 2023.                                         ence on Learning Representations, 2025.
+
+                                                                              [35] C. Zhang, P. Hao, X. Cao, X. Hao, S. Cui, and S. Wang, "Vtla: Vision-
+                                                                                    tactile-language-action model with preference learning for insertion
+                                                                                    manipulation," arXiv preprint arXiv:2505.09577, 2025.
+
+                                                                              [36] G. Comanici, E. Bieber, M. Schaekermann, I. Pasupat, N. Sachdeva,
+                                                                                    I. Dhillon, M. Blistein, O. Ram, D. Zhang, E. Rosen et al., "Gemini
+                                                                                    2.5: Pushing the frontier with advanced reasoning, multimodality,
+                                                                                    long context, and next generation agentic capabilities," arXiv preprint
+                                                                                    arXiv:2507.06261, 2025.
+

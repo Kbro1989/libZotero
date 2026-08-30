@@ -1,0 +1,991 @@
+                                       IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026           1
+
+                                       From Mirage to Grounding: Towards Reliable
+                                       Multimodal Circuit-to-Verilog Code Generation
+
+                                                                       Guang Yang, Xing Hu, Xiang Chen, and Xin Xia
+
+arXiv:2604.27969v2 [cs.SE] 5 May 2026     Abstract--Multimodal large language models (MLLMs) are                     Fig. 1. Motivating example 1 of the Mirage phenomenon. The model
+                                       increasingly used to translate visual artifacts into code, from               generates correct code regardless of whether the input contains the real circuit
+                                       UI mockups into HTML to scientific plots into Python scripts.                 diagram or a blank image.
+                                       A circuit diagram can be viewed as a visual domain-specific
+                                       language for hardware: it encodes timing, topology, and bit-                  purely textual specifications toward richer visual artifacts. In
+                                       level semantics that are invisible to casual inspection yet safety-           each of these tasks, the visual input can be viewed as a visual
+                                       critical once fabricated in silicon. Translating such diagrams                domain-specific language (visual DSL): a UI mockup specifies
+                                       into register-transfer-level (RTL) code therefore represents an               layout and interaction semantics, a chart encodes data and
+                                       extreme reliability test for vision-to-code generation. We reveal             rendering logic, and each must be faithfully translated into
+                                       a phenomenon we call Mirage: replacing a circuit diagram with                 executable code. Recently, this paradigm has been extended to
+                                       a blank image leaves Pass@k unchanged or even higher, because                 hardware: MLLMs are used to translate circuit diagrams into
+                                       models bypass the visual input and instead exploit identifier                 synthesizable register-transfer-level (RTL) code, a task we call
+                                       semantics in the module_header to retrieve canonical RTL                      circuit-to-Verilog code generation [10], [11]. A circuit diagram
+                                       templates. This constitutes a new, highly covert class of defect in           is arguably the demanding visual DSL, because it encodes
+                                       AI-assisted code generation that directly undermines MLLMs'                   timing, topology, and bit-level semantics that are invisible to
+                                       trustworthiness. To quantify the effect, we construct C2VEVAL                 casual inspection yet safety-critical once fabricated in silicon.
+                                       and evaluate eight MLLMs under a paired Normal/Anony pro-
+                                       tocol in which Anony mode anonymizes all identifiers in both                     While unreliable vision-to-code translation is a general con-
+                                       the diagram and the module header; Anony-mode scores drop                     cern across all visual DSLs, the consequences in the hardware
+                                       sharply across all models, confirming that high Normal-mode                   domain are uniquely severe [12], [13]. RTL sits at the very
+                                       accuracy is largely a Mirage. We then propose VeriGround (4B),                beginning of the silicon design flow and feeds downstream into
+                                       trained with identifier anonymization, refusal augmentation,                  synthesis, place-and-route, and fabrication; a single misread
+                                       and D-ORPO (Decision-Focused ORPO) preference alignment                       schematic can propagate silently through the entire toolchain
+                                       that up-weights pivotal generate-or-refuse tokens. VeriGround                 and materialize as a silicon-level defect whose cost is orders
+                                       achieves Functional Pass@1 of 46.11%/42.51% (Normal/Anony)                    of magnitude higher than a rendering or plotting error. More
+                                       with a False Refusal Rate of only 1.20%/0.00%, while main-                    broadly, if an AI code generator appears to "understand" a
+                                       taining 92% Refusal Rate on blank images. With only 4B                        visual specification while actually bypassing it, the resulting
+                                       parameters, VeriGround performs on par with GPT-5.4 under                     code carries a covert correctness risk that conventional testing
+                                       Normal and significantly outperforms all baselines under Anony,               may not catch. This directly threatens MLLMs' trustworthi-
+                                       confirming genuine visual grounding. The evaluation methodol-                 ness, a core concern of the software engineering community.
+                                       ogy and training recipe generalize beyond hardware: C2VEVAL's                 Circuit-to-Verilog generation therefore serves as a rigorous
+                                       paired protocol can benchmark any vision-to-code pipeline, and                proving ground: any reliability flaw exposed here is likely
+                                       VeriGround's anonymization-refusal-alignment triad offers a
+                                       transferable solution for balancing hallucination and over-refusal
+                                       in AI code generation.
+
+                                          Index Terms--multimodal large language models, vision-to-
+                                       code generation, visual grounding, software trustworthiness,
+                                       Verilog
+
+                                                                 I. INTRODUCTION
+
+                                          Image-to-code generation has become a central paradigm in
+                                       AI-assisted coding. From UI mockups rewritten as HTML [1]­
+                                       [6], to scientific plots reverse-engineered into reproducible
+                                       Python scripts [7]­[9], multimodal large language models
+                                       (MLLMs) are shifting the front-end of software creation from
+
+                                          Corresponding author: Xing Hu.
+                                          Guang Yang is with the State Key Laboratory of Blockchain and Data Secu-
+                                       rity, Zhejiang University, Hangzhou, China, and also with the Hangzhou High-
+                                       Tech Zone (Binjiang) Institute of Blockchain and Data Security, Hangzhou,
+                                       China. Xing Hu and Xin Xia are with the State Key Laboratory of Blockchain
+                                       and Data Security, Zhejiang University, Hangzhou, China. Xiang Chen is with
+                                       the School of Artificial Intelligence and Computer Science, Nantong Uni-
+                                       versity, Nantong, China. E-mail: novelyg@outlook.com, xinghu@zju.edu.cn,
+                                       xin.xia@acm.org, xchencs@ntu.edu.cn.
+                                          Manuscript received April 19, 2020; revised August xx, xxxx.
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026  2
+
+Fig. 2. Motivating example 2 of the Mirage phenomenon. When the real circuit diagram is provided, the model generates incorrect Verilog that fails the
+testbench. When the diagram is replaced by a blank image while the module_header is retained, the model instead produces correct code.
+
+to manifest, in milder but equally insidious forms, in other       yet it was never derived from the visual specification, leaving
+vision-to-code pipelines.                                          latent errors that surface only in untested scenarios. A natural
+                                                                   way to test this hypothesis is to anonymize the identifiers in
+   Although recent studies have demonstrated the feasibility of    both the module_header and the circuit diagram, thereby
+using MLLMs to read circuit diagrams and generate Verilog          stripping the semantic cues that enable such shortcuts.
+code, a fundamental question remains largely unexplored: do
+existing MLLMs truly read circuit diagrams, or merely exploit         Following this idea, we construct C2VEVAL (Circuit-to-
+textual shortcuts?                                                 Verilog Evaluation), a benchmark that samples problems
+                                                                   from established Verilog code-generation benchmarks and
+   Our motivating examples provide concrete evidence for this      renders each reference solution into a circuit diagram via
+concern. In both Fig. 1 and Fig. 2 the model under test is         NETLISTSVG1, ensuring exact image-code correspondence.
+Opus 4.6, one of the current frontier code-generation models.      C2VEVAL has two variants: Normal, which retains the origi-
+Following standard practice, the module_header (module             nal identifiers in both the diagram and the module header, and
+name, ports, and parameters) is provided as part of the prompt     Anony (anonymized), which replaces all semantically loaded
+so that the generated interface matches the testbench and          identifiers with positional placeholders and re-renders the dia-
+Pass@k can be computed without name-mismatch failures.             gram accordingly, preserving circuit topology while removing
+Yet this seemingly innocuous input turns out to be a powerful      semantic cues. We evaluate eight MLLMs, from 4B open-
+textual shortcut. In Fig. 1, the model produces identical correct  source models to frontier systems, under each variant in two
+code for a half-adder whether the input contains the real          modes: Original (real diagram provided) and Mirage (diagram
+circuit or a blank image: the module name TopModule is             replaced by a blank image, header retained). The experimental
+semantically vacuous, but the output ports sum and cout            results achieve the following three findings. (i) under Normal,
+already reveal the target function, making the diagram re-         Mirage mode matches or exceeds Original on every model,
+dundant. Fig. 2 is even more striking: for fsm_3state,             suggesting that models largely bypass the circuit diagram and
+the model fails with the real diagram yet succeeds with a          sometimes perform worse when it is present; (ii) under Anony,
+blank image, suggesting that the visual input can actively in-     the Mirage advantage reverses for seven of eight models,
+terfere with generation. We term this failure mode the Mirage      isolating identifier semantics in the header as the primary
+phenomenon [14]: high benchmark scores mask the fact that          driver of Normal-mode performance; and (iii) genuine visual
+models rely on textual priors in the module_header rather          grounding accounts for only 8­9% of samples, with the vast
+than genuinely grounding in the visual circuit topology. Mirage
+constitutes a new, highly covert class of AI code-generation          1https://github.com/nturley/netlistsvg
+defect: the output may compile and even pass certain tests,
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026                                             3
+
+majority of tasks remaining unsolved once identifier shortcuts         To facilitate the replication of VeriGround, we make our
+are removed.                                                        source code, trained models, and benchmark publicly available
+                                                                    on GitHub.2
+   Based on these findings, we first curate a large-scale circuit-
+diagram-to-Verilog dataset by mining high-quality Verilog              The remainder of this paper is organized as follows. Sec-
+projects from GitHub and converting each design into a circuit      tion II introduces the background and problem definition.
+diagram. We then introduce VeriGround (4B), a lightweight           Section III presents the empirical study that motivates the
+MLLM trained with three targeted interventions that together        approach. Section IV details the proposed method. Section V
+address the hallucination-vs-refusal trade-off common to all        reports the experimental results. Section VI discusses hyper-
+vision-to-code generators: (i) mixed supervised fine-tuning         parameter sensitivity, mismatch refusal, and threats to validity.
+on Original and Anony data to reduce reliance on semanti-           Section VII reviews related work. Section VIII concludes the
+cally loaded identifiers; (ii) refusal augmentation with blank-     paper.
+diagram and image-header-mismatch negatives, teaching the
+model to abstain when visual evidence is absent or incon-            II. BACKGROUND AND PRELIMINARIES
+sistent; (iii) D-ORPO (Decision-Focused ORPO) alignment,
+which up-weights the first K response tokens with a decision        A. Multimodal Large Language Models
+weight , concentrating the preference signal on the generate-
+or-refuse boundary and mitigating the over-refusal problem of          A multimodal large language model (MLLM) [16], [17]
+standard ORPO [15].
+                                                                    extends a text-only LLM to process both visual and textual
+   Extensive experiments demonstrate that VeriGround effec-         inputs. Given a visual input I and a textual prompt T , an
+tively alleviates the Mirage phenomenon. With only 4B pa-           MLLM M auto-regressively generates an output sequence
+rameters, VeriGround achieves Functional Pass@1 of 46.11%           Y^ = (y1, . . . , yL):
+under Normal, approaching GPT-5.4 (45.51%) and surpassing
+GPT-4o (33.52%) and MiMo-v2-omni (37.72%); under Anony,              L
+VeriGround reaches 42.51%, significantly outperforming all
+baselines (p < 0.001, McNemar's test). Meanwhile, the False          P (Y^ | I, T ; ) = P (yt | y<t, I, T ; ),  (1)
+Refusal Rate on valid inputs is reduced to 1.20%/0.00% (Nor-
+mal/Anony) while the Refusal Rate on blank inputs remains            t=1
+above 92%.
+                                                                    where  denotes the model parameters. Existing MLLMs
+   Beyond the hardware domain, the evaluation methodology           broadly fall into two architectural paradigms.
+and training recipe of VeriGround carry broader implications
+for vision-to-code generation as a whole. The paired Nor-              Connector-based MLLMs adopt a three-component ar-
+mal/Anony protocol of C2VEVAL can serve as a general diag-          chitecture. A visual encoder (e.g., ViT [18]­[20]) extracts a
+nostic for any image-to-code pipeline where textual prompts         feature sequence zv = Enc(I); a connector (typically an MLP)
+risk leaking semantic shortcuts, such as CSS class names in         projects it into the LLM embedding space, yielding visual
+UI-to-HTML or axis labels in chart-to-Python tasks. Like-           tokens hv = Proj(zv); an LLM backbone then generates
+wise, the anonymization, refusal augmentation, and D-ORPO           conditioned on [hv; ht], where ht = Embed(T ) is the text
+alignment triad provides a transferable recipe for calibrat-        token embedding sequence. Representative models include
+ing the hallucination and over-refusal trade-off across visual      LLaVA [21]­[23] and InternVL [24], [25].
+DSLs, requiring only domain-appropriate identifier masking
+and negative-pair construction.                                        Native multimodal MLLMs forgo the connector and
+                                                                    jointly train vision and language components within a unified
+   In summary, this paper makes four contributions:                 transformer. A visual encoder produces hv = Enc(I) and
+                                                                    a token embedding layer produces ht = Embed(T ); both
+   1) Phenomenon. We identify and document the Mirage               sequences are fed directly into a shared backbone without an
+       phenomenon: all eight evaluated MLLMs produce equal          intermediate projection, with decoupled parallel strategies for
+       or higher scores when the circuit diagram is removed,        the heterogeneous modalities to maintain training efficiency.
+       and genuine visual grounding accounts for only 8­9%          Representative models include Gemini [26], [27] and GPT-
+       of samples.                                                  4o [28].
+
+   2) Benchmark & Evaluation. We construct C2VEVAL                  B. Circuit-to-Verilog Code Generation
+       with exact image-code correspondence and a paired
+       Normal/Anony×Original/Mirage protocol that isolates             We first present the MLLM-based formulation of Circuit-
+       identifier semantics as the single variable.                 to-Verilog Code Generation.
+
+   3) Method. We propose VeriGround (4B), trained with              Definition 1 (Circuit-to-Verilog Code Generation). Given a
+       identifier anonymization, refusal augmentation, and D-       circuit diagram image I and a module header H, the task is to
+       ORPO (Decision-Focused ORPO) alignment.                      generate a Verilog module body V^ such that the complete mod-
+                                                                    ule H  V^ is both syntactically valid and functionally equiva-
+   4) Evaluation. VeriGround achieves Functional Pass@1             lent to the reference implementation H V , where  denotes
+       of 46.11%/42.51% (Normal/Anony) with False Refusal           concatenation and V  is the ground-truth module body. The
+       Rates of only 1.20%/0.00%, while maintaining 92%             textual prompt takes the form T = (instruction, H), where
+       Refusal Rate on blank inputs.                                the instruction is a fixed task description. Since the instruction
+
+                                                                       2https://github.com/NTDXYG/VeriGround
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026                                                   4
+
+is constant across all samples, we abbreviate the generation                             TABLE I
+                                                                     CATEGORY DISTRIBUTION OF C2VEVAL.
+as:
+
+     V^ = M(I, H).                            (2)                    Category                         Count    Ratio
+
+We next detail the two variable inputs to M.                         Basic Combinational Logic             81  48.5%
+                                                                     Sequential Building Blocks            43  25.7%
+Definition 2 (Module Header). A module header H specifies            Finite State Machines                 32  19.2%
+the external interface of a Verilog module [29]:                     Mathematical Operations & Algo.       11   6.6%
+
+     H = module name [#(params)] (ports); (3)                        Total                               169   100%
+
+where name is the module identifier, params is an optional
+parameter list, and ports specifies input/output ports with their
+directions and bit-widths. In standard practice, H is always
+provided so that the generated interface matches the testbench
+and evaluation can proceed without name-mismatch failures.
+
+Definition 3 (Circuit Diagram). A circuit diagram I is a visual
+
+representation of the target circuit's topology, depicting gates,
+
+flip-flops, multiplexers, and their interconnections [30]. In our
+setting, each diagram is rendered from V  via NETLISTSVG,
+so the labels in I correspond exactly to the identifiers in V .
+
+                       III. EMPIRICAL STUDY                        Fig. 3. Token-count distributions (left: density histograms; right: CDFs) for
+                                                                   circuit-diagram images (top, blue) and module headers (bottom, orange) in
+A. Benchmark Construction                                          C2VEVAL.
+
+   To investigate the Mirage phenomenon, we construct              module sync_fifo #(DEPTH=32, WIDTH=8)
+C2VEVAL, a circuit-to-Verilog benchmark with exact image-                 (clk, rst_n, wr_en, rd_en);
+code correspondence. The construction follows a three-stage
+pipeline.                                                          is anonymized to:
+
+   Stage 1: Seed dataset collection. We source prob-               module module_name #(val_0=32, val_1=8)
+lems from four established Verilog code-generation bench-                 (val_2, val_3, val_4, val_5);
+marks: VerilogEval-v2 [31], [32], RTLLM-v2 [33], [34], Res-
+Bench [35], and ArchXBench [36], which collectively span           The corresponding circuit diagram is re-rendered with the
+diverse circuit categories, each accompanied by a complete         same positional placeholders, ensuring that the only way to
+testbench.                                                         produce correct code is to read the visual topology.
+
+   Stage 2: Reference code curation. For each seed problem,           2) Benchmark statistics: The resulting C2VEVAL com-
+we generate candidate Verilog solutions with two frontier          prises 169 samples. Each sample is a tuple (I, H, V , T , D)
+MLLMs (GPT-5.4 and Opus-4.6) and simulate each candidate           together with its anonymized counterpart (Ianon, Hanon), where
+against the corresponding testbench; only solutions passing all    I is the circuit diagram, H is the module header (Definition 2),
+assertions are retained as verified reference implementations      V  is the reference module body, T is the testbench, and D
+V .                                                                is the natural-language functional description.
+
+   Stage 3: Diagram rendering and filtering. Each V  is ren-          Table I reports the category distribution: Basic Combina-
+dered into a circuit diagram via NETLISTSVG and rasterized to      tional Logic constitutes the largest share (48.5%), followed by
+JPEG at 96 DPI, producing image I whose labels correspond          Sequential Building Blocks (25.7%) and Finite State Machines
+exactly to the identifiers in V  (Definition 3). Samples that      (19.2%), with Mathematical Operations & Algorithms as the
+fail to render or whose I exceeds 2,048 visual tokens under        smallest category (6.6%). This distribution reflects the natural
+the Qwen-3.5 tokenizer are discarded.                              composition of introductory-to-intermediate RTL design tasks
+                                                                   in the seed benchmarks.
+   1) Normal and Anony variants: The above pipeline yields
+the Normal variant of C2VEVAL. To test whether high                   Fig. 3 visualizes the token-count distributions of the two
+Normal-mode accuracy is a Mirage driven by identifier se-          inputs. Circuit-diagram images exhibit a heavy right-skewed
+mantics rather than genuine visual understanding, we further       distribution (µ = 340.6, median = 133.0): approximately half
+construct an Anony (anonymized) variant: for each sample, the      of the diagrams encode within 133 tokens, yet a few complex
+module name is replaced with a generic module_name, and
+all port and parameter identifiers are replaced with positional
+placeholders val_0, val_1, . . . ; the anonymized code is
+then re-rendered through the same Stage 3 pipeline to produce
+a new diagram Ianon paired with an anonymized header Hanon.
+The circuit topology is preserved; only the semantic cues are
+removed. For example, the following Normal-mode header:
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026                                                       5
+
+                                                                                       TABLE II
+PASS@k (%) ON C2VEVAL UNDER THE NORMAL AND ANONY BENCHMARK VARIANTS. MIRAGE MODE REPLACES THE CIRCUIT DIAGRAM WITH A
+BLANK IMAGE WHILE THE MODULE HEADER IS RETAINED. BOLD DENOTES THE HIGHER SCORE BETWEEN ORIGINAL AND MIRAGE IN EACH PAIR.
+
+Model         Mode                  Normal                                                     Anony
+
+GPT-5.4       Original  Syn. @1  Syn. @5 Func.@1                     Func.@5  Syn. @1  Syn. @5 Func.@1          Func.@5
+GPT-4o        Mirage
+MiMo-v2-omni  Original    97.60  ­      45.51                            ­      93.41   ­           24.55           ­
+Opus-4.6      Mirage     100.00                                          ­     100.00                               ­
+              Original    92.22  ­      47.90                            ­      79.64   ­             6.59          ­
+EGM 4B        Mirage      94.61                                          ­      94.01                               ­
+EGM 8B        Original    85.03  ­      39.52                            ­      79.64   ­           16.17           ­
+Qwen3.5 4B    Mirage      86.23                                          ­      82.63                               ­
+Qwen3.5 9B                98.20  ­      39.52                            ­      88.62   ­             8.38          ­
+              Original   100.00                                          ­      99.40                               ­
+              Mirage             ­      37.72                                           ­           19.16
+              Original    79.04                                        29.94    50.90                             10.78
+              Mirage      83.83  ­      41.32                          31.14    33.53   ­             5.99        7.78
+              Original    37.72                                        23.35    22.16                             8.38
+              Mirage      83.83  ­      52.69                          36.53    23.95   ­           11.38         5.99
+              Original    38.32                                        19.16    35.33                             12.57
+              Mirage      56.89  ­      63.47                          25.75    61.68   ­           14.97         5.39
+                          70.66                                        32.34    62.28                             14.97
+                          76.05  98.20  18.56                          38.92    79.04   93.41         4.19        7.78
+                                 99.40  20.36
+                                 64.67  10.18                                           86.83         0.60
+                                 95.81  22.75
+                                 76.50  7.78                                            71.26         0.60
+                                 94.10  10.78
+                                 97.60  14.97                                           73.65         0.60
+                                 99.40  19.76
+                                                                                        78.44         5.99
+
+                                                                                        98.80         2.40
+
+                                                                                        92.22         8.38
+
+                                                                                        100.00        3.59
+
+designs exceed 1,500 tokens. Module headers, by contrast,                                                    TABLE III
+are remarkably compact (µ = 33.5, median = 30.0), with                SAMPLE-LEVEL FUNCTIONAL PASS@1 BREAKDOWN (%) ON C2VEVAL
+over 90% falling below 60 tokens. This order-of-magnitude            (167 SAMPLES). EACH SAMPLE IS CATEGORIZED BY WHETHER ORIGINAL
+asymmetry is noteworthy: the header occupies less than one-
+tenth of the visual token budget, yet it encodes the module                           AND MIRAGE EACH PRODUCE CORRECT CODE.
+name, port names, and parameter values, which collectively
+carry rich semantic information.                                     Model       Both   Original      Mirage    Neither
+
+B. Empirical Setup                                                   Normal      35.3        10.2         12.6      41.9
+                                                                                 30.5          9.0         9.0      51.5
+   1) Evaluated Models: We evaluate eight MLLMs span-                GPT-5.4     26.3                               47.3
+ning 4B to frontier-scale parameters. The proprietary group          GPT-4o      43.1        11.4         15.0      26.9
+includes GPT-4o [37], GPT-5.4 [38], Opus-4.6 [39], and               MiMo-v2                   9.6        20.4
+MiMo-v2-omni [40]. The open-source group includes EGM-               Opus-4.6    10.2                               71.3
+4B, EGM-8B [41], Qwen3.5-4B, and Qwen3.5-9B [42]. Each                             7.8         8.4        10.2      74.9
+model is evaluated under both the Normal and Anony variants          EGM 4B        2.4         2.4        15.0      83.8
+of C2VEVAL.                                                          EGM 8B        5.4         5.4         8.4      70.7
+                                                                     Qwen3.5 4B                9.6        14.4
+   2) Evaluation Metrics: We adopt two Pass@k metrics                Qwen3.5 9B  20.1                               58.5
+computed with the unbiased estimator [43], [44]. Syntax                                        8.2        13.1
+Pass@k measures the probability that at least one of k               Avg.          6.0                              74.9
+sampled completions yields a syntactically compilable Verilog                      4.2       18.6          0.6      79.6
+module. Functional Pass@k measures the probability that at           Anony         2.4       12.0          4.2      77.2
+least one of k completions passes all testbench assertions under                   4.8       16.8          3.6      78.4
+simulation. Functional correctness implies syntactic validity,       GPT-5.4                              10.2
+so Functional Pass@k  Syntax Pass@k.                                 GPT-4o        0.0         6.6                  95.2
+                                                                     MiMo-v2       0.0                     0.6      98.8
+   3) Implementation Details: Due to API cost constraints,           Opus-4.6      0.6         4.2         0.6      92.2
+proprietary models are reported as Pass@1 only. Open-source                        1.8         0.6         1.8      89.8
+models are served locally; we sample n = 5 completions per           EGM 4B                    5.4         1.8
+problem at temperature = 0.7 and report both Pass@1 and              EGM 8B        2.5         6.6                  85.8
+Pass@5. All compilation and simulation are performed with            Qwen3.5 4B                            2.9
+Icarus Verilog.                                                      Qwen3.5 9B                8.8
+
+C. Empirical Findings                                                Avg.
+
+  Finding 1: The Mirage phenomenon is universal: re-                 Under the Normal benchmark, Mirage mode matches or
+  moving the circuit diagram does not degrade, and often          exceeds Original mode on every model across all metrics
+  improves, code generation.                                      (Table II). The most extreme case is EGM 8B, whose Syntax
+                                                                  Pass@1 jumps by 46 points upon removing the circuit dia-
+                                                                  gram, while Opus-4.6 sees a Functional gain of over 10 points.
+                                                                  The same trend holds at Pass@5: all four open-source models
+                                                                  see Mirage surpass Original on every metric, ruling out single-
+                                                                  sample variance. A sample-level decomposition (Table III)
+                                                                  corroborates this pattern: on average, 13.1% of samples are
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026  6
+
+Fig. 4. Training pipeline of VeriGround. Stage 1 collects and anonymizes circuit-diagram/Verilog pairs to form a mixed Normal + Anony corpus. Stage 2
+performs supervised fine-tuning on this corpus, forcing the model to ground in visual topology rather than identifier semantics. Stage 3 constructs preference
+pairs with refusal augmentation and applies D-ORPO alignment to balance generation quality against hallucination and over-refusal.
+
+solved by Mirage only versus 8.2% by Original only, meaning                                     IV. METHOD
+the diagram actively impairs generation on 60% more samples
+than it aids.                                                         Figure 4 illustrates the overall training pipeline of Veri-
+                                                                   Ground, which consists of three stages: (i) training data
+  Finding 2: Identifier semantics in the module header,            collection and anonymisation, (ii) supervised fine-tuning (SFT)
+  not visual understanding, are the primary driver of              on the mixed Normal + Anony corpus, and (iii) preference
+  Normal-mode performance.                                         alignment with D-ORPO.
+
+   Anonymization strips semantic identifiers while preserving      A. Dataset Collection
+circuit topology. Under the Anony benchmark, the Mirage
+advantage vanishes: Original surpasses Mirage on Functional           We construct a large-scale circuit-diagram-to-Verilog train-
+Pass@1 for seven of eight models (Table II), and this reversal     ing corpus through a six-step pipeline. Steps 1­4 follow the
+extends to Pass@5 for all four open-source models. At the          data-curation workflow of CodeV-R1 [45]; Steps 5­6 extend
+sample level (Table III), the Both category, i.e., samples solved  it with diagram rendering and visual-token budgeting.
+by both modes, collapses from 20.1% to 2.5%, confirming that
+the vast majority of Normal-mode joint successes were driven          Step 1: Source collection. Approximately 150K synthe-
+by header-based shortcuts rather than diagram comprehension.       sisable Verilog snippets are harvested from public GitHub
+Correspondingly, aggregate Functional Pass@1 drops drasti-         repositories, spanning a broad spectrum of hardware designs.
+cally upon anonymization (e.g., GPT-5.4: 45.51  24.55;
+Opus-4.6: 52.69  11.38), further isolating identifier seman-          Step 2: Synthesisability verification. Each snippet is
+tics as the dominant factor.                                       compiled with YOSYS [46] and discarded if synthesis fails,
+                                                                   ensuring that every retained sample corresponds to a valid
+  Finding 3: Genuine visual grounding is extremely                 hardware design.
+  limited, accounting for only 8­9% of samples.
+                                                                      Step 3: Benchmark decontamination. To prevent data
+   The Original-only rate in Table III, which captures samples     leakage, we remove any sample whose Rouge-L [47] similarity
+where the diagram is necessary and sufficient for correct          with the test sets exceeds 0.5.
+generation, remains nearly identical across Normal (8.2%) and
+Anony (8.8%). This stability suggests that approximately 8­           Step 4: Difficulty filtering. Samples for which Qwen2.5-
+9% of samples contain visual cues that models can genuinely        Coder-7B/32B-Instruct can produce a functionally correct so-
+extract irrespective of whether identifiers carry semantic mean-   lution within five attempts (verified via formal equivalence
+ing. Beyond this small fraction, current MLLMs largely fail        checking [45]) are discarded, retaining approximately 87K
+to leverage circuit diagrams: under Anony, 85.8% of samples        non-trivial instances.
+are solved by neither mode, indicating that once identifier
+shortcuts are removed, the overwhelming majority of circuit-          Step 5: Circuit-diagram rendering. Each retained refer-
+to-code tasks remain out of reach.                                 ence implementation V  is synthesised into a gate-level netlist
+                                                                   and rendered as an SVG schematic via NETLISTSVG. Samples
+                                                                   that fail to render are excluded, leaving approximately 67K
+                                                                   Circuit­Verilog pairs.
+
+                                                                      Step 6: Visual-token budget filtering. The SVG schemat-
+                                                                   ics are rasterised to JPEG at 96 DPI. Samples whose image
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026  7
+
+                                 TABLE IV                           Prompt Template
+PREFERENCE-PAIR COMPOSITION FOR THE ALIGNMENT STAGE.
+                                                                    Please write a Verilog module based on the
+ Category  Image condition       Chosen   Rejected  Ratio           provided circuit diagram image. Return only
+                                                                    the Verilog code, without any explanation.
+  MATCH    Correct diagram       Verilog   Refusal   40%
+  BLANK    Blank image           Refusal   Verilog   30%            For example:
+MISMATCH   Unrelated diagram     Refusal   Verilog   30%            ```verilog
+                                                                    your Verilog code here
+exceeds 2,048 visual tokens under the Qwen-3.5 tokenizer are        ```
+discarded, yielding the Normal training set of 27,260 samples.
+                                                                    Module header (must not be changed):
+   Anonymised variant. Applying the same anonymisation              {module_header}
+procedure used for C2VEVAL (Section III-A), we replace all
+semantically loaded identifiers with positional placeholders        Refusal Response Template
+and re-render the corresponding circuit diagrams, producing
+the Anony training set of 26,756 samples. The Normal and            Based on the provided circuit diagram, I
+Anony sets are merged into a unified corpus Dall of 54,016          cannot accurately determine the Verilog
+samples.                                                            implementation.
+
+B. Mixed Supervised Fine-Tuning                                     The module header provided is:
+                                                                    {module_header}
+   We partition Dall into two disjoint subsets: a seed pool
+Dalign of 5,000 samples reserved for the subsequent alignment       However, the provided image does not match
+stage (Section IV-D), and Dsft = Dall\Dalign (49,016 samples)       the given module header, so I cannot
+used for supervised fine-tuning.                                    generate the correct Verilog code with
+                                                                    confidence.
+   Each SFT instance is a triple (I, H, V ), where I denotes
+the circuit diagram, H the module header, and V  the refer-       Fig. 5. Prompt and refusal templates used for preference-pair construction.
+                                                                  {module_header} is instantiated with the sample-specific header H.
+ence Verilog module body. The model M is optimised with
+the standard autoregressive objective:                                  b) Category BLANK (30%): The circuit diagram is
+                                                                  replaced with a blank white image I, while the module
+           |V |                                                   header H is retained. The chosen response follows the refusal
+                                                                  template; the rejected response is the header-matching code
+LSFT = - log p(vt | I, H, v< t),                           (4)    V . By explicitly penalising code generation in the absence of
+                                                                  visual input, this category directly targets the Mirage shortcut.
+           t=1
+                                                                        c) Category MISMATCH (30%): The circuit diagram I
+where vt denotes the t-th token of V .                            is sampled from a different instance in Dalign such that I
+   Because Dsft interleaves Normal and Anony samples in           depicts a circuit unrelated to H. Refusal is again chosen over
+                                                                  the header-matching code. This category trains the model to
+roughly equal proportion, the same module header H appears        detect semantic inconsistency between the visual and textual
+with both semantically loaded and anonymised identifiers          modalities, rather than defaulting to header-driven generation.
+across different instances. This compels the model to ground
+its predictions in the visual topology of I rather than memoris-     Ratio design. Each source sample in Dalign naturally yields
+ing identifier-to-template mappings, as a direct countermeasure   exactly one MATCH pair, one BLANK pair, and one MIS-
+to the Mirage phenomenon identified in Section III-C.             MATCH pair, giving a raw ratio of 1 : 1 : 1. We observe that
+                                                                  this equal split over-represents refusal-preferred pairs (two out
+C. Preference Pair Construction                                   of three categories choose refusal), biasing the model toward
+                                                                  over-refusal. To counterbalance, we up-sample MATCH to 40%
+   The alignment stage operates on preference pairs (yw, yl)      and assign 30% each to BLANK and MISMATCH, yielding a
+(chosen vs. rejected), each conditioned on an input (I, H).       4 : 3 : 3 split that keeps the three categories close in size while
+A well-calibrated circuit-to-Verilog model should produce         giving the generation-preferred category a slight majority.
+correct code when the diagram faithfully depicts the target
+circuit, and refuse to answer when the visual evidence is absent  D. Decision-Focused ORPO
+or inconsistent with the header. All three categories share
+the unified prompt and refusal templates shown in Figure 5.          1) ORPO Background: Preference alignment methods such
+We derive three complementary categories of preference pairs      as DPO [48] and GRPO [49] impose significant overhead on
+from Dalign, summarised in Table IV.                              multimodal models: DPO doubles memory by maintaining a
+                                                                  frozen reference model, while GRPO requires costly online
+      a) Category MATCH (40%): The input pairs a matching         rollouts with high-resolution image encoding. ORPO [15]
+circuit diagram I with its corresponding module header H.         avoids both costs by unifying supervised learning and pref-
+The chosen response yw is the reference module body V ; the       erence optimisation in a single, reference-free objective.
+rejected response yl follows the refusal template in Figure 5.
+This category reinforces the model's generation capability,
+ensuring that valid visual evidence is not spuriously refused.
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026                                                                8
+
+   Given a preference pair (yw, yl) conditioned on input x,           Algorithm 1: D-ORPO Training
+ORPO combines the negative log-likelihood (NLL) of the                 Input: SFT-initialised model M; preference dataset
+chosen response with an odds-ratio (OR) penalty:
+                                                                                Dpref ; decision window K; decision weight ;
+          1            log p(yw,t | x, yw,<t) +  · LOR, (5)                     OR coefficient 
+LORPO  =  -                                                            Output: Aligned model M
+            |yw |                                                    1 for each mini-batch {(xi, yw(i), yl(i))}Bi=1 from Dpref do
+                   t                                                 2 Forward pass: compute per-token log-probs
+                                                                             log p(yt | x, y<t) for both yw and yl;
+                             LNLL                                    3 Compute per-token weights wt via Eq. 8;
+                                                                     4 Compute ¯D(yw | x) and ¯D(yl | x) via Eq. 9;
+where  controls the preference strength and the OR term is           5 Compute LD-ORPO via Eq. 10;
+                                                                     6 Update  via back-propagation on LD-ORPO;
+          LOR = - log          log odds(yw | x)        ,       (6)
+                                    odds(yl | x)                       4) Theoretical Analysis:
+
+with odds(y | x)  p(y | x) / (1 - p(y | x)). In practice,
+the sequence-level log-probability is replaced by its token-level
+average:
+
+                          1  T                                       Definition 4 (Decision Gradient Fraction). For a response of
+                          T                                          length T with decision window K  T and weight   1, the
+          ¯ (y  |  x)  =          log p(yt | x, y<t),          (7)   decision gradient fraction
+
+                             t=1
+
+where T = |y|. Note that every token contributes equally to                                          K
+¯; we revisit this assumption below.                                                 (T, K, )  K + (T - K)          (11)
+
+   2) Motivation: In our generate-or-refuse setting, the binary      measures the fractional contribution of the K decision tokens
+decision is fully determined by the first few response tokens        to the gradient of ¯D (Eq. 9). When  = 1, this reduces to
+(cf. Figure 5): once the model emits ```verilog it is                K/T .
+committed to code generation, whereas a refusal opens with
+Based on the ..., I cannot ... . This creates a                      Proposition 1 (Gradient Rebalancing). Let Tc > Tr > K
+length asymmetry: code responses span hundreds of tokens             denote the lengths of a code response and a refusal response,
+while refusals contain only tens, so the uniform weighting of        respectively. The decision gradient imbalance ratio
+Eq. 7 dilutes the odds-ratio gradient on the pivotal opening
+tokens.                                                                          ()    (Tr, K, )  =  K + (Tc - K)   (12)
+                                                                                       (Tc, K, )     K + (Tr - K)
+   We observe that this dilution leads to over-refusal: the model
+favours the shorter refusal path even for valid inputs, because      satisfies:
+the uniform odds ratio provides insufficient gradient on the
+initial decision to generate.                                        1) (1) = Tc/Tr;
+                                                                     2) () is strictly decreasing in  for all   1;
+   3) Formulation: To address this, we propose D-ORPO                3) lim () = 1.
+(Decision-Focused ORPO), which assigns a higher weight
+ > 1 to the first K response tokens in both the NLL and OR           Proof. (1) follows by direct substitution. For (2), d/d =
+objectives. Let r = min{t : yt is a response token} denote           K(Tr - Tc)/[K + (Tr - K)]2 < 0 since Tr < Tc. For (3),
+the index of the first response token.                               dividing numerator and denominator by K gives   1.
+
+   We define a per-token weight function:                               Property (1) quantifies the imbalance under standard ORPO:
+                                                                     the decision gradient fraction for the short refusal is Tc/Tr
+                       , if r  t < r + K,                            times that for the long code response, causing the OR objective
+          wt = 1, otherwise,                                   (8)   to steer the decision boundary toward refusal far more strongly
+                                                                     than toward generation. Properties (2) and (3) guarantee that
+where K is the decision window size and  is the decision             D-ORPO monotonically reduces this imbalance toward unity
+weight.                                                              as  increases. Algorithm 1 summarises the D-ORPO training
+                                                                     procedure.
+   The weighted average log-probability replaces Eq. 7:
+
+       ¯D(y | x) =        T    wt  ·  log p(yt  |  x,  y<t) .  (9)   E. Training Details
+                          t=1
+                                                                        We instantiate VeriGround, initialised from Qwen3.5-4B.
+                                      T    wt                        VeriGround is fine-tuned with LoRA [50] (r=16, LoRA=16,
+                                      t=1                            dropout = 0) applied to all attention and MLP projection ma-
+                                                                     trices in both the vision encoder and the language backbone.
+   Substituting ¯D for ¯ in Eqs. 5 and 6 yields the D-ORPO           Training proceeds in two sequential stages.
+objective:
+                                                                        Mixed Supervised Fine-tuning. The model is trained on
+                LD-ORPO = LNDLL +  · LODR.                     (10)  Dsft (49,016 samples) for 5 epochs using AdamW (8-bit)
+                                                                     with a learning rate of 2 × 10-4, and a maximum sequence
+When  = 1, D-ORPO reduces to standard ORPO, confirming
+it as a strict generalisation.
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026                                                                                9
+
+                                                                                       TABLE V
+PASS@k (%) OF VERIGROUND ABLATION VARIANTS ON C2VEVAL UNDER THE PAIRED NORMAL/ANONY × ORIGINAL/MIRAGE PROTOCOL. FOR
+
+                                    ORIGINAL ROWS, BOLD = HIGHEST (BEST); FOR MIRAGE ROWS, BOLD = LOWEST (BEST).
+
+Variant            Mode               Normal                                                                    Anony
+
+Base (Qwen3.5-4B)  Original  Syn. @1  Syn. @5 Func.@1                              Func.@5  Syn. @1    Syn. @5 Func.@1           Func.@5
+SFT                Mirage
+Anony-mixed SFT    Original    38.32  76.50   7.78                                   19.16    35.33    78.44      5.99             12.57
+                   Mirage      56.89  94.10   10.78                                  25.75    61.68    98.80      2.40             5.39
+   +ORPO           Original    87.43  97.01   28.74                                  46.11    91.02    100.00     11.98            29.34
+   +D-ORPO         Mirage      81.44  98.80   12.57                                  28.74    86.83    100.00     2.99             4.19
+                   Original    96.41  98.80   43.71                                  61.08    97.01    99.40      40.72            54.49
+                   Mirage      88.02  100.00  14.37                                  28.14    88.02    100.00     4.19             11.38
+                   Original    95.81  98.80   41.92                                  60.48    95.81    99.40      40.72            51.50
+                   Mirage      8.38   34.73   0.60                                   4.79     3.59     11.98      0.00             0.00
+                               96.41  98.80   46.11                                  61.08    96.41    99.40      42.51            56.29
+                               3.59   17.37   0.00                                   2.99     1.80     10.78      0.00             0.00
+
+length of 4,096 tokens. We hold out the last 5,000 samples                         D6\QWD[ 1RUPDO                     E6\QWD[ $QRQ\
+as a validation set, evaluate every 1,000 steps, and retain the                 2XUV        *37R2SXV*37           2XUV
+checkpoint with the lowest validation loss.                                                                                                      *37
+                                                                 6\QWD[3DVV#               0L0RYRPQL                        0L0RYRP*Q3L7R2SXV
+   D-ORPO Alignment. Starting from the best SFT check-                            (*0%
+point, we perform one epoch of D-ORPO training on the
+preference pairs derived from Dalign (Section IV-C). The                           4ZHQ%                               4ZHQ%
+learning rate is reduced to 5 × 10-6. The D-ORPO-specific
+hyper-parameters are set to decision window K=8, decision                                                         (*0%
+weight =2.0, and OR coefficient =0.1.
+                                                                                                                 4ZHQ%           9HUL*URXQG%2XUV
+                   V. EXPERIMENTAL RESULTS                                                                                       2SHQVRXUFH
+
+   We evaluate VeriGround by answering two research ques-                         4ZHQ(*0%%                            (*0% 3URSULHWDU\VL]HHVW
+tions:                                                                                % % % % 7
+                                                                                                                  % % % % 7
+   · RQ1: Does VeriGround improve grounded code gener-
+      ation?                                                                       F)XQF 1RUPDO                  2XUV G)XQF $QRQ\
+
+   · RQ2: Does VeriGround refuse unreliable visual inputs                         2XUV                 2SXV     
+      without over-refusing valid diagrams?                                                                *37
+                                                                     )XQF3DVV#
+A. RQ1: Code Generation Accuracy                                                            0L0RYRPQL           
+                                                                                                                                                           *37
+   To isolate the contribution of each training component, we                               *37R
+evaluate four cumulative ablation stages: (i) SFT, fine-tuned                    
+on Normal-only data; (ii) Anony-mixed SFT, fine-tuned on                                                                     0L0RYRP*Q3L7R
+the merged Normal + Anony corpus; (iii) +ORPO, standard
+ORPO alignment after Anony-mixed SFT; (iv) +D-ORPO (i.e.                          (*0%                           (4*Z0HQ4%ZHQ%%        2SXV
+VeriGround), decision-focused ORPO alignment after Anony-                                     4ZHQ%                    (*0%             7
+mixed SFT. All variants are evaluated on C2VEVAL under the                                                      
+paired Normal/Anony × Original/Mirage protocol.                                   4ZHQ(*0%%
+                                                                                                                  % % % %
+   Table V reports the ablation results; Figure 6 compares                            % % % % 7                          0RGHO6L]H
+VeriGround against all baselines as a function of model size.
+Based on these results, we draw three observations.                                             0RGHO6L]H
+
+   Obs. 1: Anony-mixed SFT is the key to visual ground-          Fig. 6. Original-mode Pass@1 comparison on C2VEVAL. (a­b) Syntax; (c­
+ing. Mixing anonymised training data into SFT yields sub-        d) Functional. Open-source models (·) are at their parameter count; MiMo-
+stantial gains across all settings. Compared with Normal-        v2-omni at 42B active (1T total, MoE). Proprietary models (, size estimated)
+only SFT, Anony-mixed SFT raises Functional Pass@1 from          are in the shaded region. VeriGround () approaches GPT-5.4 under Normal
+28.74  43.71 (+14.97) under Normal-Original, and from            and surpasses all models under Anony.
+11.98  40.72 (+28.74) under Anony-Original, nearly closing
+the Normal­Anony gap (=2.99). This confirms that anonymi-        refuse when visual evidence is absent: Mirage Syntax Pass@1
+sation training compels the model to ground predictions in       remains as high as 88.02%, indicating that the model still
+visual topology rather than memorising identifier-to-template    produces syntactically valid but functionally incorrect code
+mappings. However, SFT alone cannot teach the model to           without any circuit diagram.
+
+                                                                    Obs. 2: D-ORPO achieves the best generation­refusal
+                                                                 trade-off. Standard ORPO effectively teaches refusal, reduc-
+                                                                 ing Mirage Syntax Pass@1 from 88.02% to 8.38%/3.59%
+                                                                 (Normal/Anony), but at the cost of generation quality:
+                                                                 Functional Pass@1 drops from 43.71  41.92 (Normal)
+                                                                 and 54.49  51.50 (Func.@5, Anony). D-ORPO resolves
+                                                                 this tension by further reducing Mirage Syntax Pass@1 to
+                                                                 3.59%/1.80% while simultaneously lifting Original Functional
+                                                                 Pass@1 to 46.11% (Normal) and 42.51% (Anony), the highest
+                                                                 among all ablation stages. The decision-focused weighting
+                                                                 concentrates the preference signal on the generate-or-refuse
+                                                                 boundary, preventing the over-refusal caused by length asym-
+                                                                 metry in standard ORPO.
+
+                                                                    Obs. 3: A 4B model rivals frontier-scale proprietary
+                                                                 MLLMs. As shown in Fig. 6(c), VeriGround achieves Func-
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026                                                10
+
+                                       TABLE VI                                                            TABLE VII
+MCNEMAR'S TEST FOR FUNCTIONAL PASS@1 BETWEEN VERIGROUND              REFUSAL RELIABILITY OF +ORPO AND +D-ORPO ON C2VEVAL. FRR
+ AND BASELINE MODELS ON ORIGINAL INPUTS. b / c: SAMPLES SOLVED
+ ONLY BY VERIGROUND / ONLY BY THE BASELINE.  p < 0.01 AFTER           IS MEASURED ON ORIGINAL INPUTS (); RR ON MIRAGE INPUTS ();
+                                                                      PASS@1 ON ORIGINAL INPUTS (). BOLD MARKS THE BETTER VALUE
+       HOLM­BONFERRONI CORRECTION; N.S.: NOT SIGNIFICANT.
+                                                                                                          PER COLUMN.
+
+          Normal  Anony                                              Metric                      +ORPO   +D-ORPO
+
+Baseline  bc pbc         p                                           FRR (%)  ­ Normal             8.98      1.20
+                                                                     FRR (%)  ­ Anony              7.19      0.00
+MiMo-v2-omni 32 18 n.s. 48 9 < 0.001
+                                                                     RR (%)  ­ Normal             98.20     92.81
+GPT-4o    23 12 n.s. 50 6 < 0.001                                    RR (%)  ­ Anony              98.80     97.60
+
+GPT-5.4   22 21 n.s. 42 12 < 0.001                                   Func. Pass@1 (%)  ­ Normal   44.31     46.11
+                                                                     Func. Pass@1 (%)  ­ Anony    38.32     42.51
+Opus-4.6  22 33 n.s. 56 4 < 0.001
+
+tional Pass@1 of 46.11% under Normal, approaching GPT-5.4        B. RQ2: Refusal Reliability
+(45.51%) and surpassing both GPT-4o (33.52%) and MiMo-
+v2-omni (37.72%), despite having 50­250× fewer parame-              A reliable circuit-to-Verilog model should generate correct
+ters. Under Anony (Fig. 6(d)), the advantage becomes decisive:   code when the diagram faithfully depicts the target circuit and
+VeriGround reaches 42.51%, exceeding GPT-5.4 (24.55%) by         refuse otherwise. We compare +ORPO and +D-ORPO on two
+17.96 points and Opus-4.6 (11.38%) by 31.13 points. This         complementary metrics, both computed on C2VEVAL:
+widening gap under anonymised evaluation confirms that Veri-
+Ground's strength stems from genuine visual grounding rather        · False Refusal Rate (FRR ): fraction of valid Original-
+than identifier-based shortcuts that benefit larger pretrained         diagram inputs on which the model erroneously refuses.
+models.
+                                                                    · Refusal Rate (RR ): fraction of blank-image (Mirage)
+   Statistical Significance. All models are evaluated on the           inputs on which the model correctly refuses.
+same 167 C2VEVAL samples, yielding paired binary outcomes
+(pass/fail) per sample. We apply McNemar's test to each          A well-calibrated model should minimise FRR while max-
+VeriGround-vs-baseline pair: let b denote the number of          imising RR; we additionally report Functional Pass@1 on
+samples that only VeriGround solves and c the number that        Original inputs to confirm that refusal tuning does not degrade
+only the baseline solves. For discordant counts b+c  25 we       generation quality.
+use the exact mid-p variant; otherwise the continuity-corrected
+2 form 2 = (|b - c| - 1)2/(b + c). All eight p-values               Table VII shows that standard ORPO achieves near-perfect
+(4 baselines × 2 conditions) are corrected jointly with the      RR (98%) but suffers from severe over-refusal: FRR reaches
+Holm­Bonferroni procedure at =0.05.                              8.98% (Normal) and 7.19% (Anony), meaning the model
+                                                                 spuriously rejects roughly one in twelve valid inputs. D-ORPO
+   Table VI reveals a clear dichotomy. Under Normal eval-        resolves this imbalance decisively: FRR drops to 1.20% under
+uation, none of the four comparisons reaches significance:       Normal and zero under Anony, a reduction of 7.78 and 7.19 re-
+for instance, VeriGround vs. GPT-5.4 yields b=22, c=21           spectively. RR decreases only moderately (98.20%  92.81%
+(p=1.0), indicating virtually identical per-sample outcomes.     Normal; 98.80%  97.60% Anony), remaining above 92%
+This confirms that VeriGround, with only 4B parameters,          across all settings and preserving reliable refusal capability.
+performs on par with frontier-scale proprietary models when      Crucially, the FRR reduction does not come at the expense
+standard signal names are available. Under Anony evaluation,     of generation quality: D-ORPO improves Functional Pass@1
+all four comparisons are highly significant (p < 0.001), with    from 44.31%  46.11% (Normal) and 38.32%  42.51%
+b  c in every case (e.g. 56 vs. 4 against Opus-4.6). While       (Anony), confirming that decision-focused weighting prevents
+baseline models suffer severe performance degradation without    over-refusal from eroding the code-generation pathway.
+meaningful identifiers (Opus-4.6: 52.69%  11.38%; GPT-
+5.4: 45.51%  24.55%), VeriGround retains 42.51%--a drop              Summary of RQ2
+of only 3.60. This statistically confirms that VeriGround's
+accuracy stems from genuine visual grounding rather than             D-ORPO reduces False Refusal Rate by up to 7.78
+identifier-based shortcuts.                                          compared with standard ORPO (to 1.20%/0.00% Nor-
+                                                                     mal/Anony) while retaining 92% Refusal Rate on
+                                                                     blank images and simultaneously improving Func-
+                                                                     tional Pass@1.
+
+Summary of RQ1                                                                              VI. DISCUSSION
+
+Anony-mixed SFT builds strong visual grounding; D-               A. Hyper-parameter Sensitivity
+ORPO further lifts Original Functional Pass@1 to
+46.11%/42.51% (Normal/Anony) while driving Mirage                   D-ORPO introduces two hyper-parameters beyond standard
+generation to near zero.                                         ORPO: the decision window size K and the decision weight
+                                                                 . We conduct ablation studies on VeriGround-4B, evaluating
+                                                                 Functional Pass@1 on Original inputs, False Refusal Rate
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026                                                          11
+
+                                      TABLE VIII                                                          TABLE X
+EFFECT OF DECISION WINDOW K (=2.0 FIXED) ON VERIGROUND-4B.           FUNCTIONAL PASS@1 (FUNC., %) AND MISMATCH REFUSAL RATE
+
+                            BOLD = BEST PER COLUMN.                   (MRR, %) OF +ORPO AND +D-ORPO ACROSS FIVE ROUNDS OF
+                                                                                              RANDOM IMAGE MISMATCH.
+
+K  Pass@1   FRR      RR 
+
+   Norm. Anon. Norm. Anon. Norm. Anon.                                          +ORPO     +D-ORPO
+
+ 2 45.51 40.12 1.80  0.60 88.62 96.41                                Round  Func. MRR    Func. MRR
+ 4 46.11 42.51 1.20  1.80 89.22 97.01
+ 8 46.11 42.51 1.20  0.00 92.81 97.60                                1      0.00 100.00  0.60 80.84
+16 41.32 42.51 4.19  0.00 84.43 95.81                                2      0.00 100.00  1.20 82.04
+                                                                     3      0.00 100.00  0.60 80.84
+                                       TABLE IX                      4      0.00 100.00  0.60 83.23
+ EFFECT OF DECISION WEIGHT  (K=8 FIXED) ON VERIGROUND-4B.            5      0.00 99.40   1.20 78.44
+=1 CORRESPONDS TO STANDARD ORPO. BOLD = BEST PER COLUMN.
+                                                                     Avg.   0.00 99.88   0.84 81.08
+
+   Pass@1   FRR      RR                                         B. Mismatch Refusal Analysis
+
+   Norm. Anon. Norm. Anon. Norm. Anon.                             The RR metric in Section V-B measures refusal on blank
+                                                                images. In practice, a model may also encounter mismatched
+ 1 44.31 38.32 8.98  7.19 98.20 98.80                           diagrams, where the provided circuit image depicts a different
+ 2 46.11 42.51 1.20  0.00 92.81 97.60                           module than the one specified in the header. To evaluate this
+ 3 44.31 41.92 1.80  0.00 88.02 97.01                           scenario, we randomly construct five mismatched datasets: in
+ 5 42.51 41.92 1.80  1.20 80.24 97.01                           each round, every test sample is paired with a circuit diagram
+10 38.92 43.11 3.59  0.00 77.84 92.22                           drawn from a different instance in C2VEVAL. We compare
+20 44.91 41.92 1.20  2.40 75.45 95.81                           +ORPO and +D-ORPO on Functional Pass@1 and Mismatch
+                                                                Refusal Rate (MRR).
+(FRR) on Original inputs, and blank-image Refusal Rate (RR)
+under both Normal and Anony conditions.                            Table X shows that +ORPO refuses nearly all mismatched
+                                                                inputs (MRR 99.88%), consistent with its over-refusal ten-
+   1) Effect of Decision Window Size K: Table VIII fixes        dency observed in Section V-B. +D-ORPO exhibits a lower
+=2.0 and varies K  {2, 4, 8, 16}.                               MRR of 81.08%, meaning roughly one-fifth of mismatched
+                                                                samples are not explicitly refused. However, the Functional
+   K=8 achieves the best overall balance. When K is too         Pass@1 of +D-ORPO on these mismatched inputs is only
+small (K=2), the decision window covers too few tokens to       0.84%, virtually zero, indicating that the non-refused outputs
+capture the full decision preamble, yielding lower Pass@1 un-   still fail functional verification.
+der Anony (40.12%) and reduced RR under Normal (88.62%).
+When K is too large (K=16), the window extends beyond              In other words, when +D-ORPO does not refuse a mis-
+the decision boundary into code-body tokens, causing Normal     matched diagram, it does not hallucinate a "correct" imple-
+Pass@1 to drop to 41.32% and FRR to rise to 4.19%. K=8          mentation either; instead, the generated code is functionally
+simultaneously achieves the highest Pass@1, the lowest FRR,     incorrect and would be caught by standard testbench simula-
+and the highest RR across both conditions.                      tion. This result suggests that +D-ORPO's lower refusal rate
+                                                                does not introduce a meaningful safety risk: the model may
+   2) Effect of Decision Weight : Table IX fixes K=8 and        occasionally attempt generation on mismatched inputs, but
+varies   {1, 2, 3, 5, 10, 20}. Note that =1 recovers standard   the resulting code is unlikely to pass downstream verification,
+ORPO.                                                           providing a practical safety net against silent misuse.
+
+   The results reveal a clear trade-off. Standard ORPO (=1)        A promising direction for future work is to further improve
+achieves near-perfect RR (98%) but suffers from severe over-    the mismatch refusal rate without increasing the false refusal
+refusal (FRR: 8.98%/7.19%), confirming the gradient imbal-      rate on valid inputs, for example through contrastive training
+ance characterised by Proposition 1. Setting =2 reduces FRR     on hard negative pairs where the diagram and header share
+by 7.78 and 7.19 absolute points while maintaining RR above     partial but inconsistent semantics.
+92%, and simultaneously lifts Pass@1 to 46.11%/42.51%.
+Beyond =2, Normal RR declines monotonically (88.02%             C. Generalizability to Other Vision-to-Code Tasks
+80.24%  77.84%  75.45% for =3, 5, 10, 20), while
+Pass@1 shows no further improvement. =2 therefore pro-             The Mirage phenomenon reflects a general vulnerability of
+vides the Pareto-optimal balance and is adopted as the default  vision-to-code pipelines: whenever the textual prompt carries
+configuration.                                                  sufficient semantic cues, the model can bypass the visual
+                                                                input and still produce superficially correct code. We argue
+   In summary, K=8 and =2.0 yield the best trade-off among      that the three-pronged recipe underlying VeriGround, namely
+generation quality, false refusal, and blank-image refusal. D-  identifier anonymization, refusal augmentation, and D-ORPO
+ORPO is robust to moderate perturbations of either hyper-       alignment, addresses this vulnerability at a level that is largely
+parameter but degrades when K or  deviates substantially        task-agnostic.
+from these values.
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026  12
+
+   Anonymization generalizes to other visual DSLs. In UI-           the visual content, producing outputs that appear correct on
+to-HTML generation, CSS class names and element ids (e.g.,          standard benchmarks but fail on unseen inputs.
+nav-bar, login-btn) can leak layout semantics in the
+same way that Verilog port names leak circuit functionality;           Circuit-to-Verilog generation extends this paradigm to the
+replacing them with positional placeholders would force the         hardware domain, where a circuit diagram serves as a vi-
+model to derive structure from the mockup image. Similarly,         sual DSL encoding timing, topology, and bit-level seman-
+in chart-to-Python tasks, axis labels and legend entries often      tics. In the text-only setting, LLMs have been extensively
+reveal the data transformation logic; anonymizing them would        applied to Verilog generation. Yang et al. [12] and Pan et
+compel the model to read the visual encoding to reconstruct the     al. [13] provide comprehensive surveys. On the benchmarking
+plotting script. The key insight is that any visual DSL whose       side, VerilogEval [31] and its updated version [32] evaluate
+textual interface contains semantically loaded identifiers is sus-  functional correctness via testbench simulation; RTLLM [33]
+ceptible to shortcut exploitation, and identifier anonymization     and OpenLLM-RTL [34] target design-level RTL; Res-
+provides a systematic countermeasure.                               Bench [35] adds resource-awareness for FPGA designs; and
+                                                                    ArchXBench [36] covers complex digital subsystems. On
+   Refusal augmentation and D-ORPO are task-agnostic.               the model side, QiMeng-CodeV-R1 [45] augments Verilog
+Refusal augmentation requires only the ability to construct         generation with chain-of-thought reasoning, while Yang et
+invalid input pairs, which is straightforward in any vision-to-     al. [44] address backdoor attacks through semantic consensus
+code setting: one can pair a UI mockup with an unrelated            decoding. All of these works operate in a text-only setting.
+HTML skeleton, or a chart image with a mismatched data-
+processing prompt. D-ORPO's mechanism of up-weighting                  Only a limited number of studies have explored visual
+the first K response tokens to sharpen the generate-or-refuse       inputs for Verilog generation. VGV [10] prompts MLLMs with
+decision boundary operates purely on the response-prefix dis-       circuit screenshots and reports encouraging Thinking Vision
+tribution and is independent of the downstream code language.       methods, but evaluates exclusively under semantically loaded
+Together, the two components offer a transferable framework         identifiers, leaving the question of genuine visual grounding
+for calibrating the hallucination and over-refusal trade-off        open. MGEMMV [11] proposes a specialised framework for
+without task-specific architectural changes.                        GEMM-oriented circuits, yet likewise does not test whether
+                                                                    models exploit header semantics rather than reading the dia-
+D. Threats to Validity                                              gram.
+
+   Internal validity. Our ablation fixes one hyper-parameter           Our work is the first to systematically expose and quantify
+while varying the other; joint interactions beyond the tested       this shortcut across multiple MLLMs, and to provide evidence
+grid (K  {2, 4, 8, 16},   {1, 2, 3, 5, 10, 20}) may exist.          that the reliability gap observed here reflects a general vul-
+All training runs use a single random seed; we mitigate this        nerability of vision-to-code pipelines, with circuit diagrams
+by reporting Pass@k with the unbiased estimator over n=5            representing the most extreme case due to the invisible and
+samples per problem.                                                safety-critical nature of RTL semantics.
+
+   External validity. C2VEVAL covers 169 Verilog prob-              B. Visual Grounding in Multimodal LLMs
+lems drawn from four public benchmarks, spanning combina-
+tional logic, sequential blocks, FSMs, and arithmetic modules.         Whether MLLMs genuinely rely on visual inputs has at-
+Whether the findings generalise to other hardware descrip-          tracted growing scrutiny. Asadi et al. [14] coin the term
+tion languages (e.g. VHDL, SystemVerilog) or larger circuit         "Mirage" to describe a broad failure mode in which MLLMs
+scales. We instantiate VeriGround at 4B parameters; scaling         appear to understand images but instead exploit spurious cor-
+behaviour at larger or smaller model sizes is unexplored.           relations or textual priors. Their study spans medical imaging,
+                                                                    scientific figures, and general-purpose vision-language tasks,
+   Construct validity. Functional Pass@k relies on testbench        demonstrating that performance often persists after visual
+simulation, which may not cover all corner cases. Refusal de-       information is removed or corrupted.
+tection is based on template matching against the fixed refusal
+format (Figure 5); free-form refusals or hedged responses are       C. Preference Alignment for Language Models
+not captured by this metric.
+                                                                       Aligning language models with human preferences has
+                       VII. RELATED WORK                            evolved from reinforcement learning from human feedback
+                                                                    (RLHF) to more efficient offline methods. DPO [48] eliminates
+A. Vision-to-Code Generation                                        the reward model by directly optimising a preference objective,
+                                                                    but requires a frozen reference model that doubles memory for
+   The broader vision-to-code paradigm treats visual artifacts      large multimodal architectures. GRPO [49] employs group-
+as visual domain-specific languages (visual DSLs) that must         relative policy optimisation with online rollouts, achieving
+be faithfully translated into executable code. Representative       strong results in mathematical reasoning but incurring high
+tasks include UI-to-HTML synthesis [1]­[6], where a mockup          sampling costs for vision-language models. ORPO [15] unifies
+encodes layout and interaction semantics, and Plot-to-Python        supervised learning and preference alignment in a single
+generation [7]­[9], where a chart encodes data transformations      reference-free objective, making it well suited to resource-
+and rendering logic. A common, yet underexplored, risk across       constrained multimodal training.
+these tasks is that models may exploit textual metadata (e.g.,
+axis labels, component names) rather than genuinely parse
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026           13
+
+                         VIII. CONCLUSION                                      [8] X. Zhao, X. Luo, Q. Shi, C. Chen, S. Wang, Z. Liu, and M. Sun,
+                                                                                    "Chartcoder: Advancing multimodal large language model for chart-
+   This paper reveals the Mirage phenomenon in circuit-to-                          to-code generation," in Proceedings of the 63rd Annual Meeting of the
+Verilog code generation: all eight evaluated MLLMs score                            Association for Computational Linguistics (Volume 1: Long Papers),
+equally or higher when the circuit diagram is replaced by                           2025, pp. 7333­7348.
+a blank image, exploiting identifier semantics in the module
+header rather than the visual input. This exposes a covert                     [9] S. Ouyang, D. Huang, J. Guo, Z. Sun, Q. Zhu, and J. M. Zhang,
+defect type in AI code generation that threatens MLLMs'                             "Dscodebench: A realistic benchmark for data science code generation,"
+trustworthiness. We construct C2VEVAL with paired Nor-                              in Proceedings of the AAAI Conference on Artificial Intelligence, vol. 40,
+mal/Anony variants, showing that genuine visual ground-                             no. 38, 2026, pp. 32 628­32 636.
+ing accounts for only about 8% of samples. To restore
+grounding, we propose VeriGround (4B), combining identifier                   [10] S.-Z. Wong, G.-W. Wan, D. Liu, and X. Wang, "Vgv: Verilog generation
+anonymization, refusal augmentation, and D-ORPO align-                              using visual capabilities of multi-modal large language models," in 2024
+ment, a transferable recipe for balancing hallucination and                         IEEE LLM Aided Design Workshop (LAD). IEEE, 2024, pp. 1­5.
+over-refusal. VeriGround achieves 46.11%/42.51% Functional
+Pass@1 (Normal/Anony), approaching GPT-5.4 under Normal                       [11] G. Zhang, M. Wang, and Z. Wang, "Mgemmv: A multimodal llm
+and outperforming all baselines under Anony, while keeping                          framework for gemm verilog generation from circuit diagrams," IEEE
+false refusal below 1.20% and blank-image refusal above 92%.                        Transactions on Circuits and Systems I: Regular Papers, 2026.
+
+   In the future, we plan to scale VeriGround to both                         [12] G. Yang, W. Zheng, X. Chen, D. Liang, P. Hu, Y. Yang, S. Peng,
+lighter and larger architectures and to expand C2VEVAL with                         Z. Li, J. Feng, X. Wei et al., "Large language model for verilog
+industrial-scale circuits. We also intend to validate the trans-                    code generation: Literature review and the road ahead," arXiv preprint
+ferability of the anonymization-refusal-alignment paradigm on                       arXiv:2512.00020, 2025.
+other vision-to-code tasks to further establish its generality.
+                                                                              [13] J. Pan, G. Zhou, C.-C. Chang, I. Jacobson, J. Hu, and Y. Chen, "A survey
+                       ACKNOWLEDGEMENTS                                             of research in large language models for electronic design automation,"
+                                                                                    ACM Transactions on Design Automation of Electronic Systems, vol. 30,
+   This work was supported by National Key R&D Program                              no. 3, pp. 1­21, 2025.
+of China (No. 2024YFB4506400). The authors would like
+to thank the editors and the anonymous reviewers for their                    [14] M. Asadi, J. W. O'Sullivan, F. Cao, T. Nedaee, K. Fardi, F.-F. Li,
+insightful comments and suggestions, which can substantially                        E. Adeli, and E. Ashley, "Mirage the illusion of visual understanding,"
+improve the quality of this work.                                                   arXiv preprint arXiv:2603.21687, 2026.
+
+                             REFERENCES                                       [15] J. Hong, N. Lee, and J. Thorne, "Orpo: Monolithic preference optimiza-
+                                                                                    tion without reference model," in Proceedings of the 2024 Conference on
+ [1] S. Feng, S. Ma, J. Yu, C. Chen, T. Zhou, and Y. Zhen, "Auto-icon:              Empirical Methods in Natural Language Processing, 2024, pp. 11 170­
+      An automated code generation tool for icon designs assisting in ui            11 189.
+      development," in Proceedings of the 26th International Conference on
+      Intelligent User Interfaces, 2021, pp. 59­69.                           [16] J. Wu, W. Gan, Z. Chen, S. Wan, and P. S. Yu, "Multimodal large
+                                                                                    language models: A survey," in 2023 IEEE International Conference on
+ [2] S. Xiao, Y. Chen, J. Li, L. Chen, L. Sun, and T. Zhou, "Prototype2code:        Big Data (BigData). IEEE, 2023, pp. 2247­2256.
+      End-to-end front-end code generation from ui design prototypes," in
+      International Design Engineering Technical Conferences and Computers    [17] S. Yin, C. Fu, S. Zhao, K. Li, X. Sun, T. Xu, and E. Chen, "A survey on
+      and Information in Engineering Conference, vol. 88353. American               multimodal large language models," National Science Review, vol. 11,
+      Society of Mechanical Engineers, 2024, p. V02BT02A038.                        no. 12, p. nwae403, 2024.
+
+ [3] Y. Gui, Y. Wan, Z. Li, Z. Zhang, D. Chen, H. Zhang, Y. Su, B. Chen,      [18] K. Han, Y. Wang, H. Chen, X. Chen, J. Guo, Z. Liu, Y. Tang, A. Xiao,
+      X. Zhou, W. Jiang et al., "Uicopilot: Automating ui synthesis via             C. Xu, Y. Xu et al., "A survey on vision transformer," IEEE transactions
+      hierarchical code generation from webpage designs," in Proceedings of         on pattern analysis and machine intelligence, vol. 45, no. 1, pp. 87­110,
+      the ACM on Web Conference 2025, 2025, pp. 1846­1855.                          2022.
+
+ [4] T. Zhou, Y. Zhao, X. Hou, X. Sun, K. Chen, and H. Wang, "Declarui:       [19] Z. Liu, Y. Lin, Y. Cao, H. Hu, Y. Wei, Z. Zhang, S. Lin, and
+      Bridging design and development with automated declarative ui code            B. Guo, "Swin transformer: Hierarchical vision transformer using shifted
+      generation," Proceedings of the ACM on Software Engineering, vol. 2,          windows," in Proceedings of the IEEE/CVF international conference on
+      no. FSE, pp. 219­241, 2025.                                                   computer vision, 2021, pp. 10 012­10 022.
+
+ [5] J. Xiao, Y. Wan, Y. Huo, Z. Wang, X. Xu, W. Wang, Z. Xu, Y. Wang,        [20] S. Khan, M. Naseer, M. Hayat, S. W. Zamir, F. S. Khan, and M. Shah,
+      and M. R. Lyu, "Interaction2code: Benchmarking mllm-based interactive         "Transformers in vision: A survey," ACM computing surveys (CSUR),
+      webpage code generation from interactive prototyping," in 2025 40th           vol. 54, no. 10s, pp. 1­41, 2022.
+      IEEE/ACM International Conference on Automated Software Engineer-
+      ing (ASE). IEEE, 2025, pp. 241­253.                                     [21] B. Li, Y. Zhang, D. Guo, R. Zhang, F. Li, H. Zhang, K. Zhang,
+                                                                                    P. Zhang, Y. Li, Z. Liu et al., "Llava-onevision: Easy visual task
+ [6] Y. Wan, C. Wang, Y. Dong, W. Wang, S. Li, Y. Huo, and M. Lyu,                  transfer," Transactions on Machine Learning Research.
+      "Divide-and-conquer: Generating ui code from screenshots," Proceed-
+      ings of the ACM on Software Engineering, vol. 2, no. FSE, pp. 2099­     [22] C. Li, C. Wong, S. Zhang, N. Usuyama, H. Liu, J. Yang, T. Naumann,
+      2122, 2025.                                                                   H. Poon, and J. Gao, "Llava-med: Training a large language-and-vision
+                                                                                    assistant for biomedicine in one day," Advances in Neural Information
+ [7] C. Wu, Z. Liang, Y. Ge, Q. Guo, Z. Lu, J. Wang, Y. Shan, and                   Processing Systems, vol. 36, pp. 28 541­28 564, 2023.
+      P. Luo, "Plot2code: A comprehensive benchmark for evaluating multi-
+      modal large language models in code generation from scientific plots,"  [23] F. Cocchi, N. Moratelli, D. Caffagni, S. Sarto, L. Baraldi, M. Cornia,
+      in Findings of the Association for Computational Linguistics: NAACL           and R. Cucchiara, "Llava-more: A comparative study of llms and visual
+      2025, 2025, pp. 3006­3028.                                                    backbones for enhanced visual instruction tuning," in Proceedings of
+                                                                                    the IEEE/CVF International Conference on Computer Vision, 2025, pp.
+                                                                                    4278­4288.
+
+                                                                              [24] Z. Chen, J. Wu, W. Wang, W. Su, G. Chen, S. Xing, M. Zhong, Q. Zhang,
+                                                                                    X. Zhu, L. Lu et al., "Internvl: Scaling up vision foundation models
+                                                                                    and aligning for generic visual-linguistic tasks," in Proceedings of the
+                                                                                    IEEE/CVF conference on computer vision and pattern recognition, 2024,
+                                                                                    pp. 24 185­24 198.
+
+                                                                              [25] W. Wang, Z. Gao, L. Gu, H. Pu, L. Cui, X. Wei, Z. Liu, L. Jing,
+                                                                                    S. Ye, J. Shao et al., "Internvl3. 5: Advancing open-source multi-
+                                                                                    modal models in versatility, reasoning, and efficiency," arXiv preprint
+                                                                                    arXiv:2508.18265, 2025.
+
+                                                                              [26] G. Team, R. Anil, S. Borgeaud, J.-B. Alayrac, J. Yu, R. Soricut,
+                                                                                    J. Schalkwyk, A. M. Dai, A. Hauth, K. Millican et al., "Gemini: a family
+                                                                                    of highly capable multimodal models," arXiv preprint arXiv:2312.11805,
+                                                                                    2023.
+
+                                                                              [27] G. Team, P. Georgiev, V. I. Lei, R. Burnell, L. Bai, A. Gulati, G. Tanzer,
+                                                                                    D. Vincent, Z. Pan, S. Wang et al., "Gemini 1.5: Unlocking multimodal
+                                                                                    understanding across millions of tokens of context," arXiv preprint
+                                                                                    arXiv:2403.05530, 2024.
+IEEE TRANSACTIONS ON SOFTWARE ENGINEERING, VOL. XX, NO. XX, XX 2026              14
+
+[28] A. Hurst, A. Lerer, A. P. Goucher, A. Perelman, A. Ramesh, A. Clark,
+      A. Ostrow, A. Welihinda, A. Hayes, A. Radford et al., "Gpt-4o system
+      card," arXiv preprint arXiv:2410.21276, 2024.
+
+[29] Z. Navabi, Verilog digital system design. McGraw-Hill, 1999.
+[30] R. W. Mehler, Digital integrated circuit design using verilog and
+
+      systemverilog. Elsevier, 2014.
+[31] M. Liu, N. Pinckney, B. Khailany, and H. Ren, "Verilogeval: Evaluating
+
+      large language models for verilog code generation," in 2023 IEEE/ACM
+      International Conference on Computer Aided Design (ICCAD). IEEE,
+      2023, pp. 1­8.
+[32] N. Pinckney, C. Batten, M. Liu, H. Ren, and B. Khailany, "Revisiting
+      verilogeval: A year of improvements in large-language models for
+      hardware code generation," ACM Transactions on Design Automation
+      of Electronic Systems, vol. 30, no. 6, pp. 1­20, 2025.
+[33] Y. Lu, S. Liu, Q. Zhang, and Z. Xie, "Rtllm: An open-source benchmark
+      for design rtl generation with large language model," in 2024 29th Asia
+      and South Pacific Design Automation Conference (ASP-DAC). IEEE,
+      2024, pp. 722­727.
+[34] S. Liu, Y. Lu, W. Fang, M. Li, and Z. Xie, "Openllm-rtl: Open
+      dataset and benchmark for llm-aided design rtl generation(invited)," in
+      Proceedings of 2024 IEEE/ACM International Conference on Computer-
+      Aided Design (ICCAD). ACM, 2024.
+[35] C. Guo and T. Zhao, "Resbench: A resource-aware benchmark for llm-
+      generated fpga designs," in Proceedings of the 15th International Sympo-
+      sium on Highly Efficient Accelerators and Reconfigurable Technologies,
+      2025, pp. 25­34.
+[36] S. Purini, S. Garg, M. Gaur, S. Bhat, S. Mupparapu, and A. Ravindran,
+      "Archxbench: A complex digital systems benchmark suite for llm driven
+      rtl synthesis," in 2025 ACM/IEEE 7th Symposium on Machine Learning
+      for CAD (MLCAD). IEEE, 2025, pp. 1­10.
+[37] OpenAI, "Openai api docs: Gpt-4o," 2024. [Online]. Available:
+      https://developers.openai.com/api/docs/models/gpt-4o
+[38] ----, "Openai api docs: Gpt-5.4," 2026. [Online]. Available:
+      https://developers.openai.com/api/docs/models/gpt-5.4
+[39] Anthropic, "Introducing claude opus 4.6," 2026. [Online]. Available:
+      https://www.anthropic.com/news/claude-opus-4-6
+[40] Xiaomi MiMo Team, "Xiaomi mimo-v2-omni," March 2026. [Online].
+      Available: https://mimo.xiaomi.com/mimo-v2-omni
+[41] G. Zhan, C. Li, Z. Liu, Y. Lu, Y. Wu, S. Han, and L. Zhu, "Egm:
+      Efficient visual grounding language models," 2026.
+[42] Qwen Team, "Qwen3.5: Towards native multimodal agents," February
+      2026. [Online]. Available: https://qwen.ai/blog?id=qwen3.5
+[43] M. Chen, J. Tworek, H. Jun, Q. Yuan, H. P. de Oliveira Pinto, J. Kaplan,
+      H. Edwards, Y. Burda, N. Joseph, G. Brockman, A. Ray, R. Puri,
+      G. Krueger, M. Petrov, H. Khlaaf, G. Sastry, P. Mishkin, B. Chan,
+      S. Gray, N. Ryder, M. Pavlov, A. Power, L. Kaiser, M. Bavarian,
+      C. Winter, P. Tillet, F. P. Such, D. Cummings, M. Plappert, F. Chantzis,
+      E. Barnes, A. Herbert-Voss, W. H. Guss, A. Nichol, A. Paino, N. Tezak,
+      J. Tang, I. Babuschkin, S. Balaji, S. Jain, W. Saunders, C. Hesse,
+      A. N. Carr, J. Leike, J. Achiam, V. Misra, E. Morikawa, A. Radford,
+      M. Knight, M. Brundage, M. Murati, K. Mayer, P. Welinder,
+      B. McGrew, D. Amodei, S. McCandlish, I. Sutskever, and W. Zaremba,
+      "Evaluating large language models trained on code," 2021. [Online].
+      Available: https://arxiv.org/abs/2107.03374
+[44] G. Yang, X. Hu, X. Chen, and X. Xia, "Semantic consensus decod-
+      ing: Backdoor defense for verilog code generation," arXiv preprint
+      arXiv:2602.04195, 2026.
+[45] Y. Zhu, D. Huang, H. Lyu, X. Zhang, C. Li, W. Shi, Y. Wu, J. Mu,
+      J. Wang, P. Jin et al., "Qimeng-codev-r1: Reasoning-enhanced verilog
+      generation," in The Thirty-ninth Annual Conference on Neural Informa-
+      tion Processing Systems.
+[46] C. Wolf, J. Glaser, and J. Kepler, "Yosys-a free verilog synthesis suite,"
+      in Proceedings of the 21st Austrian Workshop on Microelectronics
+      (Austrochip), vol. 97, 2013, pp. 1­6.
+[47] C.-Y. Lin, "Rouge: A package for automatic evaluation of summaries,"
+      in Text summarization branches out, 2004, pp. 74­81.
+[48] R. Rafailov, A. Sharma, E. Mitchell, C. D. Manning, S. Ermon, and
+      C. Finn, "Direct preference optimization: Your language model is
+      secretly a reward model," Advances in neural information processing
+      systems, vol. 36, pp. 53 728­53 741, 2023.
+[49] Z. Shao, P. Wang, Q. Zhu, R. Xu, J. Song, X. Bi, H. Zhang, M. Zhang,
+      Y. Li et al., "Deepseekmath: Pushing the limits of mathematical reason-
+      ing in open language models," arXiv preprint arXiv:2402.03300, 2024.
+[50] E. J. Hu, Y. Shen, P. Wallis, Z. Allen-Zhu, Y. Li, S. Wang, L. Wang,
+      W. Chen et al., "Lora: Low-rank adaptation of large language models."
+      Iclr, vol. 1, no. 2, p. 3, 2022.
+

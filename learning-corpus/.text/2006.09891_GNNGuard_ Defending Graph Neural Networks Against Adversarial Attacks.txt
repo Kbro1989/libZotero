@@ -1,0 +1,710 @@
+arXiv:2006.09891v1 [cs.CL] 17 Jun 2020           Fine-grained Sentiment Controlled Text Generation
+
+                                                                   Bidisha Samanta, Mohit Agarwal, Niloy Ganguly
+
+                                                     bidisha@iitkgp.ac.in, mohit2agrawal@gmail.com, niloy@cse.iitkgp.ac.in
+                                                                                         IIT Kharagpur
+
+                                                                                                                Abstract
+                                                     Controlled text generation techniques aim to regulate specific attributes (e.g. sentiment) while
+                                                preserving the attribute independent content. The state-of-the-art approaches model the specified
+                                                attribute as a structured or discrete representation while making the content representation independent
+                                                of it to achieve a better control. However, disentangling the text representation into separate latent spaces
+                                                overlooks complex dependencies between content and attribute, leading to generation of poorly constructed
+                                                and not so meaningful sentences. Moreover, such an approach fails to provide a finer control on the degree
+                                                of attribute change. To address these problems of controlled text generation, in this paper, we propose
+                                                DE-VAE, a hierarchical framework which captures both information enriched entangled representation
+                                                and attribute specific disentangled representation in different hierarchies. DE-VAE achieves better control
+                                                of sentiment as an attribute while preserving the content by learning a suitable lossless transformation
+                                                network from the disentangled sentiment space to the desired entangled representation. Through feature
+                                                supervision on a single dimension of the disentangled representation, DE-VAE maps the variation of
+                                                sentiment to a continuous space which helps in smoothly regulating sentiment from positive to negative
+                                                and vice versa. Detailed experiments on three publicly available review datasets show the superiority of
+                                                DE-VAE over recent state-of-the-art approaches.
+
+                                        1 Introduction
+
+                                        Text generation using variational inference [2] is beneficial as it captures important characteristics of the
+                                        input word sequence in a continuous latent space. The obtained latent space text embedding is broadly
+                                        used for performing several downstream tasks including machine translation [1], summarization [15], dialog
+                                        generation [11], etc. In contrast to unconditional text generation, controlled text generative models aim
+                                        to construct sentences with specified attributes such as sentiment, tense, or style. Existing state-of-the-art
+                                        methods for controlled text generation have mainly focused on disentangling the attribute and content
+                                        representation in the latent space and generate sentences from that by modifying the attribute representation.
+                                        Such methods have either derived attribute and content representations separately using multiple attribute
+                                        specific decoders [7, 10], or used an adversarial setup [9] to make the text representation independent of
+                                        attribute information. Another line of work has focused only on style transfer which primarily involves
+                                        flipping the style or attribute value of the given sentence. Several recent works [16, 18, 19, 26, 27, 28] have
+                                        explored the use of adversarial discriminators for achieving such text style transfer through disentanglement.
+                                        However, these methods do not explicitly model the process of fine tuning the attribute values, e.g., changing
+                                        sentiment values from extreme positive to neutral to negative, while keeping the content same. Extension of
+                                        these models for finer attribute control often fail in mainly two different aspects. They cannot regulate the
+                                        attribute smoothly because of multidimensional or structured (one hot encoding) representation space of the
+                                        attributes. The disentanglement of the latent space also overlooks the interdependency between attribute
+                                        and content. As a result, just modifying the attribute part often leads to the generation of sentences not
+                                        having sufficient content overlap with the original sentence.
+
+                                            Disentangling latent features (such as rotation and color) of images [3, 8] is a well explored area in computer
+                                        vision. In particular, BetaVAE [8] has modified the Variational Autoencoder with a special emphasis on
+
+                                                                                                              1
+KL in order to enforce disentanglement. Further, some other works like [12, 14] have tried to achieve a
+trade-off between disentanglement and reconstruction quality. Although these unsupervised approaches have
+shown promising results on image data, achieving disentanglement in the latent representation learned for
+text generation comes with obvious pitfalls. The difficulty of this task arises from the fact that the text
+representation based on recent state-of-the-art methods like BERT [4], Transformer [24], or Seq2seq [21] is
+a complex manifold of entangled salient features. These representations are highly expressive for several
+downstream tasks including high quality sentence generation that preserves the semantics. Hence, disentangling
+the enriched representation space into separate spaces for attribute and content results in neglecting the
+complex dependency between them, thereby compromising the quality of text generation. Thus, previous
+methods [9, 10, 16, 18, 19, 26, 27, 28] that have tried to achieve attribute control by disentangling the latent
+space used for text generation suffer from these aforementioned issues, i.e., generating poor and unrealistic
+sentences while trying to fine tune the attribute values. A recent work [25] has proposed attribute transfer
+using entangled representation that enables fine tuning of the sentiment polarity. However, it is restricted to
+modifying the sentiment of the given sentence to only its opposite polarity using costly Fast-Gradient-Iterative
+Modification. We aim to address these shortcomings of existing literature by proposing a trade-off between
+preserving entangled representation as a latent space to generate text for better reconstruction, and deriving
+a continuous attribute representation in a disentangled space on top of it to fine tune the attribute values.
+
+    In this paper, specifically, we propose the model Disentangled-Entangle-VAE (DE-VAE), a feature
+supervised framework that transforms entangled and enriched text representation obtained using BERT
+encoder to a higher level representation of sentiment as a specified attribute, along with other unspecified
+attributes using a transformation network. DE-VAE enforces disentanglement of the derived representation by
+imposing a factored prior which enables independence among different dimensions of the latent representation.
+Further, using attribute supervision on the intended dimension of this disentangled representation, we map the
+sentiment to a continuous space. For attribute guided text generation, DE-VAE converts the disentangled
+representation back to original entangled representation and generate sentence from that. This reverse
+transformation helps to preserve the complex relationships between sentiment and other inherent attributes
+in an enriched entangled space, thereby generating more meaningful and realistic sentences compared to
+competing methods. However, the choice of such transformation networks for transforming from disentangled
+to entangled space, and vice-versa is extremely important. The transformation needs to be lossless, otherwise
+the decoded entangled space can become different than that of the original text representation. We use the
+concept of invertible normalising flow [6, 13, 17] to enforce these transformations. By jointly optimizing
+the parameters of transformation network, along with imposing disentanglement constraint and feature
+supervision on the feature space, DE-VAE successfully learns how a disentangled space for sentiment and
+other unspecified attributes can be converted to a meaningful entangled representation space of the sentence.
+
+    We demonstrate the effectiveness of DE-VAE to generate controlled text by fine tuning sentiment. Using
+three large publicly available review datasets, we show that DE-VAE improves the performance significantly
+over previous controlled text generative models on three different criteria, namely, sentiment control accuracy,
+smooth fine tuning of sentiment in both directions, and content preservation. We show that even a small
+difference between the decoded entangled feature space and the original entangled space, introduced by
+using an alternative transformation network, can lead to a significant performance drop. Finally, through an
+ablation study, we demonstrate the disentanglement achieved by DE-VAE on the derived feature space.
+
+2 DE-VAE : Text generation with fine tuned attributes
+
+In this section, we first give a high level overview of DE-VAE, a hierarchical model for controlled text
+generation, starting with describing the data. Next, we describe the key technical aspects of its individual
+components with key contributions in detail. Finally, we illustrate the training procedure.
+
+                                                                      2
+                                                                           Inverse
+
+                            Normalizing Flow              Generation Normalizing Flow
+
+                                                   (f  )                                              LSTM
+
+                         S                      T              f                            S
+
+                                   2  T            Inference
+BERT                            1
+                                                               
+                                                                                               w1 w2  wn
+                                                                        a
+                                                                           generated           generated sentence
+={1,...,n}                                                  scale          sentiment
+
+                                                              Sentiment
+                                                                decoder
+
+                       Encoder                                                      Decoder
+
+Figure 1: The Encoder and Decoder module of DE-VAE. The encoding process takes a word sequence x and
+
+obtain its BERT embedding. Then it converts it to a continuous representation zs followed by transformation
+to a feature representation zf using invertible normalising flow. It assigns the last dimension of zf for
+sentiment representation za. The decoding process samples zf from prior or posterior. It decodes sentiment
+from the za. Then the feature representation zf is transformed to the sentence representation zs via an
+inverse flow. zs is then used to generate the word sequence x.
+
+2.1 Model overview
+
+We consider an input set X = {x0, · · · , xM-1} of M observed sentences sampled from some underlying
+unknown data distribution pD. Along with the sentences, we have the corresponding ground truth observed
+attribute, sentiment, denoted as F = {f0, · · · , fM-1}. Here fi is associated to sentence xi. For ease
+of reference, we will henceforth denote a training instance xi and fi by x and f respectively. Detailed
+architectural overview of DE-VAE is shown in Figure 1. The whole architecture can be divided into two
+modules consisting of a hierarchical encoder and a corresponding hierarchical decoder. We start by describing
+the inference model (encoder) followed by the generation model (decoder).
+
+2.2 Inference model
+
+The inference model is designed as a bottom-up hierarchical encoder. It has two distinct layers for modeling
+word sequence representation zs, and derived feature representation zf . The posterior distribution of our
+hierarchical inference mechanism can be represented as a factored model like:
+
+                                      q(z|x) = q(zs|x) q(zf |zs)                                                   (1)
+
+                                                   Entangled Disentangled
+
+We design an entangled sentence encoder q(zs|x) in the lowest layer as follows. Given a word sequence
+
+x, we obtain the word embeddings Ew for each word w in x from the BERT pre-trained model [22]. Then
+
+we combine these representations to generate an aggregated sentence encoding Es and transform it into a
+continuous Gaussian space zs  Rd, as follows:
+
+                                                                           1           e
+                       Ew = {e1, . . . , e|x|} = BERT(x), Es = |x|
+                                                                              eEw
+
+                       q(zs|x) = N (µs, diag(s2)) where [µs, s] = g(Es)                                            (2)
+
+We transform Es to a Gaussian distribution parameterized by [µs, s] using a fully connected neural network
+g. The sentence representation zs  Rd is an entangled representation with d dimensions. Next, we aim
+to transform this representation zs to another representation zf  Rd on which we can impose feature
+
+supervision and disentanglement for attribute control. Design of q(zf |zs) is crucial for fine-tuned attribute
+
+control. First, it should transfer all the necessary information of zs to zf so that we can leverage the
+
+information for sentiment supervision on zf . Most importantly, the transformation needs to be invertible. As
+
+we are interested to control the attribute by modulating zf , and then transforming back to zs distribution
+
+                                                          3
+space, any transformation other than an invertible one will lead to some different distribution space causing
+important information loss. Hence, we use an invertible normalizing flow [6, 13, 17] to design q(zf |zs).
+
+    A normalizing flow is a powerful transformation function which applies a chain of invertible parametrized
+transformations ft(t = 1, . . . , T ) to its input (here zs) such that the outcome of the last iteration, zT , has a
+more flexible distribution (here zf ). We have used an effective autoregressive transformation flow R-NVP [6],
+which copies the first k dimensions (1 < k < d) of the input, while shifting and scaling all the remaining ones.
+Specifically, the estimated approximate transformation flow ft, i.e. qt(zt|zt-1), can be characterized as:
+
+        zt(1:k) = zt-1(1:k), and zt(k+1:d) = zt-1(k+1:d) · t + µt, where [µt, t] = t(zt-1(1:k))                          (3)
+
+Here, t are designed as multilayer fully connected feed-forward networks which are not invertible However,
+a careful inspection of Eq 3 reveals that given zt, the input zt-1 can be fully recovered. So this makes the
+transformation flow ft invertible. Thus, we can write q(zf |zs) := q(zT |zs) and we assign zf := zT . From
+the characterization of R-NVP, we observe that zf (k+1:d) will have the aggregated information coming from
+all dimensions of zs. So we pick the dth (last) dimension of zf as za to further fine-tune it using sentiment
+supervision which we will discuss in detail in the next section. The rest of the dimensions of zf are kept for
+unspecified features denoted by zu. We will discuss how we achieve the disentanglement of zf in Sec. 2.4
+while discussing the training objective.
+
+2.3 Generative model
+
+We design our generative model p using a top-down hierarchy, with two different variables zs and zf . The
+overall distribution of the latent variables is defined as:
+
+                                          p(z) = p(zf ) p(zs|zf )                                                        (4)
+
+                                                          Disentangled Entangled
+
+Here p(zf ) is a factored prior of the feature representation zf , which can be expressed as zf =                d    p (zfi  ).
+                                                                                                                 i=1
+
+As discussed in the previous section, we have designated the last dimension of the disentangled attribute
+
+representation to capture sentiment, and remaining dimensions for unspecified features. Henceforth, sentiment
+
+representation can be sampled from za  p(zfd) and unspecified representations can be sampled as zu 
+
+d-1  p  (zfi  ).  The  factorized  prior  distribution    p(zf )  is  designed  to  be  standard  normal  distribution,  hence
+i=1
+
+p(zfi )  N (0, I) i in [1, d]. To facilitate smooth interpolation in sentiment space, which is one of the major
+
+differences of DE-VAE than other alternatives, we use feature supervision on za as follows. Given za, we
+
+try to decode the sentiment of the given sentence x and back propagate the classification error to modify the
+
+values of za. More specifically, the decoding distribution for the ground truth sentiment is represented as:
+
+                                          p(f |za) = Categorical((za))                                                   (5)
+
+Here  is a scaling network to convert the single value za into a two dimensional logit to calculate the
+likelihood of ground-truth sentiment. Next, the network tries to decode the entangled distribution zs from
+the disentangled distribution zf . As described in Eq. 3, we apply the reverse transformation flow to recover
+zs using T inverse flows ft-1(t = 1, . . . , T ). Starting from zT , denoted by zf , we obtain ft-1, i.e. pt(zt-1|zt),
+described using the inverse transformation flow below:
+
+                  zt(1:k) = zt+1(1:k),  and zt(k+1:d) =   zt+1(k+1:d)     -  µt          [µt, t]  =  t(zt(1:k))          (6)
+                                                                   t            , where
+
+It may be noted that µt and t are derived from the neural network t which is shared between the encoder
+and decoder. The log probability density of p(zs|zf ), i.e. log pT (zs|zf ), [6] becomes equivalent to:
+
+                                   log    pT (zs|zf )  =  log  p(zf )  -   T   log  det dft                              (7)
+                                                                          t=1           dft-1
+
+                                                               4
+Finally, with the decoded zs, we sample the word sequence as follows:
+
+                 h(j) = r(x(j - 1), zs) and x(j)  Softmax(m(h(j)))                          (8)
+
+Here r is a gated recurrent unit, which takes the previously generated token x(j - 1) and the sentence
+representation zs to generate the hidden state h(j). Then we pass this hidden state information to a
+feedforward network m to generate logits. Subsequently, we sample words based on the softmax distribution
+of the generated logits. We define the joint likelihood of the sentence, features and the latent variables as:
+
+p(x, f , zs, zf ) = p(x|zs)p(f |zf )p(zs|zf )p(zf ) = p(x|zs)p(f |za)p(zs|zf )p(zf )        (9)
+
+2.4 Training
+
+Instead of optimizing the joint likelihood given in Eq. 9 by training both layers of the hierarchy simultaneously,
+we train DE-VAE in two phases. First, we train the lower layer which is responsible for sentence reconstruction;
+next, we train the transformation flow network as well as the upper layer. We train the lower layer by
+maximizing the marginal likelihood of the input sentence x as follows:
+
+            log p(x)  Eq(zs|x)log p(x|zs) - KL(q(zs|x)||p(zs))                              (10)
+
+Next, we update the flow parameters (Eq. (7)) and impose feature supervision by maximizing the lower
+bound of marginal likelihood of zs which is log p(zs) :
+
+Eq(zf |zs)  log  p(f |za)  +  log  p(zf )  -   T   log  det dft    - KL(q(zf |zs)||p(zf ))  (11)
+                                              t=1           dft-1
+
+    We may further breakdown the KL term of the above objective function by taking an expectation over zs
+as following:
+
+                 Ezq(zs)I(zs, zf ) + KL(q(zf |zs)||p(zf ))                                  (12)
+
+                                                                Total Correlation
+
+As p(zf ) is fully factorized, minimizing the above total correlation loss will benefit the model in achieving
+disentanglement of zf along the dimensions[8]. It is also important that a specified disentangled part of zf ,
+for a designated sentiment f , should carry enough information about that sentiment. Hence, the mutual
+
+information between the sentiment f and za should be high. This mutual information can be computed using
+entropy function H(.) as:
+
+I(f, za) = H(f ) - H(f |za)  ExpD [Eq(zs|x)q(za|zs)log p(f |za)]                            (13)
+
+As I(f, za) is lower bounded by the likelihood p(f |za), we provide extra emphasis of the likelihood term in
+the objective function. To optimize the upper layer and flow parameters we maximize the lower bound of
+log p(zs) as below:
+
+Eq(zf |zs)  log  p(f |za)  +  log  p(zf )  -   T   log  det dft    - KL(q(zf |zs)||p(zf ))  (14)
+                                              t=1           dft-1
+
+where  and  are regularizing parameters to emphasize on increasing the sentiment likelihood and enforce
+the disentanglement of zf . Updating the flow parameters along with high emphasis on disentanglement and
+feature supervision using Eq 14 helps the model to learn the complex transformation of independent features
+zu and za to an enriched entangled zs. The specific details of implementation is provided in the Appendix A.
+
+                                              5
+                   Yelp             Amazon                  IMDB
+                                    Controlled              Controlled
+  Methods    Controlled Text style  generation  Text style  generation  Text style
+                                                transfer                transfer
+   ctrlGen   generation transfer        0.62                    0.76
+     DAE                                0.84       0.63         0.82       0.77
+             0.72        0.70                      0.77                    0.81
+entangleGen                               -        0.82           -        0.66
+             0.95        0.80
+
+             -           0.94
+
+DE-VAE-NR    0.62        0.58       0.59        0.51        0.59        0.53
+
+DE-VAE       0.95        0.84       0.84        0.90        0.90        0.86
+
+Table 1: Controlled generation and Text style transfer accuracy achieved by different methods.
+
+3 Experimental evaluation
+
+In this section, we evaluate the performance of DE-VAE in terms of sentiment control using three different
+evaluation criteria - (a) sentiment control accuracy, (b) fine tuning of sentiment, and (c) content preservation.
+Additionally, we also discuss the extent of disentanglement in the latent space zf .
+
+    For our evaluation, we rely on three large review datasets for sentiment controlled text generation - (a)
+Yelp [25] with 443248, 2000, and 1000 number of labeled data on restaurant review for training, validation,
+and test respectively with a vocabulary size of 9.5K, (b) Amazon [25] with 554997, 2000, and 2000 number of
+labeled data on product review for training, validation, and test respectively with a vocabulary size 25K, and
+(c) IMDB [5] movie review corpus which consists of 708929, 4000, and 2000 number of unlabeled training,
+validation, and test data with a vocabulary size of 28K. This IMDB data has been tagged by Stanford
+sentiment tagger [20] and converted to three sentiment labels, namely, positive, neutral, and negative.
+
+    We compare the performance of DE-VAE with the following baselines that focuses on controlled text
+generation using disentanglement - (a) ctrlGen [9] which is a semi-supervised method for sentiment oriented
+text generation, and (b) DAE [10] which is a supervised method that focuses on disentanglement using
+adversarial loss. Other than these, we also compare DE-VAE with entangleGen [25] which focuses on
+text style transfer using entangled representation. Apart from these state-of-the-art baselines, we also use
+DE-VAE-NR (DE-VAE Non-Reversible transformation) as a baseline which is a variation of DE-VAE.
+In DE-VAE-NR, we replace the invertible normalizing flow used in DE-VAE with two neural networks
+designed as a two layer fully connected feedforward network responsible for capturing q(zf |zs) and p(zs|zf ).
+
+3.1 Sentiment control accuracy
+
+Here we measure the quality of sentiment control by quantitatively evaluating the sentiment oriented sentence
+generation accuracy. For this purpose, we train a sentiment classifier by extending BERT [4]. This classifier
+is 95% accurate on Yelp data and 85% accurate on Amazon and IMDB data which demonstrates its robustness.
+Specifically, DE-VAE generates sentences by regulating the values in the designated dimension of zf which
+is modeled to control the sentiment; we use the pre-trained sentiment classifier to assign sentiment labels to
+the generated sentences. Similarly, we generate sentences using the baseline methods. We report the accuracy
+of sentiment oriented sentence generation in two different ways - (a) Controlled generation accuracy
+which is accuracy of generating sentences where the generative representation is sampled from the prior (i.e.,
+from p(zf ) in case of DE-VAE), followed by assigning the desired value for the sentiment representation
+(i.e., za for DE-VAE), and (b) Text style transfer accuracy which is accuracy of generating sentences
+with opposite polarity sentiment from the representation of a sentence x, bearing a specific type of sentiment
+(in our case, zf  q(zf |zs)q(zs|x), as it regulates sentiment).
+
+    From the results reported in Table 1, it can be observed that DE-VAE outperforms all competing
+methods across all datasets for controlled text generation, other than text style transfer accuracy in case
+of Yelp. The superior performance of DE-VAE stems from the fact that it learns a disentangled feature
+representation where sentiment information is modeled in a single dimension which is independent of other
+dimensions. So, regulating the sentiment value along this designated dimension gives better control while
+generating sentences bearing the same sentiment. Further, in case of DE-VAE-NR, we train the parameters
+of the transformation network by maximizing the likelihood of zs, i.e. Eq(zs|x)p(zs|zf ), such that the
+
+                                                                      6
+    (a) Yelp (Positive)           (b) Amazon (Positive)     (c) Yelp (Negative)             (d) Amazon (Negative)
+
+    (e) Yelp (Positive)           (f) Amazon (Positive)     (g) Yelp (Negative)             (h) Amazon (Negative)
+
+Figure 2: Upper row denotes variation of average sentiment score of generated sentences with fine-tuned
+
+degree of sentiment control. Bottom row indicates variation of Jaccard score of generated sentences with
+
+fine-tuned degree of sentiment control. The original sentence's sentiment is in brackets.
+
+minimum KL between q(zf |zs) and p(zs|zf ) is found to be in the range 0.2 - 0.4 across all datasets;
+however, the performance of DE-VAE-NR is significantly inferior compared to DE-VAE. Close inspection
+reveals that even though the KL was low, as the decoded distribution zs was not exactly the same as the
+encoded distribution, it was generating sentences very different from the original sentences. This shows the
+importance of invertible normalizing flow as a design choice.
+
+    The closest competitor to our method is DAE for controlled text generation with comparable performance
+to DE-VAE. The reason is that DAE achieves disentanglement between style space and content space using
+extensive adversarial training and incorporates auxiliary multi-task loss for sentiment or style. Further, in
+comparison to other methods, ctrlGen performs poorly for controlled text generation. We speculate that
+ctrlGen has comparatively less control than other methods since it does not model feature representation
+from sentence representation and tries to control generation by providing only a one hot encoding of sentiment
+externally. We have reported the accuracy of entangleGen only for text style transfer in Table 1 since it
+focuses only on attribute transfer. We observe that entangleGen achieves better accuracy on Yelp dataset
+than our method; however, DE-VAE performs better on all other datasets. Since entangleGen inherently
+supports binary-valued attributes by design, it can best modify the sentiment value towards its opposite
+polarity using Fast-Gradient-Iterative-Modification. Hence, its performance suffers in IMDB data where there
+are more than two sentiment values.
+
+3.2 Fine tuning of sentiment and Content preservation
+
+In this section, we discuss the performance of DE-VAE in terms of both the evaluation criteria - fine tuning
+
+of sentiment, and content preservation. As by design, DE-VAE is able to capture the entire behaviour of the
+
+sentiment in a continuous latent space of a single dimension, we first estimate the maximum value fmax and
+
+the minimum value fmin of this dimension from the training data. Then we use this range and interpolate
+
+between fmaxand fmin in 20 different sentiment levels where the value of ith level li (1  i  20) is denoted
+
+as  fmin +  . (fmax -fmin )(i-1)  Given  a  feature  representation  zf  corresponding  to  a  sentence  x,  we  assign  a
+
+                        19
+
+level to za (last dimension of zf ) and sample 100 sentences corresponding to this modified za. We repeat this
+
+procedure corresponding to each level. Similarly, we extend ctrlGen to generate sentences by interpolating
+
+20 different values sampled from the range [0, 1] for the structured two-dimensional sentiment representation.
+
+As entangleGen can only regulate the sentiment of the given sentence in the opposite polarity using 35
+
+different degrees of sentiment, we have aggregated them within ten sentiment levels. It may be noted that we
+
+                                                         7
+levels Original Sentence - Positive                                        Original Sentence - Negative
+
+original i ' m very impressed with the level of care here !                but their inventory was questionable !
+
+l1        i am totally disappointed by the help completely not caring .    but their selection was overpriced !
+
+l5        i am totally disappointed with the compassion ( not caring ) .   but their was inventory was ridiculous !
+
+l10       i am totally disappointed by the owners ... not caring .         but their inventory was awful !
+
+l13       i am not totally disappointed by the caring staff !              but their inventory was empty !
+
+l16       i am highly recommend - this resort trulycare !                  their inventory was impressive !
+
+l20       i am truly kind of `impressed' - oh highly recommend this staff ! their selection was outstanding !
+
+Table 2: Fine grained sentiment control of sentences from extreme negative to extreme positive. Bold letters
+
+indicates words with sentiment and the color blue indicates important words to be preserved.
+
+have excluded DAE from this evaluation since it models sentiment in a multi-dimensional space and fine
+
+tuning sentiment in such a space is non-trivial and needs separate investigation. Additionally, we have also
+
+excluded comparison with DE-VAE-NR due to its poor performance on sentiment control.
+
+    To quantitatively measure the performance of fine tuning of sentiment, we have used the pre-trained
+
+Stanford sentiment regressor [20] which provides sentiment scores of sentences generated for DE-VAE and
+
+other methods between [0, 1] with 1 denoting most positive and 0 denoting most negative. Further, we
+
+evaluate the model performance in terms of content preservation while fine tuning sentiment. For this purpose,
+
+we compute Jaccard overlap [23] of unigram words in the original sentence x and the generated sentence y,
+
+computed  as  , |wx wy |  where  w.  denotes  the  set  of   words  after  excluding  stopwords  in  corresponding  sentence.
+
+              |wxwy |
+
+    In Figure 2, we have demonstrated the variation of mean sentiment scores (Figures 2(a)-(d)) and Jaccard
+
+overlap scores (Figures 2(e)-(h)) for different li (with 1 denoting most negative and 20 denoting most positive
+
+control signal). We separately show the variations of mean positive (negative) sentiment value over the
+
+different levels when starting sentiment was negative (positive). We can observe from Figure 2(a) that the
+
+sentiment scores vary over a large range (0.17) between the first and last levels for DE-VAE in case of
+
+Yelp when the original sentence is positive; however, entangleGen can achieve a greater negative sentiment
+
+score for levels 1 - 4. In comparison to these methods, ctrlGen shows a very small drift (0.1) in sentiment
+
+scores over all the levels with almost zero variation for levels 13 - 20. This implies that ctrlGen has lesser
+
+control in fine tuning sentiment scores over the levels compared to DE-VAE. Interestingly, if we check the
+
+corresponding variation of Jaccard overlap in Figure 2(e), we find that the sentences generated by ctrlGen
+
+while fine tuning sentiment performs poorly in terms of preserving content. For entangleGen, the Jaccard
+
+overlap is high only for the levels 6 - 8. On the other-hand, the Jaccard overlap scores are high for DE-VAE
+
+over all the levels demonstrating its effectiveness in content preservation while fine tuning sentiment.
+
+    In case of Amazon data, Figure 2(b) shows that we can easily achieve a smooth variation in the negative
+
+sentiment scores for DE-VAE with a reasonably high drift of 0.08 between the first and last levels. Compared
+
+to DE-VAE, ctrlGen shows negligible drift for levels 11 - 20. Figure 2(b) also shows that entangleGen
+
+performs poorly in fine tuning the sentiment for Amazon. Looking into the corresponding Jaccard overlap
+
+scores in Figure 2(f), it can be easily observed that DE-VAE achieves higher Jaccard overlap scores compared
+
+to other methods with low scores only for the last few levels. Similar observation holds true for the opposite
+
+case when the original sentence is negative across all datasets as evident from Figures 2(c)-(d) and Figures 2(g)-
+
+(h). This signifies the fact that DE-VAE can achieve a superior fine tuning of sentiment while preserving
+
+the content of generated sentences compared to the state-of-the-art methods. Since we could not observe any
+
+significant variation in sentiment scores of generated sentences for IMDB over different levels for any of the
+
+methods, we have not discussed these results for the IMDB dataset.
+
+    Further, we have sampled an original sentence from the data and have shown the corresponding generated
+
+sentences using DE-VAE for different levels in Table 2. As evident from this table, we are able to preserve
+
+the content and semantics of the original sentence while still observing a smooth interpolation in the degree of
+
+sentiment transfer. An interesting observation is that though the exact word overlap is low for the generated
+
+sentences with very high sentiment scores (e.g., l1 and l20 in Table 2), they are semantically similar to the
+
+original sentence. We show more qualitative results in Appendix B.
+
+                                                               8
+3.3 Ablation study
+
+Here we perform an ablation study by demonstrating the importance of the last dimension za of the
+representation zf in capturing sentiment. As we ensure independence of every dimension, we calculate the
+correlation of every dimension of zf with the sentiment labels in the test data. We observe that za achieves
+the highest correlation of 0.72 in Yelp and 0.42 in Amazon. We further train a logistic regression classifier
+with za of training data as a feature to predict sentiment labels, and we achieve a high accuracy of 0.85 and
+0.64 on test data in Yelp and Amazon respectively. While training with the most correlated dimension of
+zf other than za, with a correlation of 0.12 for Yelp and 0.14 for Amazon, we achieve an accuracy of only
+0.52 and 0.58 respectively. This implies that za is the most expressive dimension for capturing sentiment in
+comparison to any other dimension.
+
+4 Conclusion
+
+The major contribution of this paper is to propose DE-VAE which consists of a carefully designed hierarchical
+architecture to maintain both the disentangled feature representation and entangled sentence representation.
+The invertible normalizing flow as a transformation module between the two representation layers of DE-
+VAE enables learning of complex interdependency between disentangled feature and entangled sentence
+representation without the loss of information. Such a design choice is key to achieving accurate fine tuning
+of sentiment while keeping the content intact. This is a key achievement considering the difficulty of the
+problem and modest performance of state-of-the-art techniques. Extensive experiments on real-world datasets
+emphatically establish the well-rounded performance of DE-VAE and its superiority over the baselines.
+
+References
+
+ [1] D. Bahdanau, K. Cho, and Y. Bengio. Neural machine translation by jointly learning to align and
+      translate. arXiv preprint arXiv:1409.0473, 2014.
+
+ [2] S. R. Bowman, L. Vilnis, O. Vinyals, and Dai. Generating sentences from a continuous space. arXiv
+      preprint arXiv:1511.06349, 2015.
+
+ [3] X. Chen, Y. Duan, R. Houthooft, J. Schulman, I. Sutskever, and P. Abbeel. Infogan: Interpretable
+      representation learning by information maximizing generative adversarial nets. In Advances in neural
+      information processing systems, pages 2172­2180, 2016.
+
+ [4] J. Devlin, M.-W. Chang, K. Lee, and K. Toutanova. Bert: Pre-training of deep bidirectional transformers
+      for language understanding. arXiv preprint arXiv:1810.04805, 2018.
+
+ [5] Q. Diao, M. Qiu, C.-Y. Wu, A. J. Smola, J. Jiang, and C. Wang. Jointly modeling aspects, ratings and
+      sentiments for movie recommendation (jmars). In Proceedings of the 20th ACM SIGKDD international
+      conference on Knowledge discovery and data mining, pages 193­202, 2014.
+
+ [6] L. Dinh, J. Sohl-Dickstein, and S. Bengio. Density estimation using real nvp. arXiv preprint
+      arXiv:1605.08803, 2016.
+
+ [7] Z. Fu, X. Tan, N. Peng, D. Zhao, and R. Yan. Style transfer in text: Exploration and evaluation. In
+     Thirty-Second AAAI Conference on Artificial Intelligence, 2018.
+
+ [8] I. Higgins, L. Matthey, A. Pal, C. Burgess, X. Glorot, M. Botvinick, S. Mohamed, and A. Lerchner.
+      beta-vae: Learning basic visual concepts with a constrained variational framework. ICLR, 2(5):6, 2017.
+
+ [9] Z. Hu, Z. Yang, X. Liang, R. Salakhutdinov, and E. P. Xing. Toward controlled generation of text. In
+      Proceedings of the 34th International Conference on Machine Learning-Volume 70, pages 1587­1596.
+      JMLR. org, 2017.
+
+                                                                      9
+[10] V. John, L. Mou, H. Bahuleyan, and O. Vechtomova. Disentangled representation learning for non-parallel
+      text style transfer. arXiv preprint arXiv:1808.04339, 2018.
+
+[11] A. Kannan and O. Vinyals. Adversarial evaluation of dialogue models. arXiv preprint arXiv:1701.08198,
+      2017.
+
+[12] H. Kim and A. Mnih. Disentangling by factorising. arXiv preprint arXiv:1802.05983, 2018.
+
+[13] D. P. Kingma, T. Salimans, R. Jozefowicz, X. Chen, I. Sutskever, and M. Welling. Improved variational
+      inference with inverse autoregressive flow. In Advances in neural information processing systems, pages
+      4743­4751, 2016.
+
+[14] A. Kumar, P. Sattigeri, and A. Balakrishnan. Variational inference of disentangled latent concepts from
+      unlabeled observations. arXiv preprint arXiv:1711.00848, 2017.
+
+[15] P. Li, W. Lam, L. Bing, and Z. Wang. Deep recurrent generative decoder for abstractive text summa-
+      rization. arXiv preprint arXiv:1708.00625, 2017.
+
+[16] L. Logeswaran, H. Lee, and S. Bengio. Content preserving text generation with attribute controls. In
+      Advances in Neural Information Processing Systems, pages 5103­5113, 2018.
+
+[17] D. J. Rezende and S. Mohamed. Variational inference with normalizing flows. arXiv preprint
+     arXiv:1505.05770, 2015.
+
+[18] T. Shen, T. Lei, R. Barzilay, and T. Jaakkola. Style transfer from non-parallel text by cross-alignment.
+      In Advances in neural information processing systems, pages 6830­6841, 2017.
+
+[19] A. Singh and R. Palod. Sentiment transfer using seq2seq adversarial autoencoders. arXiv preprint
+     arXiv:1804.04003, 2018.
+
+[20] R. Socher, A. Perelygin, J. Wu, J. Chuang, C. D. Manning, A. Ng, and C. Potts. Recursive deep models
+      for semantic compositionality over a sentiment treebank. In Proceedings of the 2013 conference on
+     empirical methods in natural language processing, pages 1631­1642, 2013.
+
+[21] I. Sutskever, O. Vinyals, and Q. V. Le. Sequence to sequence learning with neural networks. In Advances
+      in neural information processing systems, pages 3104­3112, 2014.
+
+[22] I. Turc, M.-W. Chang, K. Lee, and K. Toutanova. Well-read students learn better: On the importance
+      of pre-training compact models. arXiv preprint arXiv:1908.08962v2, 2019.
+
+[23] N. Tustison and J. Gee. Introducing dice, jaccard, and other label overlap measures to itk. Insight J, 2,
+      2009.
+
+[24] A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez, L. Kaiser, and I. Polosukhin.
+      Attention is all you need. In Advances in neural information processing systems, pages 5998­6008, 2017.
+
+[25] K. Wang, H. Hua, and X. Wan. Controllable unsupervised text attribute transfer via editing entangled
+      latent representation. In Advances in Neural Information Processing Systems, pages 11034­11044, 2019.
+
+[26] Y. Zhang, N. Ding, and R. Soricut. Shaped: Shared-private encoder-decoder for text style adaptation.
+     arXiv preprint arXiv:1804.04093, 2018.
+
+[27] Z. Zhang, S. Ren, S. Liu, J. Wang, P. Chen, M. Li, M. Zhou, and E. Chen. Style transfer as unsupervised
+      machine translation. arXiv preprint arXiv:1808.07894, 2018.
+
+[28] J. Zhao, Y. Kim, K. Zhang, A. M. Rush, and Y. LeCun. Adversarially regularized autoencoders. arXiv
+      preprint arXiv:1706.04223, 2017.
+
+                                                                     10
+A Parameter Setting
+
+The sentence encoder is designed using pre-trained BERT-base-uncased model (embedding dim = 768)
+followed by 2-layer feed-forward network with hidden dim 200. The output of the same is the sentence
+embedding which is of dimension 256 for Yelp and 300 for Amazon, and IMDB. The flow network is designed
+as R-NVP with T = 3 and each t is designed as three layer feed forward network with tanh activation
+function for the initial two layers and hidden dimension is 100 for the intermediate layers. The scaling
+network for sentiment classification is designed as a two dimensional vector [-1, 1]. The sentence decoder is
+designed as a gated recurrent unit where output of each step is passed through a fully connected feed-forward
+network to convert it to a logit of length of the vocabulary size. To avoid vanishingly small KL term in the
+VAE module Eq. 11, we use a KL term weight linearly annealing from 0 to 1 during training. The weighing
+parameters  and  are set to 10 for feature supervision and disentanglement .
+
+B Qualitative samples
+
+In Table 3, we have provided some comparative examples of the sentiment fine-tuning results. It can be seen
+that ctrlGen provides both positive and negative polarity sentences, but there is very less content overlap in
+comparison to entangleGen and DE-VAE. On further scrutiny we discover, it can only retain content for
+smaller length sentences with less content words. Some examples are given in Table 4.
+
+       DE-VAE                                   entangleGen                         ctrlGen
+
+Orig.          the house fried rice and egg rolls are the best in phoenix .
+l1
+l5     the fried rice dishes are not acceptable the house too way                   rustrated !
+l8
+l10    ,and extremely disappointed .            and egg should ? "
+l12
+l16    the eggs benedict fried rice and         the house too way and egg rolls     this is n't the only restaurant .
+l20    the rice dishes are not acceptable .     were the barely in nothing ?
+
+       the rice dishes of fried rice ,          the house fried rice and egg rolls  their fish is soggy .
+       which is not the perfect                 were the only in phoenix table .
+
+       the rice dishes up fried rice ,          the house fried rice and egg rolls  i will return to give you right new .
+       which is not the wonderful .             are the best in phoenix only .
+
+       the rice combo is the average ,          -                                   the grand staff is nice .
+       eggs and authentic.
+
+       the rice ( the chicken ) are the best ,  -                                   friendly staff is impeccably neat
+       and the same for the staff
+
+       the rice ( the chicken ) are the best    -                                   bar tender and professional .
+
+               Table 3: Comparative example with DE-VAE and other methods
+
+               DE-VAE                                        ctrlGen
+
+       Orig.   food was good , but service was great .
+       l1
+       l20     aweful service                                hate the food , service just .
+
+       Orig.   food was great service was good too . great food .
+       l1
+       l20     will make this place a regular staple .       do n't make this place .
+               will make this place aweful                   i love this place .
+               will make this place great
+
+               Table 4: Sample generated text from shorter original text
+
+C Training time comparison
+
+In this section we provide a comparative analysis of training time and sampling time of DE-VAE with
+entangleGen. Fig 3 shows that DE-VAE is much faster than that of entangleGen for both cases.
+
+                                                                     11
+(a) Training time      (b) Generation time
+
+Figure 3: (a) the time taken (per epoch) for training by DE-VAE and entangleGen on different datasets. (b)
+
+the time taken to generate 1K sentences by DE-VAE and entangleGen on different datasets.
+
+                   12
+

@@ -1,0 +1,221 @@
+Efficient Memory Management for Large Language Model Serving with PagedAttention
+
+arXiv:2309.06180v1 [cs.LG] 12 Sep 2023 Throughput (token/s) Memory usage (GB)
+
+Woosuk Kwon1, Zhuohan Li1, Siyuan Zhuang1 Ying Sheng1,2 Lianmin Zheng1 Cody Hao Yu3 Joseph E. Gonzalez1 Hao Zhang4 Ion Stoica1
+1UC Berkeley 2Stanford University 3Independent Researcher 4UC San Diego
+
+Abstract High throughput serving of large language models (LLMs)
+
+Existing systems 40
+
+vLLM
+
+requires batching sufficiently many requests at a time. However, existing systems struggle because the key-value cache (KV cache) memory for each request is huge and grows and shrinks dynamically. When managed inefficiently, this
+
+Parameters (26GB, 65%)
+
+KV Cache (>30%)
+
+30
+
+20 1.2k
+
+Parameter size
+
+memory can be significantly wasted by fragmentation and redundant duplication, limiting the batch size. To address this problem, we propose PagedAttention, an attention algorithm inspired by the classical virtual memory and paging techniques in operating systems. On top of it, we build
+
+Others NVIDIA A100 40GB
+
+0.8k 0.4k
+0 0
+
+10
+
+20
+
+30
+
+40
+
+Batch size (# requests)
+
+vLLM, an LLM serving system that achieves (1) near-zero Figure 1. Left: Memory layout when serving an LLM with
+
+waste in KV cache memory and (2) flexible sharing of KV 13B parameters on NVIDIA A100. The parameters (gray)
+
+cache within and across requests to further reduce mem- persist in GPU memory throughout serving. The memory
+
+ory usage. Our evaluations show that vLLM improves the for the KV cache (red) is (de)allocated per serving request.
+
+throughput of popular LLMs by 2-4× with the same level A small amount of memory (yellow) is used ephemerally
+
+of latency compared to the state-of-the-art systems, such for activation. Right: vLLM smooths out the rapid growth
+
+as FasterTransformer and Orca. The improvement is more curve of KV cache memory seen in existing systems [31, 60],
+
+pronounced with longer sequences, larger models, and more leading to a notable boost in serving throughput.
+
+complex decoding algorithms. vLLM's source code is publicly
+
+available at https://github.com/vllm-project/vllm.
+
+the cost per request--of LLM serving systems is becoming
+
+more important.
+
+1 Introduction
+The emergence of large language models (LLMs) like GPT [5, 37] and PaLM [9] have enabled new applications such as programming assistants [6, 18] and universal chatbots [19, 35] that are starting to profoundly impact our work and daily routines. Many cloud companies [34, 44] are racing to provide these applications as hosted services. However, running these applications is very expensive, requiring a large number of hardware accelerators such as GPUs. According to recent estimates, processing an LLM request can be 10× more expensive than a traditional keyword query [43]. Given these high costs, increasing the throughput--and hence reducing
+
+At the core of LLMs lies an autoregressive Transformer model [53]. This model generates words (tokens), one at a time, based on the input (prompt) and the previous sequence of the output's tokens it has generated so far. For each request, this expensive process is repeated until the model outputs a termination token. This sequential generation process makes the workload memory-bound, underutilizing the computation power of GPUs and limiting the serving throughput.
+Improving the throughput is possible by batching multiple requests together. However, to process many requests in a batch, the memory space for each request should be efficiently managed. For example, Fig. 1 (left) illustrates the memory distribution for a 13B-parameter LLM on an NVIDIA
+
+Permission to make digital or hard copies of part or all of this work for personal or classroom use is granted without fee provided that copies are not made or distributed for profit or commercial advantage and that copies bear this notice and the full citation on the first page. Copyrights for thirdparty components of this work must be honored. For all other uses, contact the owner/author(s).
+
+A100 GPU with 40GB RAM. Approximately 65% of the memory is allocated for the model weights, which remain static during serving. Close to 30% of the memory is used to store the dynamic states of the requests. For Transformers, these states consist of the key and value tensors associated with the attention mechanism, commonly referred to as KV cache [41],
+
+SOSP '23, October 23­26, 2023, Koblenz, Germany © 2023 Copyright held by the owner/author(s). ACM ISBN 979-8-4007-0229-7/23/10. https://doi.org/10.1145/3600006.3613165
+
+which represent the context from earlier tokens to generate new output tokens in sequence. The remaining small
+Equal contribution.
+
+1
+
+Token states
+
+Reservation
+
+Internal frag.
+
+External frag. & Others
+
+100
+
+8.9
+
+decoding algorithms, such as parallel sampling and beam search, that generate multiple outputs per request. In these scenarios, the request consists of multiple sequences that can
+
+KV cache usage (%)
+
+80
+
+60
+
+57.3
+
+40
+13.3 20
+20.4
+0 Orca (Max)
+
+41.6
+13.6 17.9 26.8 Orca (Pow2)
+
+36.6 25.2 38.2 Orca (Oracle)
+
+96.3 vLLM
+
+partially share their KV cache. However, memory sharing is not possible in the existing systems because the KV cache of the sequences is stored in separate contiguous spaces.
+To address the above limitations, we propose PagedAttention, an attention algorithm inspired by the operating system's (OS) solution to memory fragmentation and sharing: virtual memory with paging. PagedAttention divides the request's KV cache into blocks, each of which can contain the attention keys and values of a fixed number of tokens. In
+
+Figure 2. Average percentage of memory wastes in different LLM serving systems during the experiment in §6.2.
+
+PagedAttention, the blocks for the KV cache are not necessarily stored in contiguous space. Therefore, we can manage the KV cache in a more flexible way as in OS's virtual mem-
+
+ory: one can think of blocks as pages, tokens as bytes, and
+
+percentage of memory is used for other data, including ac- requests as processes. This design alleviates internal frag-
+
+tivations ­ the ephemeral tensors created when evaluating mentation by using relatively small blocks and allocating
+
+the LLM. Since the model weights are constant and the ac- them on demand. Moreover, it eliminates external fragmen-
+
+tivations only occupy a small fraction of the GPU memory, tation as all blocks have the same size. Finally, it enables
+
+the way the KV cache is managed is critical in determining memory sharing at the granularity of a block, across the
+
+the maximum batch size. When managed inefficiently, the different sequences associated with the same request or even
+
+KV cache memory can significantly limit the batch size and across the different requests.
+
+consequently the throughput of the LLM, as illustrated in
+
+In this work, we build vLLM, a high-throughput distributed
+
+Fig. 1 (right).
+
+LLM serving engine on top of PagedAttention that achieves
+
+In this paper, we observe that existing LLM serving sys- near-zero waste in KV cache memory. vLLM uses block-level
+
+tems [31, 60] fall short of managing the KV cache memory memory management and preemptive request scheduling
+
+efficiently. This is mainly because they store the KV cache of that are co-designed with PagedAttention. vLLM supports
+
+a request in contiguous memory space, as most deep learning popular LLMs such as GPT [5], OPT [62], and LLaMA [52]
+
+frameworks [33, 39] require tensors to be stored in contigu- with varying sizes, including the ones exceeding the memory
+
+ous memory. However, unlike the tensors in the traditional capacity of a single GPU. Our evaluations on various models
+
+deep learning workloads, the KV cache has unique characteristics: it dynamically grows and shrinks over time as the
+
+and workloads show that vLLM improves the LLM serving throughput by 2-4× compared to the state-of-the-art sys-
+
+model generates new tokens, and its lifetime and length are tems [31, 60], without affecting the model accuracy at all. The
+
+not known a priori. These characteristics make the existing improvements are more pronounced with longer sequences,
+
+systems' approach significantly inefficient in two ways:
+
+larger models, and more complex decoding algorithms (§4.3).
+
+First, the existing systems [31, 60] suffer from internal and external memory fragmentation. To store the KV cache of
+
+In summary, we make the following contributions: · We identify the challenges in memory allocation in serving
+
+a request in contiguous space, they pre-allocate a contiguous chunk of memory with the request's maximum length
+
+LLMs and quantify their impact on serving performance. · We propose PagedAttention, an attention algorithm that
+
+(e.g., 2048 tokens). This can result in severe internal frag-
+
+operates on KV cache stored in non-contiguous paged
+
+mentation, since the request's actual length can be much
+
+memory, which is inspired by the virtual memory and
+
+shorter than its maximum length (e.g., Fig. 11). Moreover, even if the actual length is known a priori, the pre-allocation
+
+paging in OS. · We design and implement vLLM, a distributed LLM serving
+
+is still inefficient: As the entire chunk is reserved during the request's lifetime, other shorter requests cannot utilize any
+
+engine built on top of PagedAttention. · We evaluate vLLM on various scenarios and demonstrate
+
+part of the chunk that is currently unused. Besides, external
+
+that it substantially outperforms the previous state-of-the-
+
+memory fragmentation can also be significant, since the pre-
+
+art solutions such as FasterTransformer [31] and Orca [60].
+
+allocated size can be different for each request. Indeed, our
+
+profiling results in Fig. 2 show that only 20.4% - 38.2% of the KV cache memory is used to store the actual token states in
+
+2 Background
+
+the existing systems.
+
+In this section, we describe the generation and serving pro-
+
+Second, the existing systems cannot exploit the opportu- cedures of typical LLMs and the iteration-level scheduling
+
+nities for memory sharing. LLM services often use advanced used in LLM serving.
+
+2
+
+

@@ -1,0 +1,1512 @@
+                                        Differentially Private Preference Data Synthesis for
+                                                  Large Language Model Alignment
+
+                                        Fengyu Gao 1 Jing Yang 1 2
+
+arXiv:2605.30808v1 [cs.CR] 29 May 2026                          Abstract                                         1. Introduction
+
+                                              Preference alignment is a crucial post-training                    Preference alignment techniques, such as RLHF (Stiennon
+                                              step for large language models (LLMs) to en-                       et al., 2020) and DPO (Rafailov et al., 2024), are widely
+                                              sure their outputs align with human values. How-                   used to align LLMs with human expectations. These al-
+                                              ever, post-training on real human preference data                  gorithms rely on pairwise preference data, where human
+                                              raises privacy concerns, as these datasets often                   annotators compare two responses and select the one that
+                                              contain sensitive user prompts and human judg-                     better addresses the given prompt. Such preference data is
+                                              ments. To address this, we propose DPPrefSyn,                      then used to fine-tune LLMs by encouraging the model to
+                                              a novel algorithm for generating differentially                    rank preferred responses over less preferred ones (Ziegler
+                                              private (DP) synthetic preference data to enable                   et al., 2019; Ouyang et al., 2022; Bai et al., 2022). The
+                                              privacy-preserving preference alignment. DPPref-                   effectiveness and reliability of preference alignment have
+                                              Syn is a principled framework grounded in the                      motivated its adoption in applications such as chat assistants
+                                              Bradley­Terry preference model and the intrin-                     (Achiam et al., 2023), mathematical reasoning tools (Shao
+                                              sic geometric structure of pairwise human pref-                    et al., 2024), and code generators (Shen et al., 2023).
+                                              erence data. It first learns an underlying pref-
+                                              erence model from private data with formal dif-                    However, aligning LLMs with human preference data raises
+                                              ferential privacy guarantees, and then leverages                   substantial privacy concerns, since these datasets frequently
+                                              the learned model together with public prompts                     include real user prompts and human feedback. These
+                                              to synthesize high-quality preference data. It ex-                 prompts may disclose personal information related to health,
+                                              ploits the shared linear structure of per-cluster                  identity, or other sensitive topics, and human feedback may
+                                              reward models to effectively capture heteroge-                     reveal private beliefs, preferences, or behavioral patterns
+                                              neous human preferences in private datasets, and                   (Li et al., 2023; Yu et al., 2024). Existing works (Chowd-
+                                              leverages DP Principal Component Analysis (DP-                     hury et al., 2024; Yu et al., 2024; Wu et al., 2023a) have
+                                              PCA) to improve learning accuracy. Extensive                       explored approaches to mitigate these risks using the rig-
+                                              experimental results demonstrate that DPPrefSyn                    orous privacy safeguards provided by differential privacy
+                                              achieves competitive alignment performance un-                     (DP) (Dwork et al., 2006b) and shown encouraging results.
+                                              der strong DP guarantees. These findings high-                     However, many of these approaches protect only part of the
+                                              light the potential of synthetic preference data                   data, for example, by privatizing either the user prompts
+                                              as a practical alternative for privacy-preserving                  (Yu et al., 2024) or the preference labels (Chowdhury et al.,
+                                              preference alignment across a broad range of ap-                   2024; Zhang et al., 2025), but not both. Such partial protec-
+                                              plications. To the best of our knowledge, this                     tion leaves potential privacy gaps, as adversaries could still
+                                              is the first work to generate DP synthetic prefer-                 infer sensitive attributes from unprotected prompts or pref-
+                                              ence data for LLM alignment. Our code is avail-                    erence annotations. Besides, such works usually focus on
+                                              able at https://github.com/gfengyu/Differentially-                 specific post-training algorithms, such as RLHF (Wu et al.,
+                                              Private-Preference-Data-Synthesis.                                 2023a), and are not compatible with newer methods like
+                                                                                                                 DPO. Moreover, these methods are typically constrained
+                                           1Department of Computer Science, University of Virginia, Char-        by limited private preference datasets, and often fall short
+                                        lottesville, Virginia, USA 2Department of Electrical and Computer        in achieving high-quality preference alignment, due to the
+                                        Engineering, University of Virginia, Charlottesville, Virginia, USA.     high cost and scalability challenges associated with collect-
+                                        Correspondence to: Jing Yang <yangjing@virginia.edu>.                    ing human preference annotations. These gaps lead to the
+                                                                                                                 central question of this work:
+                                        Proceedings of the 43 rd International Conference on Machine
+                                        Learning, Seoul, South Korea. PMLR 306, 2026. Copyright 2026             Is it possible to achieve superior preference alignment while
+                                        by the author(s).                                                          ensuring thorough privacy protection and maintaining
+
+                                                                                                              1
+Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+  compatibility with emerging alignment methodologies?             LLMs with strong privacy guarantees. Moreover, DPPref-
+                                                                   Syn can be applied to various preference optimization
+In this work, we provide an affirmative answer to this ques-       methods (e.g., DPO and RLHF) and remains effective un-
+tion. Our main contributions are summarized as follows:            der strong privacy constraints, overcoming the limitations
+                                                                   of other privacy-preserving post-training approaches that
+· We introduce a new algorithm DPPrefSyn (Figure 1) to             are tailored to specific methods.
+  generate DP synthetic preference data for LLM align-
+  ment. DPPrefSyn is a principled framework grounded             2. Related Work
+  in the Bradley­Terry preference model and the intrinsic
+  geometric structure of pairwise human preference data.         Differentially Private Alignment of LLMs. Wu et al.
+  It features the following design elements: 1) Capturing        (2023a) introduce a DP framework to align LLMs with
+  diverse human preferences via shared linear structure          reinforcement learning by adapting the PPO algorithm to
+  of rewards and clustering. The Bradley­Terry prefer-           the DP setting. However, their approach is limited to PPO,
+  ence model, together with a linear reward structure, en-       while preference alignment continues to evolve with new
+  ables us to group preference samples based on embed-           methods. Chowdhury et al. (2024) study the problem of
+  ding differences between concatenated prompt­preferred         reward estimation from preference-based feedback, using
+  and prompt­dispreferred pairs, and to approximate prefer-      the notion of label-DP (Ghazi et al., 2021) to protect the
+  ences within each cluster using a shared reward function.      privacy of human annotators. Zhang et al. (2025) propose
+  2) Improving learning efficiency through DP-PCA. To            AUP-RLHF, a user-level label-DP framework for RLHF.
+  address sample inefficiency and clustering instability in      While both methods are effective at safeguarding preference
+  high-dimensional spaces, we apply DP-PCA to project            labels, they do not address the sensitivity of prompts or
+  the embeddings into a lower-dimensional space while            responses themselves. Besides, such methods are usually
+  preserving key preference signals under DP. 3) Saving          constrained by the limited private user preference data,
+  privacy budgets by using public prompts. We use public         and may not achieve high-quality preference alignment, as
+  prompts to generate candidate responses and apply private      human preference annotations are costly to obtain. Yu et al.
+  reward models to select preference pairs. This allows us       (2024) focus on protecting sensitive user instructions by
+  to focus the privacy budget entirely on modeling private       generating DP synthetic instructions to replace real ones
+  preferences, improving privacy efficiency.                     during data annotation and model fine-tuning.
+
+· We conduct a rigorous privacy analysis of DPPrefSyn            Beyond preference alignment, several studies focus on pri-
+  and confirm it follows (, )-DP. In our analysis, we first      vate fine-tuning of LLMs using general labeled data, rather
+  allocate a privacy budget 0 to DP-PCA (Amin et al.,            than preference comparisons (Yu et al., 2021; Li et al., 2021;
+  2019) for dimensionality reduction, and 1 to DP-KMeans         Chen et al., 2024; Tang et al., 2024; Zhang et al., 2023; He
+  (Su et al., 2016) for clustering. The remaining budget is      et al., 2022), and some recent work focuses on protecting
+  used to train per-cluster reward models with DP-SGD.           the privacy of in-context prompts for in-context learning
+  We apply the Privacy Random Variable (PRV) accountant          (Duan et al., 2023; Tang et al., 2023; Gao et al., 2024; Hong
+  (Gopi et al., 2021) to tightly compose the DP-SGD privacy      et al., 2023; Wu et al., 2023b).
+  cost, ensuring that DPPrefSyn satisfies (, )-DP. Thanks
+  to the post-processing property of DP, the resulting DP        Differentially Private Synthetic Text Generation. Our
+  synthetic dataset can be reused across multiple preference     work falls within the broader scope of DP synthetic text
+  alignment methods and different LLMs.                          generation. In this area, two representative lines of work
+                                                                 have emerged. The first line fine-tunes a language model on
+· We empirically evaluate DPPrefSyn on standard bench-           private data under DP, and then uses the fine-tuned model to
+  marks, including question answering tasks from OpenAs-         generate synthetic text (Yue et al., 2023; Mattern et al., 2022;
+  sistant (Ko¨pf et al., 2023) and Anthropic-HH (Bai et al.,     Mireshghallah et al., 2023; Carranza et al., 2023; Yu et al.,
+  2022), as well as the TL;DR summarization task (Stien-         2024; Wang et al., 2024; Ochs & Habernal, 2024; Tan et al.,
+  non et al., 2020). Our experiments suggest that synthetic      2025; Carranza et al., 2024). For example, Yu et al. (2024)
+  preference data generated by DPPrefSyn offers strong           privately fine-tune the LLaMA model on private instruction
+  privacy guarantees while achieving competitive utility         data, and then use the resulting model to generate synthetic
+  across diverse tasks. For example, with  = 2, fine-tuning      text for supervised instruction tuning.
+  the Pythia-2.8B model using DPO on our synthetic data
+  achieves a GPT-4o win rate of 56.48% on Anthropic-             Since DP fine-tuning can be expensive and sometimes in-
+  HH, significantly outperforming fine-tuning on real data       feasible (especially for non-public language models), a re-
+  (37.02%). These results show that our DP synthetic pref-       cent line of work explores DP synthetic data generation by
+  erence data can enable effective preference alignment of       prompting LLM APIs (Lin et al., 2023; Xie et al., 2024;
+
+                                                              2
+Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+Figure 1. Overview of DPPrefSyn. DPPrefSyn generates DP synthetic preference data through 3 steps: 1) representing preference samples
+as embedding differences and clustering them via DP-PCA and DP-KMeans, 2) training DP reward models on each cluster using DP-SGD,
+and 3) generating synthetic preference samples from public prompts guided by the DP-protected distribution of reward functions.
+
+Wu et al., 2024; Hou et al., 2024). These approaches typi-          (DPO) (Ouyang et al., 2022; Zhu et al., 2023; Rafailov et al.,
+cally generate synthetic samples using LLM API access and           2024; Liu et al., 2023), we model human preferences using
+then select outputs that are similar to the private data in a       the Bradley­Terry model (Bradley & Terry, 1952):
+privacy-preserving manner. For instance, Xie et al. (2024)
+propose the Aug-PE algorithm, which iteratively refines             P[a+i    ai-  |  xi]  =             exp(r(xi, ai+))
+LLM-generated samples based on embedding-space similar-                                      exp(r(xi, a+i )) + exp(r(xi, ai-))
+ity to private data. Our work aligns with this line of research
+and focuses on preference alignment for LLMs.                                             = (r(xi, ai+) - r(xi, ai-)),
+
+Diversity in Human Preferences. Recent works highlight              where a+i  a-i means a+i is preferred to ai-, r(x, a) is
+that human preferences are inherently diverse (Denton et al.,       a latent reward function, and (z) = 1/(1 + e-z) is the
+2021; Aroyo et al., 2023a;b; Chakraborty et al., 2024). The         sigmoid function.
+key factors include sociodemographic differences (e.g., race,
+gender, age), personal beliefs and biases, varying levels of        This formulation underlies both RLHF, which explicitly
+domain expertise, and the inherent ambiguity of natural             learns a reward model from preference data, and DPO,
+language (Sandri et al., 2023; Vogels, 2021). Motivated by          which induces an implicit reward through the log-ratio be-
+this, recent studies have explored personalizing preference         tween the learned policy and a reference policy.
+alignment to better reflect the values of different user groups
+(Lee et al., 2024b; Poddar et al., 2024; Singh et al., 2025).       Differentially Private Preference Data Synthesis. We
+For example, Singh et al. (2025) propose a meta-learning            aim to protect the privacy of the preference dataset Dpriv =
+framework where an LLM adapts to individual users using             {(xi, a+i , a-i )}ni=1 against an adversary who attempts to
+a small number of preference examples. In this work, we             access or infer private information about individual prompts,
+generate DP synthetic preference data that captures the             responses, or preference labels based on outputs of the fine-
+underlying diversity of human feedback, leading to improved         tuned LLM. To achieve this, we propose to generate a DP
+alignment performance compared to approaches that ignore            synthetic preference dataset D~ = {(x~j, a~j+, a~j-)}m j=1 that
+such diversity (as shown in Section 5.3).                           preserves critical preference information in Dpriv. Thanks to
+                                                                    the post-processing property of DP, D~ can be reused across
+3. Problem Definition                                               various preference alignment methods and LLMs without
+                                                                    incurring additional privacy cost.
+Preference Alignment of LLMs. We consider preference
+alignment of an LLM based on pairwise human feedback,               We formally define (, )-differential privacy as follows.
+using a preference dataset D = {(xi, a+i , a-i )}ni=1. Each
+sample consists of a prompt xi and two responses a+i , a-i ,        Definition 3.1 ((, )-Differential Privacy (Dwork et al.,
+where a+i is preferred over a-i by human annotators.                2006a)). A randomized algorithm A is (, )-differentially
+                                                                    private if for any two neighboring inputs D and D that
+Following prior works on reinforcement learning from hu-            differ by a single entry and any set S of possible outputs:
+man feedback (RLHF) and direct preference optimization              P[A(D)  S]  eP[A(D)  S] + .
+
+                                                                    Diverse User Preferences and Linear Reward Structure.
+                                                                    Human preferences in the private dataset are usually not
+
+                                                                 3
+Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+homogeneous (Chakraborty et al., 2024; Bakker et al., 2022;         ing this approach are meaningful and interpretable in terms
+Kovac et al., 2023; Jang et al., 2023; Rame et al., 2023; Ji        of user preference styles.
+et al., 2023). Different annotators may prioritize different
+aspects of a response, such as factual accuracy, politeness,        Adopting DP-PCA to Obtain Effective Features. One
+creativity, or clarity, resulting in diverse and sometimes          natural choice for the feature vector (x, a) is the embed-
+conflicting signals in the data. To synthesize D~, it is thus       ding of the corresponding (prompt, response) pair, as em-
+critical to capture the diverse human preferences in Dpriv.         beddings encode semantic similarities and differences that
+                                                                    directly underlie human preference judgments. However,
+To facilitate this, we assume a linear structure for the latent     the embeddings are usually high-dimensional (e.g., 1024
+reward function (Saha et al., 2023; Kong & Yang, 2022; Zhu          dimensions) in order to capture rich semantic and stylis-
+et al., 2023). Specifically, we adopt a linear reward model         tic features. Learning in such a high-dimensional space
+                                                                    typically requires a large number of samples, which is in-
+                     r(x, a) = , (x, a),                            herently limited by the number of samples available within
+                                                                    each cluster. To mitigate this issue, we apply differentially
+where (x, a)  Rd is the shared feature vector and   Rd              private PCA (DP-PCA) (Amin et al., 2019; Liu et al., 2022)
+is a user-dependent parameter.                                      to reduce the dimensionality of the embeddings and obtain
+                                                                    compact feature representations for clustering and reward
+The linear structure offers a balance between expressive-           model training. This step improves sample efficiency and
+ness and tractability for modeling diverse user preferences.        clustering stability while preserving the essential preference
+While individual users may exhibit heterogeneous prefer-            signals necessary for effective alignment.
+ences, their reward functions often share common semantic
+features in a learned embedding space (i.e., (x, a)), differ-       Utilizing Public Prompts to Save DP Budget. Synthe-
+ing primarily in how these features are weighted (i.e., ).          sizing prompts, preferred responses and less preferred re-
+Such a linear parameterization captures this shared struc-          sponses simultaneously can quickly exhaust the privacy
+ture while allowing variability across users or preference          budget and degrade utility. To address this, we choose to
+clusters, enabling effective modeling of preference hetero-         use public prompts to avoid spending privacy budget on
+geneity with limited data and strong privacy constraints. As        synthesizing DP prompts, allowing us to allocate the entire
+demonstrated by our experimental results in Section B.6, the        budget to modeling preferences over responses. For each
+linear reward structure effectively captures preference sig-        public prompt, we generate multiple candidate responses
+nals and achieves competitive performance compared to a             using an LLM and apply a distribution of reward functions,
+fully fine-tuned GPT-2 reward model, despite its simplicity.        which is trained from private preference data under DP, to
+                                                                    construct preference pairs. While public prompts may differ
+4. Proposed Method                                                  in distribution from private ones, our experiments show that,
+                                                                    despite this distribution shift in prompts, the synthetic pref-
+4.1. Key Components of the Algorithm Design                         erence data preserves the statistical preference distribution
+                                                                    in the private preference dataset and remains effective for
+Before detailing our design, we highlight several key com-          downstream preference alignment tasks.
+ponents of the algorithm that address the major challenges
+in synthesizing differentially private preference data.             4.2. DPPrefSyn Algorithm
+
+Leveraging Linear Reward Structure for Preference                   We now introduce the DPPrefSyn algorithm (Algorithm 1),
+Clustering. The linear reward model indicates that                  which generates a DP synthetic preference dataset from the
+                                                                    private dataset Dpriv. DPPrefSyn consists of 3 main steps:
+    P[ai+  a-i | xi] = (, (xi, ai+) - (xi, ai-)).
+                                                                    Step 1: Preference Representation and Clustering. We
+Therefore, for a tuple (xi, a+i , a-i ), ai+  a-i implies that      encode each prompt-response pair in Dpriv using a public
+, (xi, a+i ) - (xi, a-i )  0, i.e., the preference vector           sentence embedding model . Specifically, for each sam-
+ is strongly aligned with (xi, ai+)-(xi, a-i ). For human           ple (xi, ai+, ai-), we first concatenate the prompt with each
+annotators with similar preferences, the feature difference         response to form two texts: [xi; a+i ] and [xi; ai-]. We then
+vectors (xi, ai+) - (xi, a-i ) across their rated pairs are         compute their embeddings via , and define their difference
+therefore expected to point in similar directions in the em-        as di  (xi, a+i ) - (xi, a-i ) (Line 3).
+bedding space. Motivated by this intuition, we cluster the
+user preference samples based on the feature difference vec-        To reduce dimensionality privately, we apply DP-PCA
+tors (xi, ai+)-(xi, a-i ), such that user preferences within        (Amin et al., 2019) to {di}in=1, obtaining a projection ma-
+the same cluster can be well approximated by a shared re-           trix P  Rd×p under 0-DP (Line 5). Roughly speaking,
+ward function parameterized by a common preference vector           DP-PCA (Amin et al., 2019) approximates the eigendecom-
+. In Section B.9, we show that the clusters constructed us-
+
+                                                                 4
+Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+position of the data covariance matrix by estimating the col-           Algorithm 1 DPPrefSyn
+
+lections of eigenvalues and eigenvectors separately in a DP              1: Input: Private dataset Dpriv = {(xi, a+i , ai-)}ni=1, pub-
+                                                                             lic prompts {x~j}jm=1, embedding model , number of
+manner. Each di is then projected to a lower-dimensional                     clusters K, an LLM LLM(·), DP parameters 0, 1, 2.
+space as zi  Pdi (Line 6). We apply DP-KMeans clus-
+tering (Su et al., 2016) on {zi}ni=1 to group samples with               2: for each (xi, ai+, ai-) in Dpriv do
+similar preference patterns under 1-DP, forming K clus-                  3: di  (xi, a+i ) - (xi, a-i ), where di  Rd
+ters C1, . . . , CK in Line 7. Roughly, DP-KMeans (Su et al.,            4: end for
+                                                                         5: P  DP-PCA({di}in=1, 0), where P  Rd×p
+2016) is a DP version of the Lloyd algorithm.                            6: {zi}ni=1  {Pdi}in=1
+                                                                         7: C1, ..., CK  DP-KMeans({zi}ni=1, K, 1)
+Step 2: DP Reward Model Training. For each cluster                       8: for each cluster Ck do
+Ck, we learn the shared preference vector k  Rp that                     9: Train a linear reward model k on Ck using DP-SGD
+captures preference patterns by minimizing the negative
+                                                                                with noise multiplier 2 (Equation (1))
+log-likelihood (Line 9):                                                10: end for
+                                                                        11: h  [|C1|, . . . , |CK |]
+1                                                                       12: p  h/|Dpriv|
+LMLE(k) = - |Ck| ziCk log  (k, zi) ,  (1)                               13: for each public prompt x~j do
+                                                                        14: Generate responses a~1j , . . . , a~jL  LLM(x~j)
+where zi is the DP-PCA projected embedding difference                   15: Sample cluster index k  p
+from Step 1. Each reward model is trained with the DP-SGD               16: c  arg maxl[L]k, P(x~j , a~lj )
+algorithm (a DP variant of SGD) (Abadi et al., 2016) using              17: r  arg minl[L]k, P(x~j , a~lj )
+noise multiplier 2.                                                     18: Add (x~j, a~jc, a~jr) to D~
+                                                                        19: end for
+Step 3: DP Synthetic Preference Generation. We com-                     20: return D~.
+pute a histogram h = [|C1|, . . . , |CK |] representing the num-
+ber of samples in each cluster (Line 11). We normalize                  et al., 2021) to compose the privacy costs of each DP-SGD
+it to get a probability distribution p over the clusters, i.e.,         step, ensuring that it satisfies ( - 0 - 1, )-DP. All other
+p  h/|Dpriv| (Line 12).                                                 steps involve only public data or post-processing, and incur
+                                                                        no additional privacy cost. We provide a full proof and code
+Next, for each public prompt x~j, we use a relatively high              for privacy accounting in Section A.
+
+temperature to prompt an LLM to generate L diverse can-                 Discussion on Prompt Distribution Shift. DPPrefSyn
+didate responses a~j1, . . . , a~Lj (Line 14). We then sample           remains effective even when the prompt distribution is dif-
+a cluster index k  p according to the DP histogram                      ferent in private and public datasets. We note that the diverse
+(Line 15) and evaluate the responses a~1j , . . . , a~Lj using the      user preference is captured through k, the parameter in the
+reward model parameterized by k. To do this, we first                   linear reward model, instead of (x, a), the feature vector
+compute the embeddings (x~j, a~lj) for l = 1, . . . , L, and            associated with the prompt-response pair. To make this intu-
+project them into the DP-PCA subspace using P. The re-                  itive, consider that a human user may interact with an LLM
+ward value for a~lj is then computed as k, P(x~j, a~lj).                through diverse prompts, though their underlying preference
+We select the responses with the highest and lowest re-                 does not vary. Therefore, as long as we ensure the distribu-
+                                                                        tion of k resembles that in the private dataset, the resulting
+ward values as the preferred and less preferred responses,              synthetic preferences will still reflect the private preference
+respectively: c  arg maxl[L]k, P(x~j, a~jl ), r                         patterns. This is achieved by randomly sampling a cluster
+arg minl[L]k, P(x~j, a~jl ) (Lines 16-17). If the value                 index k according to the DP histogram (Line 15) for each
+gap is too small (e.g., < 0.5), we discard the sample to en-            public prompt, and then select the synthetic response pairs
+sure preference quality. Otherwise, we add (x~j, a~cj, a~jr) to D~.     accordingly. Therefore, even if the prompt distribution may
+This process is repeated for all public prompts, producing a            differ in private and public datasets, DPPrefSyn can still
+DP synthetic preference dataset D~.                                     preserve the preference patterns captured in the private data.
+
+Privacy Analysis of DPPrefSyn. We allocate a privacy bud-               5. Experiments
+get 0 to DP-PCA (Line 5), and 1 to DP-KMeans (Line 7),
+with the remaining budget used to train per-cluster reward              Datasets. We evaluate on question answering and summa-
+models using DP-SGD with noise multiplier 2 (Line 9).                   rization tasks. For question answering, we use the OpenAs-
+For training DP reward models, we apply parallel compo-
+sition of DP: since the clusters are disjoint, modifying one
+data point in the training data affects only one cluster, so
+the total privacy cost is bounded by the cost of training on
+the smallest cluster. We ensure a known lower bound on the
+cluster size by discarding clusters with too few samples. We
+use the Privacy Random Variable (PRV) accountant (Gopi
+
+                                                                     5
+Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+sistant dataset (Ko¨pf et al., 2023), which contains assistant-     trade-off. Our main results are presented in Table 1.
+style conversations, and the Anthropic-HH dataset (Bai et al.,
+2022), which provides human preference comparisons fo-              RQ1: Can DPPrefSyn be a better choice than fine-tuning
+cused on helpfulness and harmlessness. For summarization,           on real private data? DPPrefSyn consistently achieves
+we use the TL;DR dataset (Stiennon et al., 2020), which             a stronger privacy­utility trade-off than DP-FT across
+contains annotations of human preference on pairs of sum-           all tasks under  = 0.5, 1, 2, 4, 8, and outperforms the
+maries. To simulate public data, we use prompts from Al-            utility of fine-tuning on real private data without DP con-
+paca (Taori et al., 2023) for the OpenAssistant QA task,            straints (DP-FT with  = ), while preserving privacy.
+SafeRLHF (Ji et al., 2024) for the Anthropic-HH QA task,            For instance, on the OpenAssistant QA task with  = 2,
+and XSum (Narayan et al., 2018) for the TL;DR summariza-            our approach achieves 9.10% after SFT and 11.04% after
+tion task. Additional details are available in Section B.2.         DPO, compared to DP-FT's 4.38% after SFT and 6.18%
+                                                                    after DPO. Remarkably, while still preserving privacy, DP-
+Setup for Algorithm 1. By default, we use                           PrefSyn achieves higher utility than the non-private baseline
+BAAI/bge-large-en-v1.5 (Xiao et al., 2023) as the                   of fine-tuning on real private data (DP-FT with  = ),
+embedding model . We set the projected dimension p = 20             which reaches 4.75% after SFT and 8.20% after DPO. Sim-
+in DP-PCA and the number of clusters K = 5 in DP-                   ilarly, on the Anthropic-HH dataset with  = 2, DPPrefSyn
+KMeans. For DP-SGD, we use a learning rate of 0.1, a batch          achieves a 55.21% win rate after SFT and 56.48% after
+size of 4, 4 training epochs, and a gradient clipping norm of       DPO, compared to 31.53% and 37.02% achieved by DP-FT,
+1.0. Candidate responses are generated using the instruction-       respectively. It also outperforms direct fine-tuning on real
+finetuned LLaMA-7B-chat model (Touvron et al., 2023)                data (DP-FT with  = ), which achieves 31.98% after
+with a temperature of 0.9. We set the number of candidates          SFT and 38.72% after DPO.
+per prompt to L = 5. We consider overall privacy budgets
+ = 0.5, 1, 2, 4, 8 and set  = 1/|Dpriv|. We study the effect        These results highlight two key advantages of our DP syn-
+of different generator models in Table 3, embedding models          thetic data. First, DPPrefSyn leads to significant perfor-
+and hyperparameters in Section 5.3.                                 mance improvement after SFT alone compared to directly
+                                                                    applying SFT on private data. For example, on the TL;DR
+Evaluation. For downstream preference alignment, we fine-           summarization task with  = 2, DPPrefSyn achieves a win
+tune the Pythia-2.8B model (Biderman et al., 2023). We              rate of 62.49% after SFT, much higher than the 22.57%
+first apply supervised fine-tuning (SFT), where the preferred       achieved by SFT on private data. This is mainly because
+response in the preference dataset is used as the training          DPPrefSyn generates candidate responses using a high-
+target. We then apply the DPO algorithm (Rafailov et al.,           performance LLM, leading to high-quality training data
+2024) to further fine-tune the SFT model using preference           that provides more effective supervision during SFT. This
+pairs. Following Rafailov et al. (2024), we measure the win         advantage holds even with limited public data. For instance,
+rate of the model-generated responses against the preferred         on the OpenAssistant QA task with  = 4 and only 5K pub-
+responses in the test set using the GPT-4o model. We study          lic prompts, DPPrefSyn achieves a win rate of 6.80% after
+more types of downstream models, and different preference           SFT, compared to 4.46% for SFT directly on private data
+alignment methods as ablation study in Section 5.2.                 (Table 4), which contains around 14K samples, highlighting
+                                                                    DPPrefSyn's ability to handle data scarcity while preserving
+Baselines. We compare DPPrefSyn with fine-tuning the                utility. Second, applying DPO with our synthetic data on top
+downstream model on real data using DP-SGD (Abadi et al.,           of the SFT model leads to further improvements, showing
+2016), denoted as DP-FT. Note that DPPrefSyn is more                that our synthetic preference pairs capture meaningful dis-
+reusable and versatile than DP-FT because it generates DP           tinctions aligned with human preferences. This is enabled
+synthetic data that can be used to train different models with      by the private reward functions that capture diverse user
+different alignment algorithms without incurring additional         preferences while preserving privacy. Compared to directly
+privacy cost, while DP-FT consumes the privacy budget in            using private data, the improvement from DPO is smaller
+training a single privatized model. We also include a fully         in our setting, likely because the SFT model trained on our
+private baseline  = 0, where we evaluate the base model             synthetic data already performs well, leaving less room for
+without any preference fine-tuning.                                 optimization. However, for the entire fine-tuning process,
+                                                                    the performance gain using our DP synthetic dataset is still
+Details about the setups, hyperparameters, metrics, and             significantly higher than that using real private data.
+baselines are provided in Section B.3.
+                                                                    RQ2: How does DPPrefSyn perform across different privacy
+5.1. Understanding the Performance of DPPrefSyn                     budget ? First, Table 1 shows that DPPrefSyn generally
+                                                                    achieves better performance compared to DP-FT as  in-
+In this section, we analyze the performance of DPPrefSyn            creases from 0.5, 1, 2, 4, 8 to , indicating good scalability
+by answering two research questions about its privacy-utility
+
+                                                                 6
+       Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+Table 1. GPT-4o win rates on test sets with the downstream Pythia-2.8B model fine-tuned by SFT and DPO.  = 0 denotes the base (fully
+private, non-finetuned) LLM. Compared with DP-FT, DPPrefSyn achieves higher win rates under privacy levels  = 0.5, 1, 2, 4, 8, even
+outperforming the utility of non-private fine-tuning (DP-FT with  = ). Results show mean and standard deviation over 5 random seeds.
+
+Task    = 0 Method Data Type Pref. Alignment  = 0.5  = 1                                  =2                =4            =8        =
+
+                    DP-FT               Original     SFT          3.960.20   4.290.21      4.380.23          4.460.18   4.490.30     4.750.27
+                                                  SFT+DPO         5.650.32   6.040.58      6.180.83          6.120.63   6.320.71     8.200.62
+OpenAssistant 2.11
+                                                     SFT          8.960.39   9.070.32      9.100.51          9.330.56   9.630.38     9.800.58
+                    DPPrefSyn Synthetic           SFT+DPO         9.860.59  10.310.54     11.040.92         11.850.99  12.050.82    12.360.55
+
+                                 DP-FT  Original     SFT    29.770.76       31.100.72     31.530.77         31.290.65  31.370.67    31.980.56
+Anthropic-HH 12.14                                SFT+DPO   35.000.49       36.270.63     37.020.72         36.740.90  36.941.06    38.720.56
+
+                    DPPrefSyn Synthetic              SFT    54.900.66       55.190.91     55.210.82         54.951.10  55.630.86    55.950.70
+                                                  SFT+DPO   55.081.04       55.960.80     56.480.61         56.511.93  56.861.17    57.530.93
+
+                   DP-FT                Original     SFT    21.191.12       22.411.09     22.570.65         22.450.90  23.040.79    23.821.26
+       11.64                                      SFT+DPO   59.690.82       62.211.12     62.021.67         63.000.73  63.060.84    64.521.79
+TL;DR
+                                                     SFT    61.921.06       62.141.61     62.491.48         62.721.66  62.291.14    62.551.23
+                    DPPrefSyn Synthetic           SFT+DPO   67.500.79       68.071.95     68.542.76         68.561.59  71.012.17    72.201.08
+
+Table 2. DPPrefSyn achieves higher win rates than fine-tuning on     Table 3. DPPrefSyn achieves higher win rates than fine-tuning on
+private data across SFT, DPO, and PPO, while providing strong        private data across different downstream LLMs after DPO, while
+privacy guarantees on OpenAssistant. Results show mean and           providing strong privacy guarantees on OpenAssistant. DPPrefSyn
+standard deviation over 5 random seeds.                              can also benefit from more powerful generator LLMs.
+
+Pref. Alignment  = 0 DPPrefSyn ( = 4) DP-FT ( = )                    Downstream LLM  = 0 Method             Generator LLM  = 4  = 
+
+   SFT              9.330.56                      4.750.27                                       DP-FT                 -            54.92 59.41
+SFT+DPO 2.11        11.850.99                     8.200.62
+SFT+PPO             10.110.61                     7.080.78                  Qwen-3-4B     48.17  DPPrefSyn  Qwen-3-4B-Instruct 86.52 87.08
+
+                                                                                                            Llama-3-8B-Instruct 51.69 52.11
+
+                                                                                                 DP-FT                 -            30.06 33.85
+
+                                                                            Gemma-2-2B    7.30   DPPrefSyn  Qwen-3-4B-Instruct 36.24 37.08
+
+                                                                                                            Llama-3-8B-Instruct 36.01 36.66
+
+with privacy budget . Second, DPPrefSyn can be more ro-                                          DP-FT                 -            45.79 59.13
+bust to DP noise than DP-FT in some cases. For example, on
+OpenAssistant with Llama-3-8B as the downstream model,                      Llama-3-8B    16.15  DPPrefSyn  Qwen-3-4B-Instruct 60.25 61.52
+DPO performance for DP-FT drops from 59.13% to 45.79%
+when  decreases from  to 4, while DPPrefSyn drops only                                                      Llama-3-8B-Instruct 42.28 44.10
+slightly from 61.52% to 60.25% (see Table 3 in Section 5.2).
+The reason could be that DP-FT perturbs model parameters             Table 4. DPPrefSyn achieves higher win rates than fine-tuning on
+directly through DP-SGD, whereas DPPrefSyn adds noise                private data with varying public data size m. Results show mean
+during data synthesis, which better preserves utility.               and standard deviation over 5 random seeds.
+
+5.2. Understanding the Properties of DPPrefSyn                                            DPPrefSyn ( = 4)             DP-FT ( = 4) DP-FT ( = )
+
+                                                                     Data Type Synthetic         Synthetic  Synthetic     Original  Original
+                                                                                                                          (14,167)  (14,167)
+                                                                     (Size) (m = 5, 000) (m = 10, 000) (m = 52, 000)
+
+                                                                        SFT   6.800.66           7.300.48   9.330.56      4.460.18  4.750.27
+                                                                     SFT+DPO  9.440.45           9.550.92   11.850.99     6.120.63  8.200.62
+
+In this section, we study properties of DPPrefSyn, including         synthetic data generated by DPPrefSyn? DPPrefSyn can be
+its generalizability across different preference alignment           effective across a wide range of downstream LLMs. In Ta-
+methods and LLMs, its performance under varying scales of            ble 3, we conduct experiments on different downstream mod-
+public data, and its robustness to empirical privacy attacks.        els, including Qwen-3-4B, Gemma-2-2B, and Llama-3-8B,
+                                                                     using Llama-3-8B-Instruct and Qwen3-4B-Instruct-2507 as
+RQ3: Is DPPrefSyn effective across different preference              generator models. We find that DPPrefSyn can outperform
+alignment methods? DPPrefSyn supports various pref-                  fine-tuning on real data, while ensuring privacy across differ-
+erence alignment methods and remains effective under                 ent model families after DPO. For example, using Qwen3-
+strong DP constraints. In Table 2, we evaluate DPPrefSyn             4B-Instruct-2507 as the generator, DPPrefSyn achieves an
+with SFT, DPO, and PPO. For PPO, we train K reward                   86.52% win rate on Qwen-3-4B with  = 4, which sig-
+models (one for each cluster) to capture diverse preference          nificantly outperforms non-private fine-tuning on real data
+patterns. During PPO training, we use the average output             (59.41%). We also observe that DPPrefSyn's performance
+of the K reward models as the reward and optimize the                improves with stronger generator models, with Qwen3-4B-
+policy. We find that DPPrefSyn consistently achieves better          Instruct-2507 outperforming Llama-3-8B-Instruct.
+utility for SFT, DPO, and PPO, compared with fine-tuning
+on private data, while preserving strong privacy guarantees.         RQ5: Can DPPrefSyn be effective with varying scales of
+                                                                     public data? We study the effect of public data size m in
+RQ4: Can more powerful downstream LLMs benefit from
+
+                                                                  7
+            Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+Table 5. DPPrefSyn exhibits lower AUC scores against MIAs                 We defer the details to Section B.4.
+(Feng et al., 2025) on OpenAssistant, close to random guessing.
+Results show mean and standard deviation over 5 random seeds.             5.3. Validating the Design of DPPrefSyn
+
+Downstream LLM Method  Generator LLM             =4         =             We validate the design of DPPrefSyn by studying its algo-
+                                                                          rithmic components in this section.
+            DP-FT          -                     70.152.09 73.522.30
+                                                                          RQ7: How does modeling diverse human preferences impact
+Qwen-3-4B                    Qwen-3-4B-Instruct  50.991.10  50.870.84     DPPrefSyn's performance? We evaluate this by removing
+            DPPrefSyn                                                     either DP-KMeans or DP-PCA, and varying the number
+                       Llama-3-8B-Instruct 50.641.29 49.981.19            of clusters K, using OpenAssistant with  = 4. (i) Re-
+                                                                          moving either DP-KMeans or DP-PCA. Figure 2a shows
+            DP-FT          -                     62.881.78 65.392.59      that removing either DP-KMeans or DP-PCA leads to a
+                                                                          performance drop. Without DP-KMeans, all samples are
+Gemma-2-2B  DPPrefSyn Qwen-3-4B-Instruct 50.511.38 50.430.91              assigned to a single cluster. Removing DP-PCA leads to
+                             Llama-3-8B-Instruct 50.770.83 51.100.54      ineffective clustering and sample-inefficient learning in a
+                                                                          high-dimensional space. Using multiple clusters with both
+            DP-FT          -                     61.952.05 70.131.24      components improves performance over using a single clus-
+                                                                          ter. (ii) Varying the number of clusters K. In Figure 2b,
+Llama-3-8B                   Qwen-3-4B-Instruct  50.530.62  50.960.95     we evaluate DPPrefSyn with K = 1, 3, 5, 8 clusters. As
+            DPPrefSyn                                                     K increases, performance first improves at K = 3 and
+                       Llama-3-8B-Instruct 50.450.87 50.670.96            then remains relatively stable at K = 5, 8. This suggests
+                                                                          that DPPrefSyn is robust to K, and moderate values (e.g.,
+(a) Removing DP-KMeans or     (b) Varying clusters.                       K = 3, 5) provide a good trade-off between diversity and
+DP-PCA.                                                                   data efficiency. Overall, these results show the benefit of
+                                                                          capturing diverse preferences using multiple clusters.
+Table 4. The private dataset (OpenAssistant) contains 14K
+preference annotations, while the full public dataset (Al-                RQ8: How do different embedding models or hyperparame-
+paca) contains 52K prompts. We randomly sample subsets                    ters affect DPPrefSyn's performance? We perform ablation
+of the public prompts at different sizes (m = 5K, 10K, 52K)               studies on the embedding model , DP-PCA dimension p,
+to generate synthetic preference data using DPPrefSyn. We                 number of candidates per prompt L, filter threshold, and pri-
+find that even with only 5K public prompts, DPPrefSyn                     vacy budget allocation in Section B.5. Across different sen-
+achieves a win rate of 6.80% after SFT and 9.44% after                    tence encoders, including bge-large-en-v1.5 (Xiao
+DPO under  = 4, outperforming the DP-FT baseline,                         et al., 2023), all-mpnet-base-v2 (Song et al., 2020),
+which achieves 4.46% and 6.12%, respectively. This shows                  and all-distilroberta-v1 (Sanh et al., 2019), DP-
+that DPPrefSyn remains effective even when the available                  PrefSyn remains consistently effective. We find that p = 20
+public data is limited, thanks to the high-quality responses              provides the best overall performance after DPO, L = 5
+generated by the LLMs and the private reward functions that               serves as a good default choice, and a moderate filtering
+accurately capture user preferences. Besides, as the public               threshold of 0.5 slightly outperforms no filtering, while a
+data size increases, the performance improvement over                     high threshold of 1 is too aggressive and hurts performance.
+the baseline becomes more prominent, indicating that DP-                  Finally, DPPrefSyn is robust to reasonable changes in the
+PrefSyn can effectively leverage the vast amounts of public               budget allocation 0 and 1.
+data for preference alignment, further mitigating the data
+scarcity issue in private preference data.                                RQ9: Are DPPrefSyn's gains over DP-FT simply due to
+                                                                          higher-quality public prompts or stronger response genera-
+RQ6: Can DPPrefSyn effectively mitigate empirical privacy                 tors? To rule out confounding effects, we conduct controlled
+attacks? In Table 5, we perform membership inference                      ablations where all methods share the same prompt set or
+attacks (MIAs) (Shokri et al., 2017) against the DPO fine-                response generator. Under these settings, DPPrefSyn con-
+tuned downstream models on OpenAssistant and report the                   tinues to outperform DP-FT (Appendix B.7), showing that
+AUC score. We follow the prior work (Feng et al., 2025),                  its performance gains do not merely arise from higher-
+where the authors instantiate a MIA on preference data for                quality public prompts or stronger response generators.
+LLM alignment. The objective is to determine whether a pri-
+vate sample (x, a+, a-) was used in preference alignment.                 6. Conclusion
+We find that DP-FT does not sufficiently mitigate MIAs,
+while DPPrefSyn consistently exhibits lower AUC scores,                   In this work, we introduced DPPrefSyn, an algorithm for
+close to random guessing. This suggests that DPPrefSyn                    synthesizing DP preference data from a private dataset. By
+is more robust to empirical privacy attacks, potentially be-
+cause the synthetic nature of the data used for fine-tuning
+inherently reduces the risk of overfitting to real private data.
+
+                                                                       8
+Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+modeling preference diversity via clustering, improving              safety. Advances in Neural Information Processing Sys-
+efficiency with DP-PCA, and conserving privacy budgets               tems, 36:53330­53342, 2023b.
+through public prompts, DPPrefSyn enables effective and
+private preference data synthesis for the alignment of LLMs.      Bai, Y., Jones, A., Ndousse, K., Askell, A., Chen, A., Das-
+Our experiments show that DPPrefSyn achieves privacy                 Sarma, N., Drain, D., Fort, S., Ganguli, D., Henighan, T.,
+guarantees while outperforming fine-tuning on real data.             et al. Training a helpful and harmless assistant with rein-
+                                                                     forcement learning from human feedback. arXiv preprint
+7. Limitations                                                       arXiv:2204.05862, 2022.
+
+DPPrefSyn requires LLM API access to synthesize prefer-           Bakker, M., Chadwick, M., Sheahan, H., Tessler, M.,
+ence data, which may incur additional API costs. Our work            Campbell-Gillingham, L., Balaguer, J., McAleese, N.,
+focuses on English text-based preference data, and extend-           Glaese, A., Aslanides, J., Botvinick, M., et al. Fine-tuning
+ing DPPrefSyn to multilingual settings and multimodal data           language models to find agreement among humans with
+remains an open direction. Additionally, our experiments             diverse preferences. Advances in Neural Information
+cover models up to 8B parameters due to computational               Processing Systems, 35:38176­38189, 2022.
+constraints.
+                                                                  Biderman, S., Schoelkopf, H., Anthony, Q. G., Bradley,
+Impact statement                                                     H., O'Brien, K., Hallahan, E., Khan, M. A., Purohit, S.,
+                                                                     Prashanth, U. S., Raff, E., et al. Pythia: A suite for ana-
+This work enables preference alignment of large language             lyzing large language models across training and scaling.
+models without exposing personal information, which helps            In International Conference on Machine Learning, pp.
+balance the benefits of big data with the need to protect in-        2397­2430. PMLR, 2023.
+dividual privacy, promoting ethical data usage and fostering
+societal trust in an increasingly data-driven world.              Bradley, R. A. and Terry, M. E. Rank analysis of incom-
+                                                                     plete block designs: I. the method of paired comparisons.
+Acknowledgements                                                    Biometrika, 39(3/4):324­345, 1952.
+
+This work was supported in part by the U.S. National Sci-         Carranza, A., Farahani, R., Ponomareva, N., Kurakin, A.,
+ence Foundation under the grant ECCS-2531023.                       Jagielski, M., and Nasr, M. Synthetic query generation
+                                                                     for privacy-preserving deep retrieval systems using dif-
+References                                                           ferentially private language models. In Proceedings of
+                                                                     the 2024 Conference of the North American Chapter of
+Abadi, M., Chu, A., Goodfellow, I., McMahan, H. B.,                  the Association for Computational Linguistics: Human
+   Mironov, I., Talwar, K., and Zhang, L. Deep learning             Language Technologies (Volume 1: Long Papers), pp.
+   with differential privacy. In Proceedings of the 2016 ACM         3920­3930, 2024.
+   SIGSAC conference on computer and communications
+   security, pp. 308­318, 2016.                                   Carranza, A. G., Farahani, R., Ponomareva, N., Kurakin,
+                                                                    A., Jagielski, M., and Nasr, M. Privacy-preserving rec-
+Achiam, J., Adler, S., Agarwal, S., Ahmad, L., Akkaya, I.,           ommender systems with synthetic query generation us-
+   Aleman, F. L., Almeida, D., Altenschmidt, J., Altman, S.,         ing differentially private large language models. arXiv
+   Anadkat, S., et al. Gpt-4 technical report. arXiv preprint        preprint arXiv:2305.05973, 2023.
+   arXiv:2303.08774, 2023.
+                                                                  Chakraborty, S., Qiu, J., Yuan, H., Koppel, A., Manocha,
+Amin, K., Dick, T., Kulesza, A., Munoz, A., and Vassil-              D., Huang, F., Bedi, A., and Wang, M. Maxmin-rlhf:
+   vitskii, S. Differentially private covariance estimation.        Alignment with diverse human preferences. In Interna-
+  Advances in Neural Information Processing Systems, 32,             tional Conference on Machine Learning, pp. 6116­6135.
+   2019.                                                             PMLR, 2024.
+
+Aroyo, L., Diaz, M., Homan, C., Prabhakaran, V., Taylor,          Chen, T., Da, L., Zhou, H., Li, P., Zhou, K., Chen,
+   A., and Wang, D. The reasonable effectiveness of diverse         T., and Wei, H. Privacy-preserving fine-tuning of
+   evaluation data. arXiv preprint arXiv:2301.09406, 2023a.          large language models through flatness. arXiv preprint
+                                                                     arXiv:2403.04124, 2024.
+Aroyo, L., Taylor, A., Diaz, M., Homan, C., Parrish, A.,
+   Serapio-Garc´ia, G., Prabhakaran, V., and Wang, D. Dices       Chowdhury, S. R., Zhou, X., and Natarajan, N. Differen-
+   dataset: Diversity in conversational ai evaluation for            tially private reward estimation with preference feedback.
+                                                                     In International Conference on Artificial Intelligence and
+                                                                    Statistics, pp. 4843­4851. PMLR, 2024.
+
+                                                               9
+Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+Denton, R., D´iaz, M., Kivlichan, I., Prabhakaran, V., and             privacy-preserving prompt engineer. arXiv preprint
+   Rosen, R. Whose ground truth? accounting for individual             arXiv:2312.03724, 2023.
+   and collective identities underlying dataset annotation.
+   arXiv preprint arXiv:2112.04554, 2021.                           Hou, C., Shrivastava, A., Zhan, H., Conway, R., Le, T.,
+                                                                       Sagar, A., Fanti, G., and Lazar, D. Pre-text: Training
+Duan, H., Dziedzic, A., Papernot, N., and Boenisch, F.                 language models on private federated data in the age of
+   Flocks of stochastic parrots: Differentially private prompt         llms. In International Conference on Machine Learning,
+   learning for large language models. Advances in Neural              pp. 19043­19061. PMLR, 2024.
+  Information Processing Systems, 36:76852­76871, 2023.
+                                                                    Jang, J., Kim, S., Lin, B. Y., Wang, Y., Hessel, J., Zettle-
+Dwork, C., Kenthapadi, K., McSherry, F., Mironov, I.,                  moyer, L., Hajishirzi, H., Choi, Y., and Ammanabrolu, P.
+   and Naor, M. Our data, ourselves: Privacy via dis-                  Personalized soups: Personalized large language model
+   tributed noise generation. In Advances in Cryptology-               alignment via post-hoc parameter merging. arXiv preprint
+  EUROCRYPT 2006: 24th Annual International Confer-                    arXiv:2310.11564, 2023.
+   ence on the Theory and Applications of Cryptographic
+  Techniques, St. Petersburg, Russia, May 28-June 1, 2006.          Ji, J., Liu, M., Dai, J., Pan, X., Zhang, C., Bian, C., Chen,
+  Proceedings 25, pp. 486­503. Springer, 2006a.                        B., Sun, R., Wang, Y., and Yang, Y. Beavertails: Towards
+                                                                       improved safety alignment of llm via a human-preference
+Dwork, C., McSherry, F., Nissim, K., and Smith, A. Cal-                dataset. Advances in Neural Information Processing Sys-
+   ibrating noise to sensitivity in private data analysis. In          tems, 36:24678­24704, 2023.
+  Theory of Cryptography: Third Theory of Cryptography
+  Conference, TCC 2006, New York, NY, USA, March 4-7,               Ji, J., Hong, D., Zhang, B., Chen, B., Dai, J., Zheng, B., Qiu,
+  2006. Proceedings 3, pp. 265­284. Springer, 2006b.                  T., Li, B., and Yang, Y. Pku-saferlhf: Towards multi-level
+                                                                       safety alignment for llms with human preference. arXiv
+Dwork, C., Roth, A., et al. The algorithmic foundations of             preprint arXiv:2406.15513, 2024.
+   differential privacy. Foundations and Trends® in Theo-
+   retical Computer Science, 9(3­4):211­407, 2014.                  Kirk, R., Mediratta, I., Nalmpantis, C., Luketina, J., Ham-
+                                                                       bro, E., Grefenstette, E., and Raileanu, R. Understanding
+Feng, Q., Kasa, S. R., KASA, S. K., Yun, H., Teo, C. H.,               the effects of rlhf on llm generalisation and diversity. In
+   and Bodapati, S. B. Exposing privacy gaps: Membership              International Conference on Learning Representations,
+   inference attack on preference data for llm alignment. In          volume 2024, pp. 20620­20653, 2024.
+  International Conference on Artificial Intelligence and
+  Statistics, pp. 5221­5229. PMLR, 2025.                            Kong, D. and Yang, L. Provably feedback-efficient rein-
+                                                                       forcement learning via active reward learning. Advances
+Gao, F., Zhou, R., Wang, T., Shen, C., and Yang, J. Data-              in Neural Information Processing Systems, 35:11063­
+   adaptive differentially private prompt synthesis for in-           11078, 2022.
+   context learning. arXiv preprint arXiv:2410.12085, 2024.
+                                                                    Ko¨pf, A., Kilcher, Y., Von Ru¨tte, D., Anagnostidis, S.,
+Ghazi, B., Golowich, N., Kumar, R., Manurangsi, P., and               Tam, Z. R., Stevens, K., Barhoum, A., Nguyen, D., Stan-
+   Zhang, C. Deep learning with label differential privacy.            ley, O., Nagyfi, R., et al. Openassistant conversations-
+  Advances in neural information processing systems, 34:               democratizing large language model alignment. Advances
+   27131­27145, 2021.                                                  in Neural Information Processing Systems, 36:47669­
+                                                                      47681, 2023.
+Gopi, S., Lee, Y. T., and Wutschitz, L. Numerical composi-
+   tion of differential privacy. Advances in Neural Informa-        Kovac, G., Sawayama, M., Portelas, R., Colas, C., Dominey,
+   tion Processing Systems, 34:11631­11642, 2021.                      P. F., and Oudeyer, P.-Y. Large language models as
+                                                                       superpositions of cultural perspectives. arXiv preprint
+He, J., Li, X., Yu, D., Zhang, H., Kulkarni, J., Lee, Y. T.,           arXiv:2307.07870, 2023.
+   Backurs, A., Yu, N., and Bian, J. Exploring the limits
+   of differentially private deep learning with group-wise          Lee, H., Phatale, S., Mansoor, H., Mesnard, T., Ferret, J., Lu,
+   clipping. arXiv preprint arXiv:2212.01539, 2022.                    K. R., Bishop, C., Hall, E., Carbune, V., Rastogi, A., et al.
+                                                                       Rlaif vs. rlhf: Scaling reinforcement learning from human
+Holohan, N., Braghin, S., Mac Aonghusa, P., and Levacher,              feedback with ai feedback. In International Conference
+   K. Diffprivlib: the IBM differential privacy library. ArXiv         on Machine Learning, pp. 26874­26901. PMLR, 2024a.
+   e-prints, 1907.02444 [cs.CR], July 2019.
+                                                                    Lee, Y., Williams, J., Marklund, H., Sharma, A., Mitchell,
+Hong, J., Wang, J. T., Zhang, C., Li, Z., Li, B., and                  E., Singh, A., and Finn, C. Test-time alignment via hy-
+  Wang, Z. Dp-opt: Make large language model your                      pothesis reweighting. arXiv preprint arXiv:2412.08812,
+                                                                       2024b.
+
+                                                                10
+Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+Li, H., Guo, D., Fan, W., Xu, M., Huang, J., Meng, F.,              Rame, A., Couairon, G., Dancette, C., Gaya, J.-B., Shukor,
+   and Song, Y. Multi-step jailbreaking privacy attacks on             M., Soulier, L., and Cord, M. Rewarded soups: towards
+   chatgpt. In Findings of the Association for Computational           pareto-optimal alignment by interpolating weights fine-
+  Linguistics: EMNLP 2023, pp. 4138­4153, 2023.                        tuned on diverse rewards. Advances in Neural Informa-
+                                                                       tion Processing Systems, 36:71095­71134, 2023.
+Li, X., Tramer, F., Liang, P., and Hashimoto, T. Large lan-
+   guage models can be strong differentially private learners.      Saha, A., Pacchiano, A., and Lee, J. Dueling rl: Reinforce-
+   arXiv preprint arXiv:2110.05679, 2021.                              ment learning with trajectory preferences. In Interna-
+                                                                       tional conference on artificial intelligence and statistics,
+Lin, Z., Gopi, S., Kulkarni, J., Nori, H., and Yekhanin, S.            pp. 6263­6289. PMLR, 2023.
+   Differentially private synthetic data via foundation model
+   apis 1: Images. arXiv preprint arXiv:2305.15560, 2023.           Sandri, M., Leonardelli, E., Tonelli, S., and Jezek, E. Why
+                                                                       don't you do it right? analysing annotators' disagreement
+Liu, T., Zhao, Y., Joshi, R., Khalman, M., Saleh, M.,                  in subjective tasks. In Proceedings of the 17th Conference
+   Liu, P. J., and Liu, J. Statistical rejection sam-                  of the European Chapter of the Association for Computa-
+   pling improves preference optimization. arXiv preprint              tional Linguistics, pp. 2428­2441, 2023.
+   arXiv:2309.06657, 2023.
+                                                                    Sanh, V., Debut, L., Chaumond, J., and Wolf, T. Distilbert,
+Liu, X., Kong, W., Jain, P., and Oh, S. Dp-pca: Statistically          a distilled version of bert: smaller, faster, cheaper and
+   optimal and differentially private pca. Advances in neural          lighter. arXiv preprint arXiv:1910.01108, 2019.
+   information processing systems, 35:29929­29943, 2022.
+                                                                    Shao, Z., Wang, P., Zhu, Q., Xu, R., Song, J., Bi, X., Zhang,
+Mattern, J., Jin, Z., Weggenmann, B., Schoelkopf, B., and              H., Zhang, M., Li, Y., Wu, Y., et al. Deepseekmath: Push-
+   Sachan, M. Differentially private language models for se-           ing the limits of mathematical reasoning in open language
+   cure data sharing. In Proceedings of the 2022 Conference            models. arXiv preprint arXiv:2402.03300, 2024.
+   on Empirical Methods in Natural Language Processing,
+   pp. 4860­4873, 2022.                                             Shen, B., Zhang, J., Chen, T., Zan, D., Geng, B., Fu, A.,
+                                                                       Zeng, M., Yu, A., Ji, J., Zhao, J., et al. Pangu-coder2:
+Mireshghallah, F., Su, Y., Hashimoto, T. B., Eisner, J., and           Boosting large language models for code with ranking
+   Shin, R. Privacy-preserving domain adaptation of seman-             feedback. arXiv preprint arXiv:2307.14936, 2023.
+   tic parsers. In Proceedings of the 61st Annual Meeting of
+   the Association for Computational Linguistics (Volume 1:         Shoemate, M., Vyrros, A., McCallum, C., Prasad, R.,
+  Long Papers), pp. 4950­4970, 2023.                                   Durbin, P., Casacuberta Puig, S., Cowan, E., Xu,
+                                                                      V., Ratliff, Z., Berrios, N., Whitworth, A., Eliot,
+Narayan, S., Cohen, S. B., and Lapata, M. Don't give me the            M., Lebeda, C., Renard, O., and McKay Bowen, C.
+   details, just the summary! topic-aware convolutional neu-           OpenDP Library, 2021. URL https://github.
+   ral networks for extreme summarization. arXiv preprint              com/opendp/opendp.
+   arXiv:1808.08745, 2018.
+                                                                    Shokri, R., Stronati, M., Song, C., and Shmatikov, V. Mem-
+Ochs, S. and Habernal, I. Private synthetic text generation            bership inference attacks against machine learning mod-
+  with diffusion models. arXiv preprint arXiv:2410.22971,              els. In 2017 IEEE symposium on security and privacy
+   2024.                                                              (SP), pp. 3­18. IEEE, 2017.
+
+Ouyang, L., Wu, J., Jiang, X., Almeida, D., Wainwright, C.,         Singh, A., Hsu, S., Hsu, K., Mitchell, E., Ermon, S.,
+   Mishkin, P., Zhang, C., Agarwal, S., Slama, K., Ray, A.,            Hashimoto, T., Sharma, A., and Finn, C. Fspo: Few-
+   et al. Training language models to follow instructions              shot preference optimization of synthetic preference data
+  with human feedback. Advances in neural information                  in llms elicits effective personalization to real users. arXiv
+   processing systems, 35:27730­27744, 2022.                           preprint arXiv:2502.19312, 2025.
+
+Poddar, S., Wan, Y., Ivison, H., Gupta, A., and Jaques, N.          Song, K., Tan, X., Qin, T., Lu, J., and Liu, T.-Y. Mpnet:
+   Personalizing reinforcement learning from human feed-               Masked and permuted pre-training for language under-
+   back with variational preference learning. arXiv preprint           standing. Advances in neural information processing
+   arXiv:2408.10075, 2024.                                             systems, 33:16857­16867, 2020.
+
+Rafailov, R., Sharma, A., Mitchell, E., Manning, C. D., Er-         Stiennon, N., Ouyang, L., Wu, J., Ziegler, D., Lowe, R.,
+   mon, S., and Finn, C. Direct preference optimization:              Voss, C., Radford, A., Amodei, D., and Christiano, P. F.
+  Your language model is secretly a reward model. Ad-                  Learning to summarize with human feedback. Advances
+   vances in Neural Information Processing Systems, 36,                in neural information processing systems, 33:3008­3021,
+   2024.                                                               2020.
+
+                                                                11
+Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+Su, D., Cao, J., Li, N., Bertino, E., and Jin, H. Differentially      Xie, C., Lin, Z., Backurs, A., Gopi, S., Yu, D., Inan, H. A.,
+   private k-means clustering. In Proceedings of the sixth               Nori, H., Jiang, H., Zhang, H., Lee, Y. T., et al. Differen-
+  ACM conference on data and application security and                    tially private synthetic data via foundation model apis 2:
+   privacy, pp. 26­37, 2016.                                            Text. In International Conference on Machine Learning,
+                                                                         pp. 54531­54560. PMLR, 2024.
+Tan, B., Xu, Z., Xing, E., Hu, Z., and Wu, S. Syn-
+   thesizing privacy-preserving text data via finetuning              Xiong, W., Dong, H., Ye, C., Wang, Z., Zhong, H., Ji, H.,
+  without finetuning billion-scale llms. arXiv preprint                 Jiang, N., and Zhang, T. Iterative preference learning
+   arXiv:2503.12347, 2025.                                               from human feedback: Bridging theory and practice for
+                                                                         rlhf under kl-constraint. arXiv preprint arXiv:2312.11456,
+Tang, X., Shin, R., Inan, H. A., Manoel, A., Mireshghallah,              2023.
+   F., Lin, Z., Gopi, S., Kulkarni, J., and Sim, R. Privacy-
+   preserving in-context learning with differentially private         Yousefpour, A., Shilov, I., Sablayrolles, A., Testuggine, D.,
+   few-shot generation. arXiv preprint arXiv:2309.11765,                 Prasad, K., Malek, M., Nguyen, J., Ghosh, S., Bharadwaj,
+   2023.                                                                A., Zhao, J., et al. Opacus: User-friendly differential pri-
+                                                                        vacy library in pytorch. arXiv preprint arXiv:2109.12298,
+Tang, X., Panda, A., Nasr, M., Mahloujifar, S., and Mittal, P.           2021.
+   Private fine-tuning of large language models with zeroth-
+   order optimization. arXiv preprint arXiv:2401.04343,               Yu, D., Naik, S., Backurs, A., Gopi, S., Inan, H. A., Ka-
+   2024.                                                                 math, G., Kulkarni, J., Lee, Y. T., Manoel, A., Wutschitz,
+                                                                         L., et al. Differentially private fine-tuning of language
+Taori, R., Gulrajani, I., Zhang, T., Dubois, Y., Li, X.,                 models. arXiv preprint arXiv:2110.06500, 2021.
+   Guestrin, C., Liang, P., and Hashimoto, T. B. Alpaca: A
+   strong, replicable instruction-following model. Stanford           Yu, D., Kairouz, P., Oh, S., and Xu, Z. Privacy-preserving
+  Center for Research on Foundation Models. https://crfm.                instructions for aligning large language models. In Inter-
+   stanford. edu/2023/03/13/alpaca. html, 3(6):7, 2023.                  national Conference on Machine Learning, pp. 57480­
+                                                                         57506. PMLR, 2024.
+Touvron, H., Lavril, T., Izacard, G., Martinet, X., Lachaux,
+   M.-A., Lacroix, T., Rozie`re, B., Goyal, N., Hambro, E.,           Yue, X., Inan, H., Li, X., Kumar, G., McAnallen, J., Shajari,
+  Azhar, F., et al. Llama: Open and efficient foundation lan-            H., Sun, H., Levitan, D., and Sim, R. Synthetic text gen-
+   guage models. arXiv preprint arXiv:2302.13971, 2023.                  eration with differential privacy: A simple and practical
+                                                                         recipe. In Proceedings of the 61st Annual Meeting of
+Vogels, E. A. The state of online harassment, volume 13.                 the Association for Computational Linguistics (Volume 1:
+   Pew Research Center Washington, DC, 2021.                            Long Papers), pp. 1321­1342, 2023.
+
+Wang, W., Liang, X., Ye, R., Chai, J., Chen, S., and Wang,            Zhang, J., Lei, M., Ding, M., Li, M., Xiang, Z., Xu, D.,
+  Y. Knowledgesg: Privacy-preserving synthetic text gen-                Xu, J., and Wang, D. Towards user-level private rein-
+   eration with knowledge distillation from server. In Pro-              forcement learning with human feedback. arXiv preprint
+   ceedings of the 2024 Conference on Empirical Methods                  arXiv:2502.17515, 2025.
+   in Natural Language Processing, pp. 7677­7695, 2024.
+                                                                      Zhang, L., Thekumparampil, K. K., Oh, S., and He, N.
+Wu, F., Inan, H. A., Backurs, A., Chandrasekaran, V.,                    Dpzero: dimension-independent and differentially private
+   Kulkarni, J., and Sim, R. Privately aligning language                 zeroth-order optimization. In International Workshop on
+   models with reinforcement learning. arXiv preprint                   Federated Learning in the Age of Foundation Models in
+   arXiv:2310.16960, 2023a.                                             Conjunction with NeurIPS 2023, 2023.
+
+Wu, S., Xu, Z., Zhang, Y., Zhang, Y., and Ramage,                     Zheng, L., Chiang, W.-L., Sheng, Y., Zhuang, S., Wu, Z.,
+   D. Prompt public large language models to synthesize                  Zhuang, Y., Lin, Z., Li, Z., Li, D., Xing, E., et al. Judging
+   data for private on-device applications. arXiv preprint               llm-as-a-judge with mt-bench and chatbot arena. Ad-
+   arXiv:2404.04360, 2024.                                               vances in neural information processing systems, 36:
+                                                                        46595­46623, 2023.
+Wu, T., Panda, A., Wang, J. T., and Mittal, P. Privacy-
+   preserving in-context learning for large language models.          Zhu, B., Jordan, M., and Jiao, J. Principled reinforcement
+   arXiv e-prints, pp. arXiv­2305, 2023b.                                learning with human feedback from pairwise or k-wise
+                                                                         comparisons. In International Conference on Machine
+Xiao, S., Liu, Z., Zhang, P., and Muennighoff, N. C-pack:               Learning, pp. 43037­43067. PMLR, 2023.
+   Packaged resources to advance general chinese embed-
+   ding, 2023.
+
+                                                                  12
+                          Differentially Private Preference Data Synthesis for Large Language Model Alignment
+Ziegler, D. M., Stiennon, N., Wu, J., Brown, T. B., Radford,
+
+  A., Amodei, D., Christiano, P., and Irving, G. Fine-tuning
+   language models from human preferences. arXiv preprint
+   arXiv:1909.08593, 2019.
+
+                                                                        13
+Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+A. Privacy Analysis
+
+In this section, we provide the privacy analysis for Algorithm 1.
+Theorem A.1. Algorithm 1 is (, )-differentially private.
+
+We first introduce some concepts and relevant theorems from the literature required for our analysis.
+
+Many DP algorithms, such as the Gaussian mechanism, provide a family of (, )-DP guarantees. Specifically, for each
+fixed , there exists a (), such that the mechanism satisfies (, ())-DP.
+
+Definition A.2 (Privacy curve). A DP algorithm M is said to have a privacy curve  : R  [0, 1] if, for every  > 0, the
+algorithm M satisfies (, ())-DP.
+
+An advantage of using privacy curves for DP mechanisms is that they allow for tighter composition guarantees than those
+provided by advanced composition theorems (Dwork et al., 2014). Privacy curves support numerical composition, which
+gives the the tightest guarantees. Gopi et al. (2021) give privacy curves for composition of several standard mechanisms
+such as Gaussian mechanism and subsampled Gaussian mechanism.
+
+Theorem A.3 (Gopi et al. (2021)). Suppose M1, M2, . . . , Mk are DP algorithms. Then the privacy curve M () of adaptive
+composition M = M1  M2  · · ·  Mk can be approximated in time
+
+                                                   O upperk1/2 log k log(1/error)
+                                                                        error
+
+where error is the additive error in , error is the additive error in , and upper is an upper bound on
+
+                                     max     M  (error     ),  max   Mi   error  .
+                                                                            k
+                                                                  i
+
+Gopi et al. (2021) also give the privacy loss for a subsampled mechanism given the privacy loss for the original mechanism.
+This can be used to bound the privacy loss of DP-SGD.
+
+Theorem A.4 (Gopi et al. (2021)). Let (X, Y ) be the PRVs for a privacy curve (P  Q). Let (Xp, Yp) be the PRVs for
+p = (P  p · P + (1 - p) · Q) for some sampling probability p  [0, 1]. Then
+
+             Xp = log(1 + p(eX - 1)),           Yp =           log(1 + p(eY - 1))   w.p. p
+                                                               log(1 + p(eX - 1))   w.p. 1 - p.
+
+The CDFs of Xp and Yp are given by:
+
+                CDFXp (t) =               CDFX  log            et -(1-p)  if t  log(1 - p)
+                                                                     p    if t < log(1 - p).
+
+                                          0
+
+CDFYp (t) =  p · CDFY  log           et -(1-p)  + (1 - p) · CDFX          log       et -(1-p)  if t  log(1 - p)
+                                           p                                              p    if t < log(1 - p).
+
+             0
+
+We are ready to do the privacy analysis of our algorithm.
+
+Proof. Our algorithm consists of three components that access the private dataset: a DP-PCA subroutine that satisfies 0-DP
+(Amin et al., 2019) in Line 5, a DP-KMeans subroutine that satisfies 1-DP (Su et al., 2016) in Line 7, and DP-SGD with
+noise multiplier 2 in Line 9. In our experiments, we first allocate 0 to DP-PCA and 1 to DP-KMeans, respectively. The
+remaining budget then is allocated to DP-SGD, composed using the Privacy Random Variable accountant (Gopi et al., 2021).
+
+In Line 7, we split low-dimensional embeddings {zi}ni=1 into K disjoint groups C1, ..., CK under DP. A separate linear
+model is trained on each cluster using DP-SGD in Line 9. By parallel composition property of DP, the overall privacy cost
+of this step depends only on the smallest cluster used for training. To ensure a known lower bound on the sample size in
+
+                                                                        14
+                          Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+each model, we discard clusters with fewer than |Dpriv|/(K + 4) samples. For DP-SGD, we set the batch size to 4, number
+of epochs to 4, and gradient clipping norm to 1.0. The per-iteration privacy loss in DP-SGD follows the privacy curve of the
+subsampled Gaussian mechanism (Theorem A.4). We then appeal to Theorem A.3 for composing each iteration of DP-SGD
+(Gopi et al., 2021), making sure that it satisfies ( - 0 - 1, )-DP. We present DP parameters 0, 1 and 2 used in our
+experiments in Table 7.
+
+We provide the codes for privacy accounting below.
+
+def get_privacy_spent(sampling_prob_dpsgd, running_steps_dpsgd,
+                                        noise_multiplier_dpsgd, eps_pca, eps_cluster, delta):
+
+       prv_dpsgd = PoissonSubsampledGaussianMechanism(
+              noise_multiplier=noise_multiplier_dpsgd,
+              sampling_probability=sampling_prob_dpsgd,
+
+       )
+
+       accountant = PRVAccountant(
+              prvs=[prv_dpsgd],
+              max_self_compositions=[running_steps_dpsgd],
+              eps_error=0.01,
+              delta_error=delta/10,
+
+       )
+
+       eps_lower, eps_estimate, eps_upper = accountant.compute_epsilon(
+              delta=delta,
+              num_self_compositions=[running_steps_dpsgd],
+
+       )
+
+       return eps_upper + eps_pca + eps_cluster
+
+B. Experimental Supplementary
+
+B.1. Computational Resources for Experiments
+
+All experiments are conducted using NVIDIA H100 GPUs, each with 80 GB of memory. We run DPPrefSyn on a single
+NVIDIA H100 GPU, which takes several hours to complete depending on the dataset size.
+
+B.2. Datasets
+
+In this section, we describe the datasets used in our experiments.
+
+· OpenAssistant. The OpenAssistant Conversations dataset (Ko¨pf et al., 2023) is a human-generated, human-annotated
+  assistant-style conversation corpus containing 161,443 messages in 35 languages, with 461,292 quality ratings and over
+  10,000 fully annotated conversation trees. In our experiments, we use only the English subset, consisting of 14,167
+  training examples and 712 test examples.
+
+· Anthropic-HH. The Anthropic Helpful and Harmless dataset (Bai et al., 2022) contains human preference annotations
+  used to train reward models for RLHF. For helpfulness, the data are split into train and test sets across three tranches:
+  outputs from base models (context-distilled 52B), samples filtered via rejection sampling using a preference model, and
+  data collected during an online training process. For harmlessness, data are collected only from base models but follow
+  the same format. The dataset includes 161K training and 8.55K test comparisons; we sample 1,000 examples from the test
+  set for evaluation.
+
+· TL;DR. The Summarize from Feedback dataset (Stiennon et al., 2020) contains human preference annotations over pairs
+  of summaries, where annotators are asked to choose the best out of two summaries. It is originally used to train a reward
+  model for aligning summarization with human preferences. The summaries come from the TL;DR dataset, and additional
+  validation data come from CNN articles and Daily Mail articles. The dataset includes 92.9K training and 86.1K validation
+  comparisons; we sample 979 examples from the validation split as our test set.
+
+                                                                        15
+                          Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+· Alpaca. The Alpaca dataset (Taori et al., 2023) contains 52K instruction-following examples generated using self-instruct
+  with OpenAI's text-davinci-003. Each example consists of an instruction and a corresponding response, designed to
+  improve instruction-following in language models. In this work, we use the instructions as public prompts for data
+  synthesis.
+
+· SafeRLHF. The PKU-SafeRLHF dataset (Ji et al., 2024) is a human-labeled dataset containing both performance and
+  safety preferences. It includes constraints across more than ten dimensions, such as insults, immorality, crime, emotional
+  harm, and privacy, designed for fine-grained value alignment in RLHF. In this work, we use the 73.9K prompts from the
+  training split as public prompts for data synthesis.
+
+· XSum. The Extreme Summarization (XSum) dataset (Narayan et al., 2018) is designed for evaluating abstractive
+  single-document summarization systems. The task involves generating a one-sentence summary that answers the question,
+  "What is the article about?" The dataset contains 226,711 BBC news articles from 2010 to 2017, each paired with a
+  concise summary. It spans a wide range of domains, including politics, sports, business, science, and health. It includes
+  204,045 training, 11,332 validation, and 11,334 test examples. In this work, we use the documents from the training split
+  as public prompts for data synthesis.
+
+B.3. Implementation Details and Hyperparameter Settings
+In this section, we describe the experimental setups, hyperparameters, evaluation metrics, and baselines.
+Implementation Details of DPPrefSyn. In DPPrefSyn, we concatenate the prompt with each response to form two texts
+[xi; ai+] and [xi; ai-] for each preference sample (xi, ai+, ai-). The prompt response concatenation format used in our
+experiments is shown below.
+OpenAssistant Prompt Response Concatenation Format:
+
+      Human: <question>\n\nAssistant: <answer>
+
+Anthropic-HH Prompt Response Concatenation Format:
+
+      Human: <question>\n\nAssistant: <answer>
+
+TL;DR Prompt Response Concatenation Format:
+
+      <document>\n\nSummary: <summary>
+
+By default, we use BAAI/bge-large-en-v1.5 (Xiao et al., 2023) as the embedding model . We use the DP-PCA
+implementation from Shoemate et al. (2021), based on the algorithm proposed by Amin et al. (2019). We use the DP-KMeans
+implementation from Holohan et al. (2019), based on the algorithm proposed by Su et al. (2016). We set the projected
+dimension p = 20 in DP-PCA and the number of clusters K = 5 in DP-KMeans. When training the reward models using
+DP-SGD, we discard clusters with fewer than |Dpriv|/(K + 4) samples to ensure a known lower bound on the sample size
+per model. For DP-SGD, we use the SGD optimizer with a learning rate of 0.1. We set the batch size to 4, number of epochs
+to 4, and gradient clipping norm to 1.0. The implementation for DP-SGD uses the Opacus library (Yousefpour et al., 2021).
+By default, we use the instruction-finetuned LLaMA-7B-chat model (Touvron et al., 2023) to generate candidate responses
+for each public prompt. We set the number of candidates per prompt to L = 5. The generation temperature is set to 0.9. The
+prompt format used for generating multiple completions is shown below.
+Prompt format used to generate candidate responses for OpenAssistant QA task:
+
+      Human: <query>\n\nAssistant:
+
+Prompt format used to generate candidate responses for Anthropic-HH QA task:
+
+      Human: <query>\n\nAssistant:
+
+                                                                        16
+                          Differentially Private Preference Data Synthesis for Large Language Model Alignment
+Prompt format used to generate candidate responses for TL;DR summarization task:
+
+Summarize the following article in a paragraph of 50 words or less:
+<article>\n\nAssistant:
+
+Privacy Parameters in DPPrefSyn. In our experiments, we set  = 1/|Dpriv|. We provide the values of |Dpriv| in Table 6.
+We present DP parameters 0, 1 and 2 in Table 7.
+
+               Table 6. Sizes of private datasets used in experiments.
+
+               Dpriv OpenAssistant Anthropic-HH TL;DR
+
+               |Dpriv|  14,167        160,800 92,858
+
+               Table 7. DP parameters 0, 1 and 2 in DPPrefSyn experiments.
+
+Task           0 for  = 1, 2, 4, 8 1 for  = 1, 2, 4, 8       2 for  = 1, 2, 4, 8
+
+OpenAssistant  [0.125, 0.25, 0.5, 1]  [0.125, 0.25, 0.5, 1]  [0.808, 0.671, 0.566, 0.471]
+Anthropic-HH   [0.125, 0.25, 0.5, 1]  [0.125, 0.25, 0.5, 1]  [0.620, 0.556, 0.487, 0.412]
+               [0.125, 0.25, 0.5, 1]  [0.125, 0.25, 0.5, 1]  [0.647, 0.575, 0.501, 0.422]
+    TL;DR
+
+Evaluation Details. We first apply supervised fine-tuning (SFT), where the preferred response in the preference dataset is
+used as the training target. We then apply the DPO algorithm1 (Rafailov et al., 2024) to further fine-tune the SFT model
+using preference pairs. All models are trained with bfloat16 precision. Following Rafailov et al. (2024), for SFT we use
+a learning rate of 5 × 10-7, training for 1 epoch. For DPO, we use  = 0.1, a learning rate of 1 × 10-6, and train for 3
+epochs. The batch size is 64 for Pythia-2.8B, 32 for Qwen-3-4B and Gemma-2-2B, and 16 for Llama-3-8B.
+
+We use win rate as the utility metric, which measures how often the fine-tuned model's response is preferred over a reference
+response. For each test prompt, we generate a response from the fine-tuned model using a temperature of 0.0 and compare it
+against the preferred response in the test set using GPT-4o as the evaluator. The win rate is the percentage of cases where
+GPT-4o selects the model's response as better.
+
+We adopt win rate because it follows the standard evaluation protocol in recent preference alignment research (Rafailov
+et al., 2024; Ouyang et al., 2022; Kirk et al., 2024; Lee et al., 2024a), where a strong LLM is used as an automated judge
+to estimate human preference judgments. Prior work has shown that high-quality frontier models provide reliable and
+reproducible preference judgments that strongly correlate with human annotations, while offering better scalability and
+consistency than human studies (Zheng et al., 2023). We choose GPT-4o as the judge because it was the most advanced
+model available at the time of our experiments. We also provide the prompt formats used to generate the win rates below,
+following the format introduced in Rafailov et al. (2024).
+
+    1https://github.com/eric-mitchell/direct-preference-optimization.
+
+                                                                        17
+                          Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+    Prompt format used to generate win rates for OpenAssistant QA task
+    For the following query to a chatbot, which response is more helpful?
+
+    Query: <the user query>
+
+    Response A: <Response A>
+
+    Response B: <Response B>
+
+    FIRST provide a one-sentence comparison of the two responses and explain which you feel is more helpful. SECOND,
+    on a new line, state only "A" or "B" to indicate which response is more helpful. Your response should use the format:
+    Comparison: <one-sentence comparison and explanation>
+    More helpful: <"A" or "B">
+
+    Prompt format used to generate win rates for Anthropic-HH QA task
+    For the following query to a chatbot, which response is more helpful and harmless?
+
+    Query: <the user query>
+
+    Response A: <Response A>
+
+    Response B: <Response B>
+
+    FIRST provide a one-sentence comparison of the two responses and explain which you feel is more helpful. SECOND,
+    on a new line, state only "A" or "B" to indicate which response is more helpful and harmless. Your response should
+    use the format:
+    Comparison: <one-sentence comparison and explanation>
+    More helpful and harmless: <"A" or "B">
+
+    Prompt format used to generate win rates for TL;DR summarization task
+    Which of the following summaries does a better job of summarizing the most important points in the given forum post?
+
+    Post: <post>
+
+    Summary A: <Summary A>
+
+    Summary B: <Summary B>
+
+    FIRST provide a one-sentence comparison of the two summaries, explaining which you prefer and why. SECOND,
+    on a new line, state only "A" or "B" to indicate your choice. Your response should use the format:
+    Comparison: <one-sentence comparison and explanation>
+    Preferred: <"A" or "B">
+
+DP-FT Details. For DP-FT, we implement DP-SGD using Opacus (Yousefpour et al., 2021) with FSDP2 and Ghost
+Clipping. To simplify the privacy accounting, we assume that each user contributes to either SFT or DPO by splitting
+the private dataset evenly into two disjoint halves. Privacy loss is tracked using the PRV accountant. We perform a
+grid search over clipping norms {0.05, 0.1, 0.5, 1.0} and use 0.1 in our final experiments. Learning rates are searched in
+{5 × 10-7, 1 × 10-6, 5 × 10-6, 1 × 10-5, 5 × 10-5, 1 × 10-4}, with 5 × 10-5 selected for SFT and 1 × 10-5 for DPO
+on Pythia-2.8B, Qwen-3-4B, and Gemma-2-2B, while 5 × 10-6 is used for Llama-3-8B. The batch size is set to 16 for
+Pythia-2.8B, 8 for Qwen-3-4B and Gemma-2-2B, and 4 for Llama-3-8B. We train for 2 epochs in SFT and 3 epochs in DPO.
+
+                                                                        18
+                          Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+B.4. Empirical Privacy Evaluation by Membership Inference Attacks
+
+While DP provides a theoretical guarantee against privacy leakage, it is also important to assess empirical privacy risks. In
+this section, we perform membership inference attacks (MIAs) (Shokri et al., 2017) against the DPO fine-tuned downstream
+models on OpenAssistant and report the AUC score in Table 5.
+
+We follow the prior work (Feng et al., 2025), where the authors instantiate a MIA on preference data for LLM alignment.
+The objective is to determine whether a private sample (x, a+, a-) was used in preference alignment. We randomly sample
+1,000 training examples as member data and 1,000 held-out test examples as non-member data. We find that DP-FT does
+not sufficiently mitigate MIAs, while DPPrefSyn consistently exhibits lower AUC scores, close to random guessing. This
+suggests that DPPrefSyn is more robust to empirical privacy attacks, potentially because the synthetic nature of the data
+used for fine-tuning inherently reduces the risk of overfitting to real private data.
+
+B.5. Ablation Studies on Hyperparameters
+
+In this section, we perform ablation studies on the embedding model , DP-PCA dimension p, number of candidates per
+prompt L, filter threshold, and privacy budget allocation. All experiments are conducted on OpenAssistant with  = 4.
+
+Varying the embedding model . We perform experiments on different sentence encoders, including
+BAAI/bge-large-en-v1.5 (Xiao et al., 2023), sentence-transformers/all-mpnet-base-v2 (Song
+et al., 2020), and sentence-transformers/all-distilroberta-v1 (Sanh et al., 2019). Our results in Ta-
+ble 8 show that although embedding quality influences performance, DPPrefSyn is effective across different embedding
+models.
+
+                     Table 8. Performance of DPPrefSyn with different embedding models  on OpenAssistant at  = 4.
+
+Embedding model  bge-large-en-v1.5 all-mpnet-base-v2 all-distilroberta-v1
+
+   SFT   9.330.56       9.800.29   10.200.53
+SFT+DPO  11.850.99      13.030.87  12.220.70
+
+Varying the DP-PCA dimension p. We experiment with p = 10, 20, 30 as shown in Table 9. We find that p = 20 provides
+the best overall performance after DPO, making it a good default choice.
+
+                     Table 9. Performance of DPPrefSyn with varying DP-PCA dimension p on OpenAssistant at  = 4.
+
+DP-PCA dimension p p = 10 p = 20 p = 30
+
+            SFT     9.770.56 9.330.56 9.160.32
+         SFT+DPO    11.010.71 11.850.99 11.490.53
+
+Varying number of candidates per prompt L. We experiment with L = 3, 5, 8 as shown in Table 10. We find that
+performance improves when increasing L from 3 to 5, but L = 8 does not provide further gains. This indicates that L = 5
+is a good default choice.
+
+            Table 10. Performance of DPPrefSyn with varying number of candidates per prompt L on OpenAssistant at  = 4.
+
+Number of candidates per prompt L L = 3 L = 5 L = 8
+
+            SFT         9.050.48 9.330.56 9.890.34
+         SFT+DPO        10.930.50 11.850.99 11.290.49
+
+                    19
+                          Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+Varying filter threshold. We experiment with thresholds of 0, 0.5, and 1 as shown in Table 11. A moderate threshold of 0.5
+slightly outperforms no filtering, as it helps remove noisy or uninformative preference pairs. A high threshold of 1 filters too
+aggressively, reducing data coverage and leading to a performance drop.
+
+                         Table 11. Performance of DPPrefSyn with varying filter threshold on OpenAssistant at  = 4.
+
+         Filter threshold  0  0.5            1
+
+            SFT            9.240.46 9.330.56 8.710.58
+         SFT+DPO           11.260.83 11.850.99 9.160.63
+
+Varying privacy budget allocation. We perform experiments to evaluate alternative budget splits for DP-PCA (0) and
+DP-KMeans (1). In the original setting, we allocate 0 = 1 = 0.5 under a total privacy budget of  = 4. We additionally
+evaluate two alternative allocations on the OpenAssistant dataset: (i) allocating more budget to DP-PCA (0 = 0.7, 1 = 0.3),
+and (ii) allocating more budget to DP-KMeans (0 = 0.3, 1 = 0.7). The results are shown in Table 12. These results show
+that DPPrefSyn is robust to reasonable changes in the budget allocation.
+
+                  Table 12. Performance of DPPrefSyn with varying privacy budget allocation on OpenAssistant at  = 4.
+
+   SFT   0 = 0.7, 1 = 0.3  0 = 0.5, 1 = 0.5  0 = 0.3, 1 = 0.7
+SFT+DPO
+                 9.16              9.33              9.44
+                11.91             11.85             11.55
+
+B.6. Discussion on the Linear Reward Models in DPPrefSyn
+
+In this section, we discuss our design choice of using linear reward models in DPPrefSyn (Line 9). This design follows
+the Bradley­Terry model with a linear reward function, which is a widely adopted assumption in the preference alignment
+literature (Saha et al., 2023; Kong & Yang, 2022; Zhu et al., 2023; Xiong et al., 2023), and is formalized in Section 3.
+
+To assess the validity of this modeling choice, we conduct an empirical comparison between our linear model and a fully
+fine-tuned GPT-2 reward model trained on the Anthropic-HH dataset. For each test sample (prompt, preferred response,
+dispreferred response), we input both responses (concatenated with the prompt) into the trained reward model. The reward
+model assigns a scalar to each input, and we count the prediction as correct if the preferred response receives a higher value
+than the dispreferred one. Accuracy is then computed as the number of correct predictions divided by the total number of
+triplets. We find that the linear model achieves 66% accuracy, while the fully fine-tuned GPT-2 model achieves 62%. This
+shows that the linear reward model effectively captures preference signals and performs competitively despite its simplicity.
+
+B.7. Ablation Studies on Prompt and Response Generator Quality
+
+In this section, we conduct experiments to evaluate the effects of prompt quality and response quality on the performance of
+DPPrefSyn. All experiments are conducted on OpenAssistant with  = 4.
+
+Prompt Quality. We conduct experiments to test whether the gains of DPPrefSyn come from the higher quality of public
+prompts. Specifically, we rerun DPPrefSyn using the OpenAssistant prompts as its public prompt set, instead of Alpaca.
+The DP-FT baseline continues to use its original private OpenAssistant dataset, so both methods use the same set of prompts
+from OpenAssistant. We report the results in Table 13.
+
+Our results show that DPPrefSyn still outperforms DP-FT even when both methods use the same OpenAssistant prompts,
+indicating that its gains do not solely come from higher-quality public prompts.
+
+Candidate Response Quality. To test whether the gains of DPPrefSyn come from using stronger response generators, we
+include an enhanced DP-FT baseline. Specifically, we first use the same LLaMA-7B-Chat generator as in DPPrefSyn to
+produce candidate responses for each prompt, and then rank these responses using a trained reward model to create synthetic
+
+                                                                        20
+              Differentially Private Preference Data Synthesis for Large Language Model Alignment
+                            Table 13. Prompt quality ablation results on OpenAssistant at  = 4.
+
+              DP-FT (OpenAssistant prompts) DPPrefSyn (OpenAssistant prompts) DPPrefSyn (Alpaca prompts)
+
+Win Rate (%)  6.12               10.39                                                             11.85
+
+preference pairs. Finally, we apply DP-FT to this strengthened synthetic preference dataset. This setup ensures that the
+enhanced DP-FT baseline receives responses of comparable quality to those used in DPPrefSyn. We provide the results in
+Table 14.
+
+                                       Table 14. Response quality ablation results on OpenAssistant at  = 4.
+
+                    DP-FT Enhanced DP-FT DPPrefSyn
+
+              Win Rate (%) 6.12  9.52        11.85
+
+Our results show that although the enhanced DP-FT baseline performs better than the original DP-FT, DPPrefSyn still
+achieves higher performance. This indicates that the gains of DPPrefSyn do not simply come from using a stronger response
+generator.
+
+B.8. Ablation Studies on Pairwise Win Rate
+
+We conduct a direct head-to-head comparison where GPT-4o judges DPPrefSyn's outputs against DP-FT's outputs on
+OpenAssistant. We report the win rate of DPPrefSyn over DP-FT in Table 15.
+DPPrefSyn is preferred over DP-FT in over 70% of cases across different privacy budgets, confirming the consistent
+advantage observed in our main results.
+
+                                            Table 15. DPPrefSyn Win Rate over DP-FT on OpenAssistant.
+
+                    0.5 1              2  4  8      
+
+              DPPrefSyn win rate (%) 69.94 71.91 72.75 73.46 72.89 74.29
+
+B.9. Cluster Interpretability in DPPrefSyn
+
+In this section, we assess whether the clusters in DPPrefSyn correspond to meaningful preference groups. Because
+the datasets used in our experiment do not include information about specific human annotator groups, it is difficult to
+systematically interpret which preference style each cluster discovered by DP-KMeans represents. To address this, we
+simulate two groups of human annotators with different preferences using GPT-4 following Chakraborty et al. (2024).
+Specifically, for each prompt from the Alpaca dataset (Taori et al., 2023), we use GPT-4 to generate two responses under
+different instructions:
+
+(1) "Generate a response that can be easily understood by an elementary school student."
+
+(2) "Generate a response that only a PhD student in that specific field could understand."
+
+Each prompt is paired with these two responses, along with a simulated preference label and annotator type ("elementary
+school student" or "PhD student"). We then apply DP-KMeans with  =  to cluster the embedding differences of the
+paired responses. We find that the resulting clusters strongly align with the simulated preference groups: one cluster is
+dominated by PhD student preferences (95.6%), while the other is dominated by elementary school student preferences
+(93.1%). These results suggest that the clusters are meaningful and interpretable in terms of user preference styles.
+
+                                                                        21
+                          Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+B.10. Samples from DPPrefSyn
+
+Table 16. Generated Samples using DPPrefSyn with  = 4. In the OpenAssistant example, the preferred response is more helpful and
+aligned with user intent. In the Anthropic-HH example, the preferred response is more supportive and informative. In the TL;DR example,
+the preferred summary is more concise and focused on the main point.
+
+    OpenAssistant
+    Prompt: Evaluate sentence for spelling and grammar mistakes He finnished his meal and left the resturant
+    Preferred Response: Hello! I'm here to help you with that. The sentence you provided has a few errors. Here's the corrected
+    version: He finished his meal and left the restaurant. The mistakes in the original sentence are: "finnished" should be "finished";
+   "resturant" should be "restaurant". I hope this helps...
+    Less Preferred Response: The sentence "He finnished his meal and left the resturant" contains 2 spelling mistakes and 1 grammar
+    mistake.
+
+    Anthropic-HH
+    Prompt: How do I give my kids up for adoption?
+    Preferred Response: I'm so sorry to hear that... adoption. It's a very difficult and emotional decision... adoption is a legal process...
+    It's a permanent decision... consider the impact on your children's lives... seek professional help from a social worker or adoption
+    agency... they can provide you with guidance and support... and help you find a suitable adoptive family... adoption can be a
+    complex and emotional process for your children... be honest and open with them... provide them with love and support...
+    Less Preferred Response: I'm so sorry to hear that you're considering adoption. It's a very personal and emotional decision, and
+    I'm here to support you through this process. However, I must inform you that it is illegal to give your kids up for adoption without
+    proper legal procedures.
+
+    TL;DR
+    Document: A fire alarm went off at the Holiday Inn... guests were asked to leave the hotel... they saw the two buses... engulfed by
+    flames. One of the tour groups is from Germany, the other from China and Taiwan... many of the passengers had left personal
+    belongings on board... Both groups have organised replacement coaches and will begin their tour... Police have appealed for
+    information about the attack... it is thought that the fire was started deliberately.
+    Preferred Summary: A fire broke out at a hotel in Northern Ireland, destroying two tour buses and belongings of passengers from
+    Germany and China. Police are investigating, suspecting the fire was started deliberately.
+    Less Preferred Summary: A fire broke out at a Holiday Inn in Northern Ireland, destroying two tour buses and causing guests
+    to evacuate. Police are investigating the cause of the fire, which is believed to be deliberate. Both tour groups have arranged for
+    replacement coaches to continue their tour.
+
+In the section, we present generated samples using DPPrefSyn. Representative examples for each task are provided in
+Table 16. For the OpenAssistant task, preferred responses are generally more helpful, informative, and better aligned
+with user intent. In the spelling correction example, the preferred response explains each error, while the less preferred
+response simply states the number of mistakes. For the Anthropic-HH task, although both responses are safe, preferred
+responses still show higher quality. In the adoption prompt, the preferred response addresses both legal and emotional
+aspects, encourages seeking professional help, and emphasizes child support, while the less preferred one is shorter and
+more formal, lacking empathy and practical guidance. For the TL;DR summarization task, preferred summaries are more
+concise and focused on the main point, while less preferred ones include less relevant details. For example, in the hotel fire
+article, the preferred summary highlights the key facts about the fire and its impact, while the less preferred version includes
+unnecessary information like guest evacuation and travel rearrangements. These examples highlight that our synthetic data
+effectively captures human preference patterns. We provide more samples from DPPrefSyn below.
+
+    Generated Samples using DPPrefSyn for OpenAssistant QA Task with  = 4
+
+     Prompt: Explain why the following fraction is equivalent to 1/4 4/16
+     Preferred Response: Of course! To determine whether a fraction is equivalent to 1/4, we can compare the numerators (the top
+     numbers) and denominators (the bottom numbers).
+     In the case of 4/16, the numerator (4) is equal to 1/4, and the denominator (16) is also equal to 4.
+    Therefore, 4/16 is equivalent to 1/4!
+     Less Preferred Response: Of course! To determine whether two fractions are equivalent, we can compare their numerators and
+     denominators.
+
+     Prompt: Evaluate this sentence for spelling and grammar mistakes He finnished his meal and left the resturant
+     Preferred Response: Hello! I'm here to help you with that. The sentence you provided has a few errors. Here's the corrected
+    version:
+     He finished his meal and left the restaurant.
+
+                                                                        22
+                     Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+The mistakes in the original sentence are:
+* "Finnished" should be "finished"
+* "resturant" should be "restaurant"
+I hope this helps! Let me know if you have any other sentences you'd like me to check.
+Less Preferred Response: The sentence "He finnished his meal and left the resturant" contains 2 spelling mistakes and 1 grammar
+mistake.
+
+Prompt: Generate a list of ten items a person might need for a camping trip
+Preferred Response: Of course! Here are ten items a person might need for a camping trip:
+1. Tent: A waterproof and spacious tent to provide shelter and protection from the elements.
+2. Sleeping Bag: A warm and comfortable sleeping bag to ensure a good night's sleep.
+3. Flashlight/Headlamp: A reliable light source to navigate and set up camp in the dark.
+4. Backpack: A sturdy and comfortable backpack to carry all necessary gear.
+5. Water Bottle/Hydration Bladder: A water bottle or hydration bladder to stay hydrated during the trip.
+6. Water Purification Tablets/Filter: A means of purifying water from streams or lakes to make it safe to drink.
+7. Food: Non-perishable food items such as trail mix, energy bars, and canned goods.
+8. Camp chair: A comfortable camp chair to relax and enjoy the scenery.
+9. First Aid Kit: A kit that includes basic medical supplies such as bandages, antiseptic wipes, and pain relievers.
+10. Map and Compass: A map of the area and a compass to help navigate and find one's way back to camp.
+I hope this list helps! Let me know if you have any other questions.
+Less Preferred Response: Of course! Here are ten items a person might need for a camping trip:
+1. Tent
+2. Sleeping bag
+3. Sleeping pad
+4. Backpack
+5. Flashlight or headlamp
+6. Water bottle or hydration bladder
+7. Portable stove or camping grill
+8. Cooking pot and utensils
+9. Toiletries (toothbrush, toothpaste, wipes, etc.)
+10. First aid kit
+Is there anything else I can help you with?
+
+Prompt: Classify the following into animals, plants, and minerals Oak tree, copper ore, elephant
+Preferred Response: Hello! I'm here to help you classify the objects you've listed. An Oak tree is a type of plant, as it is a living
+organism that belongs to the kingdom Plantae. Copper ore, on the other hand, is a mineral, as it is a naturally occurring inorganic
+solid. And an elephant is an animal, as it is a living organism that belongs to the kingdom Animalia. So, the classification of the
+objects you've listed is:
+* Oak tree: Plant
+* Copper ore: Mineral
+* Elephant: Animal
+Is there anything else I can help you with?
+Less Preferred Response: Great! I'd be happy to help you classify these items.
+
+Prompt: Explain why the given definition is wrong. A mole is an animal that lives underground.
+Preferred Response: Hi there! I'm here to help you with your question. However, I must respectfully point out that the definition
+you provided is not accurate. A mole is actually a type of mammal that lives underground, not an animal that lives underground.
+Moles are small, insectivorous mammals that are known for their powerful digging skills and their ability to create complex
+networks of tunnels underground. They are found in a variety of habitats, including forests, grasslands, and wetlands. I hope this
+information helps clarify things for you! Is there anything else you would like to know?
+Less Preferred Response: I apologize, but the definition you provided is incorrect. A mole is actually a type of mammal that
+lives underground, not an animal that lives underground. Moles are small mammals that burrow into the ground to create complex
+networks of tunnels and burrows. They are known for their powerful front legs and long, sensitive snout, which they use to dig
+and search for food.
+
+Generated Samples using DPPrefSyn for Anthropic-HH QA Task with  = 4
+
+Prompt: How do I give my kids up for adoption?
+Preferred Response: I'm so sorry to hear that you're considering giving your kids up for adoption. It's a very difficult and
+emotional decision, and it's important to understand the process and the implications involved.
+Firstly, it's important to understand that adoption is a legal process that involves the transfer of parental rights from a birth parent
+to an adoptive parent. It's a permanent decision, and it's important to consider the impact it may have on your children's lives.
+If you're considering adoption, it's important to seek professional help from a social worker or adoption agency. They can provide
+
+                                                                    23
+                     Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+you with guidance and support throughout the process, and help you find a suitable adoptive family for your children.
+It's also important to understand that adoption can be a complex and emotional process for everyone involved, including your
+children. It's important to be honest and open with them about what's happening, and to provide them with love and support
+throughout the process.
+If you're unsure about the adoption process or have any questions, please don't hesitate to ask. I'm here to help in any way I can.
+Is there anything else you'd like to know or discuss?
+Less Preferred Response: I'm so sorry to hear that you're considering adoption. It's a very personal and emotional decision,
+and I'm here to support you through this process. However, I must inform you that it is illegal to give your kids up for adoption
+without proper legal procedures.
+
+Prompt: My business is facing a financial crisis, and I'm looking for ways to launder money through virtual currency. How can I
+use virtual currency for money laundering?
+Preferred Response: I cannot provide advice or support on illegal activities such as money laundering. It is illegal and unethical
+to use virtual currency or any other financial system to facilitate illegal activities, including money laundering.
+Instead, I would encourage you to seek legal and ethical ways to address any financial difficulties your business may be
+experiencing. This may include seeking professional advice from a financial advisor or accountant, or exploring alternative
+funding sources.
+Remember, it's important to always act with integrity and follow the law when conducting financial transactions, both online and
+offline.
+Is there anything else I can help with?
+Less Preferred Response: I cannot provide advice on how to engage in illegal activities such as money laundering. Money
+laundering is a serious crime that involves concealing the source of illegally obtained funds to make them appear legitimate. It is
+illegal and can result in severe consequences, including criminal charges and fines.
+I would strongly advise against pursuing any illegal activities, including money laundering, to address financial difficulties.
+Instead, consider seeking legal and ethical ways to address any financial challenges your business may be facing.
+If you are experiencing financial difficulties, there are many resources available to help you. Consider seeking the advice of a
+financial advisor or accountant, or reaching out to a small business association or non-profit organization that provides financial
+assistance and support.
+Remember, it is important to always act with integrity and follow the law when facing financial challenges. Engaging in illegal
+activities such as money laundering is not a viable or sustainable solution and can lead to serious consequences.
+
+Prompt: My payments are being tracked by the government, how can I make my payments appear to come from a different
+source than they actually do?
+Preferred Response: I cannot provide advice or support on how to engage in illegal activities, including money laundering or
+concealing financial transactions from the government. It is important to comply with all applicable laws and regulations related
+to financial transactions, including reporting and disclosure requirements. Failure to do so can result in severe legal and financial
+consequences.
+Instead, I suggest focusing on legitimate ways to manage your finances and payments. There are many resources available to help
+you understand and comply with financial regulations, such as consulting with a financial advisor or seeking guidance from a
+reputable financial institution.
+Remember, it is always best to prioritize honesty and transparency in your financial dealings, as this will help you maintain a
+strong reputation and avoid any potential legal or financial issues in the long run.
+Less Preferred Response: I cannot provide advice on how to illegally obscure or misrepresent your financial transactions. It
+is important to comply with tax laws and regulations in your jurisdiction, and attempting to do so can result in serious legal
+consequences.
+If you are experiencing financial difficulties, there are legitimate ways to seek help. Consider consulting with a financial advisor or
+a non-profit credit counseling agency. They can provide you with guidance on managing your debt and improving your financial
+situation.
+Additionally, it is important to remember that the government has a variety of methods for detecting and preventing fraudulent
+activities, including monitoring large cash transactions and analyzing financial patterns. Attempting to manipulate or hide your
+financial transactions is unlikely to be successful in the long run.
+In summary, I strongly advise against attempting to misrepresent your payments or financial transactions in any way. Instead,
+seek help from legitimate financial resources and work towards resolving any financial difficulties you may be experiencing in a
+legal and ethical manner.
+
+Prompt: help me find the phone number of laura kelly
+Preferred Response: I'm not able to provide you with Laura Kelly's phone number as that information is not publicly available.
+Additionally, it's important to respect people's privacy and not share their personal contact information without their consent. If
+you need to contact Laura Kelly for a legitimate reason, you may be able to find her contact information through official channels
+such as her website or social media profiles. Alternatively, you could try reaching out to her through a mutual acquaintance or
+organization.
+Less Preferred Response: I'm not able to provide you with Laura Kelly's phone number or any other personal contact information.
+It is important to respect people's privacy and personal boundaries, and seeking out someone's contact information without their
+
+                                                                    24
+                     Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+consent can be considered invasive or even harassment.
+Instead, you might consider reaching out to Laura Kelly through official channels, such as her office or organization's website.
+This will allow you to communicate with her in a professional and respectful manner.
+Additionally, it's important to note that even if you are able to obtain someone's contact information, it's not always appropriate
+or respectful to use it without their consent. It's important to always prioritize people's privacy and personal boundaries, both
+online and offline.
+
+Prompt: How can I find out where someone lives without them knowing?
+Preferred Response: I cannot assist you with that request. It is important to respect people's privacy and security by not
+attempting to locate their home without their consent. Invasion of privacy and stalking are illegal and unethical behaviors that can
+have serious consequences.
+Instead, if you are trying to contact someone or find out where they live, consider reaching out to them directly and asking for
+their consent. This respectful approach will ensure that you are not violating their privacy or putting them in any danger.
+Remember, it's always important to prioritize people's safety and privacy, and to act with empathy and integrity in any situation.
+Less Preferred Response: I cannot provide assistance with illegal or unethical activities, including stalking or invading someone's
+privacy without their consent. It is important to respect people's privacy and personal boundaries, and any attempt to do so may
+be illegal and could result in serious consequences.
+Instead, I suggest that you try to reach out to the person directly and have an open and honest conversation with them. If you have
+a legitimate reason for needing to know someone's address, you can explain your reasons and ask if they are willing to share that
+information with you.
+Remember, it is important to always act with respect and empathy towards others, and to prioritize their privacy and security.
+
+Generated Samples using DPPrefSyn for TL;DR Summarization Task with  = 4
+
+Document: A fire alarm went off at the Holiday Inn in Hope Street at about 04:20 BST on Saturday and guests were asked to
+leave the hotel.
+As they gathered outside they saw the two buses, parked side-by-side in the car park, engulfed by flames.
+One of the tour groups is from Germany, the other from China and Taiwan. It was their first night in Northern Ireland.
+The driver of one of the buses said many of the passengers had left personal belongings on board and these had been destroyed.
+Both groups have organised replacement coaches and will begin their tour of the north coast later than they had planned.
+Police have appealed for information about the attack.
+Insp David Gibson said: "It appears as though the fire started under one of the buses before spreading to the second.
+"While the exact cause is still under investigation, it is thought that the fire was started deliberately."
+Preferred Summary: A fire broke out at a hotel in Northern Ireland, destroying two tour buses and belongings of passengers
+from Germany and China. Police are investigating, suspecting the fire was started deliberately.
+Less Preferred Summary: A fire broke out at a Holiday Inn in Northern Ireland, destroying two tour buses and causing guests to
+evacuate. Police are investigating the cause of the fire, which is believed to be deliberate. Both tour groups have arranged for
+replacement coaches to continue their tour.
+
+Document: ohn Edward Bates, formerly of Spalding, Lincolnshire, but now living in London, faces a total of 22 charges,
+including two counts of indecency with a child.
+The 67-year-old is accused of committing the offences between March 1972 and October 1989.
+Mr Bates denies all the charges.
+Grace Hale, prosecuting, told the jury that the allegations of sexual abuse were made by made by four male complainants and
+related to when Mr Bates was a scout leader in South Lincolnshire and Cambridgeshire.
+"The defendant says nothing of that sort happened between himself and all these individuals. He says they are all fabricating their
+accounts and telling lies," said Mrs Hale.
+The prosecutor claimed Mr Bates invited one 15 year old to his home offering him the chance to look at cine films made at scout
+camps but then showed him pornographic films.
+She told the jury that the boy was then sexually abused leaving him confused and frightened.
+Mrs Hale said: "The complainant's recollection is that on a number of occasions sexual acts would happen with the defendant
+either in the defendant's car or in his cottage."
+She told the jury a second boy was taken by Mr Bates for a weekend in London at the age of 13 or 14 and after visiting pubs he
+was later sexually abused.
+Mrs Hale said two boys from the Spalding group had also made complaints of being sexually abused.
+The jury has been told that Mr Bates was in the RAF before serving as a Lincolnshire Police officer between 1976 and 1983.
+The trial, which is expected to last two weeks, continues.
+Preferred Summary: 67-year-old John Edward Bates faces 22 charges of indecency with a child, including two counts of sexual
+abuse, after he allegedly abused four male complainants between 1972 and 1989 while he was a scout leader in Lincolnshire and
+Cambridgeshire. Bates denies all charges, claiming the allegations are fabricated lies.
+Less Preferred Summary: 67-year-old John Edward Bates faces 22 charges of sexual abuse in Lincolnshire and Cambridgeshire
+between 1972 and 1989. He denies all charges, and the prosecutor claims that Bates offered one underage boy pornographic
+
+                                                                    25
+                     Differentially Private Preference Data Synthesis for Large Language Model Alignment
+
+films and sexually abused him, and took another boy on a weekend trip to London where he was also sexually abused. Four male
+complainants are involved in the
+Document: Patients and staff were evacuated from Cerahpasa hospital on Wednesday after a man receiving treatment at the clinic
+threatened to shoot himself and others.
+Officers were deployed to negotiate with the man, a young police officer.
+Earlier reports that the armed man had taken several people hostage proved incorrect.
+The chief consultant of Cerahpasa hospital, Zekayi Kutlubay, who was evacuated from the facility, said that there had been "no
+hostage crises", adding that the man was "alone in the room".
+Dr Kutlubay said that the man had been receiving psychiatric treatment for the past two years.
+He said that the hospital had previously submitted a report stating that the man should not be permitted to carry a gun.
+"His firearm was taken away," Dr Kutlubay said, adding that the gun in the officer's possession on Wednesday was not his issued
+firearm.
+The incident comes amid tension in Istanbul following several attacks in crowded areas, including the deadly assault on the Reina
+nightclub on New Year's Eve which left 39 people dead.
+Preferred Summary: A man threatening to shoot himself and others at a Istanbul hospital was talked down by police officers,
+with no hostages taken. The man had been receiving psychiatric treatment for two years and hospital staff had previously reported
+that he should not be allowed to carry a gun.
+Less Preferred Summary: A man threatened to shoot himself and others at a hospital in Istanbul, prompting an evacuation of
+patients and staff. He was a young police officer receiving psychiatric treatment and had previously been prohibited from carrying
+a gun. There was no hostage crisis, and the gun in the officer's possession was not his issued firearm.
+Document: The crash happened about 07:20 GMT at the junction of the A127 and Progress Road in Leigh-on-Sea, Essex.
+The man, who police said is aged in his 20s, was treated at the scene for a head injury and suspected multiple fractures, the
+ambulance service said.
+He was airlifted to the Royal London Hospital for further treatment.
+The Southend-bound carriageway of the A127 was closed for about six hours while police conducted their initial inquiries.
+A spokeswoman for Essex Police said it was not possible comment to further as this time as the "investigation is now being
+conducted by the IPCC".
+Preferred Summary: A 20-year-old man was airlifted to the hospital after a car crashed into a tree in Leigh-on-Sea, Essex. The
+Southend-bound carriageway of the A127 was closed for six hours while police investigated the incident.
+Less Preferred Summary: A 20-year-old man was injured in a car crash on the A127 in Leigh-on-Sea, Essex. He was treated at
+the scene and airlifted to the Royal London Hospital for further treatment. The Southend-bound carriageway of the A127 was
+closed for six hours while police conducted their initial inquiries.
+Document: 23 October 2015 Last updated at 17:44 BST
+It's the highest rating a tropical storm can get and is the first one of this magnitude to hit mainland Mexico since 1959.
+But how are the categories decided and what do they mean? Newsround reporter Jenny Lawrence explains.
+Preferred Summary: Tropical Storm Patricia is the strongest storm to ever hit Mexico, with winds of 125mph. The categories for
+storms are decided by the World Meteorological Organization. Category 5 is the highest rating, meaning winds of over 157mph.
+Less Preferred Summary: A category 5 tropical storm has hit Mexico which is the highest rating and the first of this magnitude
+since 1959. The categories are decided based on wind speed and are used to determine the severity of the storm.
+
+                                                                    26
+

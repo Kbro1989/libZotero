@@ -1,0 +1,95 @@
+arXiv:2102.05426v2 [cs.LG] 25 Jul 2021
+
+Published as a conference paper at ICLR 2021
+BRECQ: PUSHING THE LIMIT OF POST-TRAINING
+QUANTIZATION BY BLOCK RECONSTRUCTION
+Yuhang Li12, Ruihao Gong2, Xu Tan2, Yang Yang2, Peng Hu2, Qi Zhang2, Fengwei Yu2, Wei Wang, Shi Gu1 1University of Electronic Science and Technology of China, 2SenseTime Research liyuhang699@gmail.com, gongruihao@sensetime.com, gus@uestc.edu.cn
+ABSTRACT
+We study the challenging task of neural network quantization without end-toend retraining, called Post-training Quantization (PTQ). PTQ usually requires a small subset of training data but produces less powerful quantized models than Quantization-Aware Training (QAT). In this work, we propose a novel PTQ framework, dubbed BRECQ, which pushes the limits of bitwidth in PTQ down to INT2 for the first time. BRECQ leverages the basic building blocks in neural networks and reconstructs them one-by-one. In a comprehensive theoretical study of the second-order error, we show that BRECQ achieves a good balance between crosslayer dependency and generalization error. To further employ the power of quantization, the mixed precision technique is incorporated in our framework by approximating the inter-layer and intra-layer sensitivity. Extensive experiments on various handcrafted and searched neural architectures are conducted for both image classification and object detection tasks. And for the first time we prove that, without bells and whistles, PTQ can attain 4-bit ResNet and MobileNetV2 comparable with QAT and enjoy 240× faster production of quantized models. Codes are available at https://github.com/yhhhli/BRECQ.
+1 INTRODUCTION
+The past decade has witnessed the rapid development of deep learning in many tasks, such as computer vision, autonomous driving, etc. However, the issue of huge computation cost and memory footprint requirements in deep learning has received considerable attention. Some works such as neural architecture search (Zoph & Le, 2016) try to design and search a tiny network, while others, like quantization (Hubara et al., 2017), and network pruning (Han et al., 2015) are designed to compress and accelerate off-the-shelf well-trained redundant networks.
+Many popular quantization and network pruning methods follow a simple pipeline: training the original model and then finetune the quantized/pruned model. However, this pipeline requires a full training dataset and many computation resources to perform end-to-end backpropagation, which will greatly delay the production cycle of compressed models. Besides, not all training data are always ready-to-use considering the privacy problem. Therefore, there is more demand in industry for quantizing the neural networks without retraining, which is called Post-training Quantization. Although PTQ is fast and light, it suffers from severe accuracy degeneration when the quantization precision is low. For example, DFQ (Nagel et al., 2019) can quantize ResNet-18 to 8-bit without accuracy loss (69.7% top-1 accuracy) but in 4-bit quantization, it can only achieve 39% top-1 accuracy. The primary reason is the approximation in the parameter space is not equivalent to the approximation in model space thus we cannot assure the optimal minimization on the final task loss.
+Recent works like (Nagel et al., 2020) recognized the problem and analyzed the loss degradation by Taylor series expansion. Analysis of the second-order error term indicates we can reconstruct each layer output to approximate the task loss degeneration. However, their work cannot further quantize the weights into INT2 because the cross-layer dependency in the Hessian matrix cannot be ignored when the perturbation on weight is not small enough. In this work, we analyze the second-order
+Equal contribution, Corresponding author.
+1
+
+Published as a conference paper at ICLR 2021
+
+error based on the Gauss-Newton matrix. We show that the second-order error can be transformed into network final outputs but suffer from bad generalization. To achieve the best tradeoff, we adopt an intermediate choice, block reconstruction. In addition, our contributions are threefold:
+1. Based on the second-order analysis, we define a set of reconstruction units and show that block reconstruction is the best choice with the support from theoretical and empirical evidence. We also use Fisher Information Matrix to assign each pre-activation with an importance measure during reconstruction.
+2. We incorporate genetic algorithm and the well-defined intra-block sensitivity measure to generate latency and size guaranteed mixed precision quantized neural networks, which fulfills a general improvement on both specialized hardware (FPGA) and general hardware (ARM CPU).
+3. We conduct extensive experiments to verify our proposed methods. We find that our method is applicable to a large variety of tasks and models. Moreover, we show that post-training quantization can quantize weights to INT2 without significant accuracy loss for the first time.
+
+2 PRELIMINARIES
+
+Notations Vectors are denoted by small bold letters and matrices (or tensors) are denoted by capital bold letters. For instance, W and w represent the weight tensor and its flattened version. Bar accent denotes the expectation over data points, e.g. a¯. Bracketed superscript w( ) indicates the layer index. For a convolutional or a fully-connected layer, we mark its input and output vectors by x and z. Thus given a feedforward neural network with n layers, we can denote the forward process by
+
+x( +1) = h(z( )) = h(W( )x( ) + b( )), 1   n,
+
+(1)
+
+where h(·) indicates the activation function (ReLU in this paper). For simplicity, we omit the analysis of bias b( ) as it can be merged into activation. || · ||F denotes the Frobenius norm.
+
+Quantization Background Uniform symmetric quantization maps the floating-point numbers to
+
+several fixed-points. These points (or grids) have the same interval and are symmetrically distributed. We denote the set that contains these grids as Qub,sym = s × {-2b-1, . . . , 0, . . . , 2b-1 - 1}. Here, s is the step size between two grids and b is the bit-width. Quantization function, denoted by q(·) : R  Qub,sym, is generally designed to minimize the quantization error:
+
+min ||w^ - w||2F . s.t. w^  Qub,sym
+
+(2)
+
+Solving this minimization problem, one can easily get the q(·) by leveraging the rounding-to-nearest operation · . Rounding-to-nearest is a prevalent method to perform quantization, e.g. PACT (Choi
+
+et al., 2018). However, recently some empirical or theoretical evidence supports that simply mini-
+
+mizing the quantization error in parameter space does not bring optimal task performances. Specifically, Esser et al. (2020) propose to learn the step size s by gradient descent in quantization-aware
+
+training (QAT). LAPQ (Nahshan et al., 2019) finds the optimal step size when the loss function
+
+is minimized without re-training the weights. Their motivations are all towards minimizing a final
+
+objective, which is the task loss, i.e.,
+
+min E[L(w^ )], s.t. w^  Qub,sym.
+
+(3)
+
+While this optimization objective is simple and can be well-optimized in QAT scenarios, it is not
+
+easy to learn the quantized weight without end-to-end finetuning as well as sufficient training data
+
+and computing resources. In post-training quantization settings, we only have full precision weights that w = arg minw E[L(w)] where w  R and a small subset of training data to do calibration.
+
+Taylor Expansion It turns out that the quantization imposed on weights could be viewed as a special case of weight perturbation. To quantitatively analyze the loss degradation caused by quantization, Nagel et al. (2020) use Taylor series expansions and approximates the loss degradation by
+
+E[L(w
+
++
+
+w)]
+
+-
+
+E[L(w)]
+
+
+
+wTg¯(w)
+
++
+
+1 wTH¯ (w)w, 2
+
+(4)
+
+where g¯(w) = E[wL] and H¯ (w) = E[w2 L] are the gradients and the Hessian matrix and w is the weight perturbation. Given the pre-trained model is converged to a minimum, the gradients can
+
+be safely thought to be close to 0. However, optimizing with the large-scale full Hessian is memory-
+
+infeasible on many devices as the full Hessian requires terabytes of memory space. To tackle this
+
+problem, they make two assumptions:
+
+2
+
+

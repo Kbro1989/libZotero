@@ -1,0 +1,875 @@
+                                       Score Jacobian Chaining: Lifting Pretrained 2D Diffusion Models
+                                                                     for 3D Generation
+
+                                       Haochen Wang1 Xiaodan Du1 Jiahao Li1 Raymond A. Yeh2 Greg Shakhnarovich1
+
+                                       1TTI-Chicago                                                     2Purdue University
+
+arXiv:2212.00774v1 [cs.CV] 1 Dec 2022  A zoomed out high-quality photo of Temple of Heaven                 A high quality photo of a delicious burger
+
+                                       A high quality photo of a Victorian style wooden chair              A high quality photo of a classic silver muscle car
+                                       with velvet upholstery
+
+                                       Figure 1. Results for text-driven 3D generation using Score Jacobian Chaining with Stable Diffusion as the pretrained model.
+
+                                                               Abstract                                    learned predictors of a gradient field, often referred to as the
+                                                                                                           score function of the data log-likelihood. We apply the chain
+                                          A diffusion model learns to predict a vector field of gradi-     rule on the estimated score, hence the name Score Jacobian
+                                       ents. We propose to apply chain rule on the learned gradients,      Chaining (SJC).
+                                       and back-propagate the score of a diffusion model through
+                                       the Jacobian of a differentiable renderer, which we instan-            Following Hyvärinen and Dayan [15], the score is defined
+                                       tiate to be a voxel radiance field. This setup aggregates 2D        as the gradient of the log-density function with respect to the
+                                       scores at multiple camera viewpoints into a 3D score, and re-       data. Diffusion models of various families [12, 49, 51, 53]
+                                       purposes a pretrained 2D model for 3D data generation. We           can all be interpreted [18, 21, 53] as modeling x log p(x)
+                                       identify a technical challenge of distribution mismatch that        i.e. the denoising score at noise level . For readability, we
+                                       arises in this application, and propose a novel estimation          refer to the denoising score as the score. Generating a sam-
+                                       mechanism to resolve it. We run our algorithm on several off-       ple from a diffusion model involves repeated evaluations
+                                       the-shelf diffusion image generative models, including the          of the score function from large to small  level, so that a
+                                       recently released Stable Diffusion trained on the large-scale       sample x gradually moves closer to the data manifold. It
+                                       LAION 5B dataset.                                                   can be loosely interpreted as gradient descent, with precise
+                                                                                                           control on the step sizes so that data distribution evolves to
+                                       1. Introduction                                                     match the annealed  level (ancestral sampler [12], SDE and
+                                                                                                           probability-flow ODE [53], etc.). While there are other per-
+                                          We introduce a method that converts a pretrained 2D              spectives to a diffusion model [12, 49], here we are primarily
+                                       diffusion generative model on images into a 3D generative           motivated from the viewpoint that diffusion models produce
+                                       model of radiance fields, without requiring access to any           a gradient field.
+                                       3D data. The key insight is to interpret diffusion models as
+                                                                                                              A natural question to ask is whether the chain rule can be
+                                             * Equal contribution.                                         applied to the learned gradients. Consider a diffusion model
+                                                                                                           on images. An image x may be parameterized by some
+
+                                                                                                        1
+function f with parameters , i.e., x = f (). Applying the             2. Related Works
+
+chain  rule  through  the  Jacobian  x  converts  a  gradient  on     Diffusion models have recently advanced to image gener-
+                                                                      ation on Internet-scale datasets [10, 36, 42, 44­47]. A dif-
+image x into a gradient on the parameter . There are many             fusion model could be interpreted as either a VAE [12, 49]
+                                                                      or a denoising score-matcher [51, 53, 56]. Notably, models
+potential use cases for pairing a pretrained diffusion model          trained under one regime can be directly used for inference
+                                                                      and sampling by the other [18, 53]; they are in practice
+with different choices of f . In this work we are interested          largely equivalent.
+                                                                      Neural radiance fields (NeRF) is a family of inverse ren-
+in exploring the connection between 3D and multiview 2D               dering algorithms that have excelled at multiview 3D recon-
+                                                                      struction tasks including view synthesis and surface geome-
+by choosing f to be a differentiable renderer, thus creating a        try estimation [31, 34, 40, 57, 61]. Conceptually, a 3D asset
+                                                                      is represented as a dense grid of RGB colors and spatial
+3D generative model using only pretrained 2D resources.               density  , and rendered into images in a way analogous to
+                                                                      alpha compositing [32]. NeRF parameterizes the (RGB,  )
+Many prior works [2, 58, 60] perform 3D generative mod-               volume with a neural network, but querying the network
+                                                                      densely in 3D incurs significant compute costs. Alternatively,
+eling by training on 3D datasets [5, 23, 55, 59]. This ap-            Voxel NeRFs [6, 27, 54, 62] store the volume on voxels and
+                                                                      observe no loss in end task performance [54, 62]. Querying
+proach is often as challenging as it is format-ambiguous. In          voxels is a simple memory operation that is much faster than
+                                                                      a feedforward pass of a neural network. Here we use a cus-
+addition to the high data acquisition cost of 3D assets [9],          tomized voxel radiance field with hyperparameters based on
+                                                                      DvGO [54] and TensoRF [6].
+there is no universal data format: point clouds, meshes, volu-
+                                                                      2D-supervised 3D GANs pioneered [35, 43, 64] the ap-
+metric radiance field, etc, all have computational trade-offs.        proach of training 3D generative models using only unstruc-
+                                                                      tured 2D images, and promise greater scalability in terms
+What is common to these 3D assets is that they can be ren-            of data. Rather than supervising directly on the 3D asset a
+                                                                      model generates, these methods supervise the 2D render-
+dered into 2D images. An inverse rendering system, or a               ings of the generated 3D asset, often using an adversarial
+                                                                      loss [3, 4, 38, 48, 65]. In other words, only images are needed
+differentiable renderer [24, 26, 29, 34, 39], provides access         as training data. However, training such a 3D generative
+                                                                      model from scratch is still challenging [37]. Recent empiri-
+to the Jacobian J     x    of a rendered image x     at camera        cal evaluation remains mostly on human and animal faces [3].
+                                                                      Our method does the opposite: we take an image generative
+viewpoint  with respect to the underlying 3D parameteriza-            model that is already pretrained on large amounts of 2D
+                                                                      data and use it to guide the iterative optimization of a 3D
+tion . Our method uses differentiable rendering to aggregate          asset. Optimization-based generation makes it much slower
+                                                                      compared to 3D GANs, but it becomes possible to harness
+2D image gradients over multiple viewpoints into a 3D asset           powerful off-the-shelf 2D generative models such as Stable
+                                                                      Diffusion [45] for greater content diversity.
+gradient, and lifts a generative model from 2D to 3D. We
+                                                                      CLIP-guided, optimization-based 3D generative models
+parameterize a 3D asset  as a radiance field stored on voxels         share a similar philosophy of optimizing 3D assets by guid-
+                                                                      ing on 2D renderings [14, 16, 17, 20, 25, 33]. Among them,
+and choose f to be the volume rendering function.                     DreamFields [16] and PureClipNeRF [25] also use NeRF as
+                                                                      their differentiable renderers. In this case, the 2D guidance
+A key technical challenge is that computing the 2D score              comes from CLIP [42], a pretrained image-text matching
+                                                                      model. These works optimize the 3D assets so that the image
+by directly evaluating a diffusion model on a rendered image          renderings match a user-provided text prompt. Since CLIP
+                                                                      is not a 2D generative model per se, such a pipeline usu-
+x leads to an out-of-distribution (OOD) problem. Gener-               ally creates some abstract distilled content [28] that looks
+                                                                      very different from real images. In contrast, we use diffusion
+ally, diffusion models are trained as denoisers and have only         models, which are proper 2D generative models, to create
+
+seen noisy inputs during training. On the other hand, our
+
+method requires evaluating the denoiser on non-noisy ren-
+
+dered images from a 3D asset during optimization, and it
+
+leads to the OOD problem. To address the issue, we propose
+
+Perturb-and-Average Scoring, an approach to estimate the
+
+score for non-noisy images.
+
+Empirically, we first validate the effectiveness of Perturb-
+
+and-Average Scoring at solving the OOD problem and ex-
+
+plore the hyperparameter choices on a simple 2D image can-
+
+vas. Here we identify open problems on using unconditioned
+
+diffusion models trained on FFHQ and LSUN Bedroom.
+
+Next, we use Stable Diffusion, a model pretrained on the
+
+web-scale LAION dataset to perform SJC for 3D generation,
+
+as shown in Fig. 1. Our contributions are as follows:
+
+· We propose a method for lifting a 2D diffusion model
+  to 3D via an application of the chain rule.
+
+· We illustrate the challenge of OOD when using a
+  pretrained denoiser and propose Perturb-and-Average
+  Scoring to resolve it.
+
+· We point out the subtleties and open problems on ap-
+  plying Perturb-and-Average Scoring as gradient for
+  optimization.
+
+· We demonstrate the effectiveness of SJC for the task of
+  3D text-driven generation.
+
+                                                                   2
+realistic looking 3D content.                                      sample through a sequence of noise levels of T > · · · >
+                                                                   0 = 0. {i} are chosen empirically, with a typical range
+DreamFusion. The recently arXived work by Poole et al.             being [0.01, 157] [12] in the case of DDPM.
+[41], independent and concurrent to our work, proposes an
+algorithm that is similar to our approach at the pseudo-code       Score as mean-shift. A helpful intuition is that the score
+level. Differently, their procedure uses the mathematical          behaves like mean-shift [7, 8]. If we simplify pdata to be
+setup by Graikos et al. [11] to search for image parametriza-      an empirical data distribution over the i.i.d. samples {yi},
+tion that minimizes the training loss of a diffusion model. In     then at noise level , p(x) takes the form of a mixture of
+contrast, our work is motivated by applying the chain rule         Gaussians [52]
+to the 2D score. The key differences have been summarized
+in Sec. 4.3. In terms of implementation, we do not have                        p(x) = Eypdata N (x; y, 2I).       (4)
+access to the close-sourced Imagen [46] diffusion model. In-
+stead, we use the pretrained Stable Diffusion model released       In this case there exists a closed-form expression [18, 52] to
+by Rombach et al. [45]. For a comparison with DreamFusion,         the optimal denoiser
+we use with a third-party implementation based on the same
+diffusion model, namely Stable-DreamFusion.                          D(x; ) =        i  N (x; yi, 2I) yi       .  (5)
+                                                                                        i N (x; yi, 2I)
+
+3. Preliminaries                                                   In other words, D(x; ) is a locally weighted mean of data
+                                                                   samples {yi} around x under a Gaussian kernel with band-
+   To establish a common notation, we briefly review the           width . The denoising score function can be thought of as a
+score-based perspective of diffusion models. For readers           non-parametric guide on how to update x in order to move
+familiar with VAE literature on diffusion models, we pro-
+vide a concise score-based formula card and more details in        it towards its weighted nearest neighbors.
+Appendix Sec. A1 to connect these ideas.
+                                                                   4. Score Jacobian Chaining for 3D Generation
+Denoising score matching. Given a dataset of samples Y =
+{yi} drawn from pdata, a diffusion model revolves primarily           Let  denotes the parameters of a 3D asset, e.g., voxel
+around learning a denoiser D by minimizing the difference          grid of (RGB,  ) as in Sec. 4.2. Our goal is to model and
+between a noised sample y + n and y,                               sample from the distribution p() to generate a 3D scene. In
+
+Eypdata EnN (0,I)  D(y + n; ) - y    2  ,  (1)                     our setting, only a pretrained 2D diffusion model on images
+                                     2                             p(x) is given and we do not have access to 3D data. To relate
+                                                                   the 2D and 3D distributions p(x) and p(), we assume that
+i.e. D is denoising the input y + n, for a range of  values.       the probability density of 3D asset  is proportional to the
+For 2D images, D is commonly chosen to be a ConvNet.
+Variants such as DDPM [12] parameterized the ConvNet to            expected probability densities of its multiview 2D image
+instead predict a noise residual ^, and these models can be        renderings x over camera poses , i.e.,
+converted back to the form of a denoiser by [53]
+                                                                               p()  E p(x()) ,                    (6)
+
+   D(x; ) = x - ^(x).                      (2)                     up to a normalization constant Z = E p(x()) d.
+                                                                   That is, a 3D asset  is as likely as its 2D renderings x.
+In this paper, we treat all pretrained diffusion models as
+denoisers, and perform the interface conversion in our im-            Next, we establish a lower bound, log p~(), on the dis-
+plementation when needed.
+                                                                   tribution in Eq. (6) using Jensen's inequality:
+Score from denoiser. Let p(x) denote the data distribution
+perturbed by Gaussian noise of standard deviation . It is          log p() = log E(p(x)) - log Z                  (7)
+shown in prior works [15, 51] that the denoiser D trained
+according to Eq. (1) provides a good approximation to the             E[log p(x)] - log Z log p~(). (8)
+denoising score:
+                                                                   Recall that the score is the gradient of log probability density
+                                                                   of data. By chain rule
+
+                                                                    log p~() = E [ log p(x)]                      (9)
+
+                                                                     log p~()  =  E   log p(x) · x                (10)
+                                                                       
+x  log p(x)          D(x; )   -  x.        (3)                                          x     
+                           2
+                                                                    log p~() = E[ x log p(x) · J ].
+
+A denoising diffusion model estimates the score function of          3D score        2D score; pretrained renderer Jacobian
+the noised distribution p(x) at various   {i}iT=1. To
+perform sampling, the diffusion model gradually updates a                                                               (11)
+
+github.com/ashawkey/stable-dreamfusion                             We will next discuss how to compute the 2D score in practice
+                                                                   using a pretrained diffusion model.
+
+                                                                3
+Input xblob  D(xblob, ) D(xblob + n, )
+
+                                                                                   D(x + n1; )
+
+                                                                                                                p (x)
+
+                                                                                                               Noised
+                                                                                                            Distribution
+
+Figure 2. Illustration of denoiser's OOD issue using a denoiser pre-     n1
+trained on FFHQ. When directly evaluating D(xblob, ) the model
+did not correct for the orange blob into a face image. Contrarily,        x  n2    x + ni; ni  N (0, I)
+evaluating the denoiser on noised input D(xblob + n, ) produces          n3         Input to denoiser D
+an image that successfully merges the blob with the face manifold.
+                                                                         Figure 3. Computing PAAS on 2D renderings x. Directly evaluat-
+4.1. Computing 2D Score on Non-Noisy Images                              ing D(x; ) leads to an OOD problem. Instead, we add noise to
+                                                                         x, and evaluate D(x + n; ) (blue dots). The PAAS is then
+   Computing the 3D score in Eq. (11) requires the 2D score              computed by averaging over the brown dashed arrows, correspond-
+on x. A first attempt would be to directly apply the score               ing to multiple samples of n. See Sec. 4.1 for details.
+from the denoiser in Eq. (3), i.e.,
+                                                                         a set of sampled noises {ni}, each D(x + ni) provides
+score(x, ) (D(x; ) - x)/2.                   (12)                        an update direction on the perturbed input x + ni. By
+                                                                         averaging over the noise perturbations {ni}, we obtain an
+Unfortunately, evaluating the pretrained denoiser D on x                 update direction on x itself.
+causes an out-of-distribution (OOD) problem. From the train-
+ing objective in Eq. (1), at each noise level , the denoiser D           Justifying PAAS in Eq. (13). We show that Perturb-and-
+has only seen noisy inputs of the distribution y + n where
+y  pdata and n  N (0, I). However, a rendered image                      Average Scoring provides an approximation to the score on
+x from 3D asset  is generally not consistent with such                   x at an inflated noise level of 2
+distribution.                                                                    
+                                                                         PAAS(x, 2)  x log p2(x).                              (17)
+   We illustrate this OOD situation in Fig. 2. Given a de-
+                                                                         Lemma 1 Assuming an empirical data distribution
+noiser pretrained on FFHQ [19] by Baranchuk et al. [1], we               p(x) in Eq. (4), for any x  Rd
+visualize the output D(xblob;  = 6.5) where the input xblob
+is a non-noisy image showing an orange blob centered on a                log p2(x)  EnN (0, I) log p(x + n). (18)
+grey canvas. Under the intuition that D predicts a weighted
+nearest neighbor as reviewed in (5), we expect the denoiser              Proof. Observe that the LHS of Eq. (19) is a convolution of
+                                                                         two Gaussians, therefore
+to blend the orange blob with the manifold of faces. How-
+                                                                         EnN (0, I) [N (x + n; µ, 2I)] = N (x; µ, 22I) (19)
+ever in reality we observe sharp artifacts when updating with
+this score (D(xblob; ) - xblob)/2 and the image becomes                  Recall that p(x) is a mixture of Gaussians per Eq. (4);
+further away from the face manifold.
+                                                                         p2(x) = Eypdata N (x; y, 22I)                         (20)
+
+Perturb-and-Average Scoring. To address the OOD prob-                    = Eypdata EnN (0, I) N (x + n; y, 2I) (21)
+
+lem, we propose Perturb-and-Average Scoring (PAAS). It                   = EnN (0, I) Eypdata N (x + n; y, 2I) (22)
+
+computes the score on non-noisy images x with a denoiser                 = EnN (0, I) p(x + n).                                (23)
+D by adding noise to the input, and then considering the
+
+expectation of the predicted scores w.r.t. the random noise,             Taking the log on both sides of Eq. (23) and by Jensen's
+                                                                         inequality, we arrive at Eq. (18).
+             
+PAAS(x, 2)                                   (13)
+
+EnN (0, I) [score(x + n, )]                  (14)                        Claim 1 Assuming a trained denoiser D as in Eq. (3),
+                                                                         our PAAS(x, 2) in Eq. (13) computes the gradient
+=En          D(x + n, ) - (x + n)            (15)                        w.r.t. a lower bound of log p2(x).
+                             2
+
+=En          D(x + n, ) - x  Z- En  n  .     (16)                        Proof. By taking the gradient of the RHS of Lemma 1,
+                        2       Z   
+
+                             Z                                           x En log p(x + n, ) = Enx+n log p(x + n)
+                                                                                                        = En[score(x + n, )]. (24)
+                                    =0ZZ
+
+In practice, we use the Monte Carlo estimate of the expecta-             which is the proposed PAAS algorithm in Eq. (13).
+tion in Eq. (16). The algorithm is illustrated in Fig. 3. Given
+
+                                                                      4
+4.2. Inverse Rendering on Voxel Radiance Field                                                     Annealed                    Random 
+
+   With the computation of the 2D score resolved, the other         FFHQ
+
+half of our setup in Eq. (11) requires access to the Jacobian       SD, scale=10 SD, scale=3 LSUN
+
+of a differentiable renderer.                                       Figure 4. Sampling 2D images with Perturb-and-Average Scoring.
+                                                                    We compare Annealed vs Random  schedule against several dif-
+3D Representation. We represent a 3D asset  as a voxel              fusion models. Row 1 & 2: the random  schedule exhibits strong
+radiance field [6, 54, 62], which is much faster to access          mode-seeking behavior, and it results in low-quality "mean" images
+                                                                    on unconditioned diffusion models trained on FFHQ and LSUN
+and update compared to a vanilla NeRF parameterized by a            Bedroom. In this case, we need a carefully designed annealed 
+neural network [34]. The parameters  consist of a density           schedule to produce better, more diverse samples. Row 3 & 4: Sta-
+voxel grid V(density)  R1×Nx×Ny×Nz and a voxel grid of              ble Diffusion (SD) is conditioned on the prompt "a squirrel holding
+appearance features V(app)  Rc×Nx×Ny×Nz . Convention-               a saxophone". The use of natural language makes the conditioned
+ally the appearance features are simply the RGB colors and          distribution much easier to sample from. When the guidance scale
+c = 3. For simplicity, we do not model view dependencies            is elevated to 10, Random  schedule that fails on FFHQ and LSUN
+in this work.                                                       starts to produce crisp, clean images.
+
+Inverse Volumetric Rendering. Image rendering is per-
+
+formed independently along a camera ray through each pixel.
+
+We cut a camera light ray into equally distanced segments
+of length d, and at the spatial location corresponding to the
+beginning of the i-th segment we sample a (RGBi, i) tuple
+from the color and density grids using trilinear interpolation.
+
+These values are alpha-composited using volume rendering
+quadrature [32] into the pixel color C = i wi · RGBi,
+where
+
+                 i-1
+
+wi = i · (1 - j); i = 1 - exp(-id). (25)
+
+                 j=0
+
+Volume rendering of  is directly differentiable. At a ren-
+
+dered image x, the Vector-Jacobian product in Eq. (11)
+                                           x
+between PAAS(x) and the Jacobian J  =         is com-
+
+puted by back-propagating the score through Eq. (25). This
+
+Vector-Jacobian product provides us with the 3D gradient
+
+needed for generative modeling on the voxel radiance field.
+
+Regularization Strategies. The voxel grid is a very power-          Emptiness Loss Schedule: We use a hyperparameter  to
+                                                                    control the contribution of the emptiness loss. If we apply a
+ful 3D representation for volumetric rendering. Given noisy         large emptiness loss, it will hinder the learning of geometry
+                                                                    in the early stage of training. But if the emptiness is too
+2D guidance, the model may cheat by populating the entire           small, there will be floating density artifacts. We adopt a two-
+                                                                    stage noise elimination schedule to deal with this problem.
+grid with small densities such that the combined effect from        In the first K iterations, we use a relatively small weighting
+                                                                    factor 1. After the Kth iteration, it is increased to a larger
+one view hallucinates a plausible image. We propose sev-            2. In our experiments 1 = 1 × 104 and 2 = 2 × 105. We
+                                                                    provide an ablation study of this technique in Fig. 7 to show
+eral techniques to encourage the formation of a coherent 3D         its effectiveness.
+
+structure.                                                          Center Depth Loss: Sometimes the optimization places the
+                                                                    object away from the scene center. The object either becomes
+Emptiness Loss: Ideally, the space should be sparse with near       small or wander around the image boundary. For the few
+zero densities except at the object. We propose an emptiness        cases when this happens we apply a center depth loss
+loss to encourage sparsity on a ray r:
+
+                  1  N
+                  N
+Lemptiness(r)  =          log(1 +  · wi),     (26)
+
+                     i=1
+
+where wi are the alpha-composited weights shown in (25).                                                                                      
+The shape of the log function imposes severe penalties at the
+                                                                    Lcenter(D)                     =  -  log      1      D(p)  -   1  |       D(q)
+onset of small weights, but does not grow aggressively if the                                                  |B|                |B
+                                                                                                                     pB                  q/B
+weights are large. It is consistent with our aim to eliminate
+small densities. The hyperparameter  controls the steepness                                                                                   (27)
+of the loss function near 0. A larger  will put more emphasis
+on eliminating low-density noise. We set  = 10.
+
+                                                                 5
+A DSLR photo of a yellow duck                                       A ficus planted in a pot
+
+A zoomed out photo a small castle                                   A high quality photo of a toy motorcycle
+
+A zoomed out high quality photo of Sydney Opera House               A photo of a horse walking
+
+Figure 5. Qualitative results of text-prompted generation of 3D models with SJC, purely from the pretrained Stable Diffusion (2D) image
+model. Each row shows two views, with associated depth maps (blue is far, red is near), for a single 3D model generated for a given prompt.
+Note the detailed appearance as well as a sharp, well-defined depth structure.
+
+where D is the depth image, B is a box (set of pixel locations)     5. Experiments
+at the center of the image, and B is its complement.
+                                                                       We conduct experiments on both unconditioned and con-
+4.3. SJC vs. DreamFusion                                            ditioned diffusion models to have a more comprehensive
+                                                                    understanding of the properties of SJC.
+   In this section, we describe the differences and the con-
+nections between our SJC and DreamFusion.                           DDPMs trained on FFHQ and LSUN Bedroom are un-
+Differences from DreamFusion. In terms of formulation,              conditioned diffusion models with an architecture based on
+DreamFusion's computation of the gradient w.r.t.  involves          the implementation by Dhariwal and Nichol [10]. They are
+a U-Net Jacobian term (see Eq. 2 in their paper [41]). In           trained on an image resolution of 256 × 256. FFHQ [19] is a
+practice, they "found that omitting the U-Net Jacobian term"        dataset of aligned faces with diverse coverage of gender, age,
+to be more effective. On the other hand, this U-Net Jacobian        race, facial appearance as well as head poses. LSUN Bed-
+term does not appear in our formulation. Their additional           room [63] includes bedroom images with varied furniture
+justification in the appendix actually leans more towards our       layout plans and rich interior design styles.
+viewpoint. An additional contribution of ours beyond Dream-
+Fusion [41] is our analysis of the effect that the OOD prob-        Stable Diffusion is an expanded work based on Latent Dif-
+lem has when using a denoiser on rendered images (Claim 1),         fusion Model (LDM) developed by Rombach et al. [45]. It
+and the PAAS method to address it. For the variance reduc-          is trained on the LAION5B dataset [47]. We use the release
+tion technique, namely the use of the Monte-Carlo estimate          version v1.5. Diffusion is performed on a latent space of
+on Eq. (16), or ^ - (in DreamFusion), vs. on Eq. (15), we           4 × 64 × 64, then upsampled to 3 × 256 × 256 by a decoder.
+observe comparable performance between the two methods              The model is natively trained for text-conditioned image
+empirically for 3D generation.                                      generations, and exposes a guidance scale parameter that
+Influences by DreamFusion. At the time of this submission,          controls the strength of language conditioning [13]. Intu-
+DreamFusion is a concurrent arXiv paper. However, as we             itively a larger guidance scale makes the conditioned image
+have read the paper, our research was influenced by their           distribution more faithful to the text prompt by trading off
+reported observations. In particular, we adopted the idea           sample diversity.
+of randomized scheduling of  during 3D optimization for
+easier hyperparameter tuning, and used view-augmented               5.1. Validating PAAS on 2D images.
+language prompting that improves the overall 3D quality. For
+future work we do hope to explore a more general solution              Before directly jumping to 3D generation, we first verify
+than view-dependent prompts.                                        that PAAS provides effective guidance on a simple 2D image
+                                                                    canvas. In other words, here  is a grid of RGB values and
+                                                                    f is an identity function. The hope is that gradient descent
+
+                                                                 6
+          (a)                                                 (b)  (c)
+
+Ours
+
+StableDF
+
+          (d)                                                 (e)  (f)
+
+Ours
+
+StableDF
+
+Figure 6. Qualitative comparison between Stable-DreamFusion (StableDF) and Ours. The prompts are: (a) "A high quality photo of a
+delicious burger"; (b) "a DSLR photo of a yellow duck"; (c) "A ficus planted in a pot"; (d) "A product photo of a toy tank"; (e) "A high
+quality photo of a chocolate icecream cone"; (f)"A wide angle zoomed out photo of a giraffe". Both methods are run for 10k iterations
+without per-prompt finetuning on the hyperparameters. The images on the left are rendered RGB images and the images on the right are
+depth visualization.
+
+on the vector field produced by PAAS creates high quality          blurry image canvas with no content.
+
+images. Here an important decision to make is the schedule            On the other hand, natural language prompting plays a
+of {i} at which we compute PAAS.                                   critical role when sampling images with Stable Diffusion.
+                                                                   When the language guidance is set to a regular level of 3.0,
+   We experimented with an annealed schedule (Annealed             the observations are broadly consistent with sampling on
+) vs. a random schedule (Random ) as proposed in Dream-            FFHQ and LSUN. Random  schedule produces blurry out-
+Fusion. Under the Annealed  schedule, we start from a              puts. However, when the guidance scale is elevated to 10.0,
+large  and gradually decrease it as we update the image can-       Random  schedule begins to generate crisp, clean images
+vas x. PAAS computed at larger  level attends to high level        and outperforms Annealed  schedule. Despite various so-
+image structure while smaller  provides stronger guidance          phisticated strategies on Annealed  scheduling (see our
+on detailed features. The Random  schedule on the contrary         code for details), at a high language guidance scale Ran-
+uniformly samples a  at every step. We show qualitative            domized  remains the better option. We hypothesize that
+comparisons in Fig. 4.                                             stronger language guidance forces the image distribution to
+                                                                   be narrower and more beneficial for a mode-seeking algo-
+   For unconditioned diffusion models trained on FFHQ,             rithm. We acknowledge none of the images in Fig. 4 can
+we observe that Annealed  performs better than Random              match the sample quality of a standard diffusion inference
+, and the image samples have better pose variation and             pipeline, and the right way to apply PAAS as gradient for
+quality. Particularly, the randomized  exhibits severe mode-       optimization remains an open problem.
+seeking behavior converging to average faces. In the case
+
+of LSUN Bedroom, the mode-seeking behavior results in a
+
+                                                              7
+                          A zoomed out high quality photo of Temple of Heaven.
+
+                                  a DSLR photo of a rose
+
+                          A modern house with flat roof floating on water.
+
+No emptiness loss ( = 0)   = 1e4                                     = 2e5      Ours
+
+Figure 7. Ablation experiments on the proposed emptiness loss schedule. For each setting of the loss weight , we show a rendered image
+and the associated depth map from a randomly sampled viewpoint. Ours incorporates the loss with weight schedule described in 5.2. It leads
+to better 3D shape, as evidenced in the cleaner depth maps. Setting the loss weight too low yields "cloudy" depth fields. When setting the
+weight too high, SJC fails to produce meaningful 3D models.
+
+5.2. 3D Generation                                                  parison is to show that our overall pipeline is competitive.
+
+   In this paper, we focus on 3D Generation with the                Ablations. In Fig. 7, we conduct ablations to demonstrate
+language-conditioned Stable Diffusion model. We found               the importance of the proposed emptiness loss and schedul-
+that tuning the Annealed  schedule on FFHQ and LSUN                 ing of its weight  discussed in Sec. 4.2. We show results
+Bedroom in 3D domain is difficult in practice, and leave it         without the emptiness loss, with constant weight  vs our
+as future work. Based on the insights from 2D experiments           proposed scheduling of . We observe that our complete
+earlier, we use Random  schedule coupled with a high                method (Ours) improves the quality of generated 3D mod-
+language guidance scale.                                            els, e.g., fewer floating artifacts and better geometry.
+
+Rendering with Latent 3D Features. Stable Diffusion                 6. Conclusion
+economizes compute by performing diffusion modeling on
+the latent features of a pretrained AutoEncoder. We there-             We propose an optimization-based approach to generate
+fore choose to render a feature image in this latent space          3D assets from pretrained image (2D) diffusion models. The
+from a features field [3, 38] represented by a voxel grid in        key technical contribution is the derivation of Perturb-and-
+R4×Nx×Ny×Nz .                                                       Average Scoring method which bridges the gap between the
+                                                                    denoising-trained diffusion models and the non-noisy im-
+Qualitative Comparison. In Fig. 5, we show text-prompted            ages encountered in the process of optimizing a 3D model
+3D generation results from SJC. It is capable of generating         guided by the diffusion. We also propose a new regulariza-
+complex 3D models over a diverse set of prompts ranging             tion loss for improving the quality of generated 3D scene.
+from animals to the Sydney Opera House. Next, we compare            Working with the large-scale Stable Diffusion model, we
+SJC with Stable-DreamFusion, the third-party implementa-            demonstrate that our approach can generate compelling 3D
+tion based on the same pretrained Stable Diffusion model.           models, comparing favorably to available concurrent work.
+In Fig. 6, we show qualitative comparisons of generated 3D          Finally, we investigate an interesting distinction between the
+assets given the same prompt. We observe that SJC gener-            effect of noise scheduling regime in unconditional image
+ates 3D models with better image quality and more sensible          diffusion models and a text-conditional model, and identify
+structure than Stable-DreamFusion in a significant number           an avenue for future work.
+of cases. We acknowledge that both systems exhibit quality
+fluctutations over different trials, and the point of this com-
+
+                                                                 8
+7. Acknowledgements                                                      [15] Aapo Hyvärinen and Peter Dayan. Estimation of non-
+                                                                               normalized statistical models by score matching. J. Mach.
+   The authors would like to thank David McAllester for                        Learn. Res, 2005. 1, 3
+feedbacks on an early pitch of the work, Shashank Srivas-
+tava and Madhur Tulsiani for discussing the 2 factor on                  [16] Ajay Jain, Ben Mildenhall, Jonathan T Barron, Pieter Abbeel,
+synthetic experiments. We would like to thank friends at TRI                   and Ben Poole. Zero-shot text-guided object generation with
+and 3DL lab at UChicago for suggestions on the manuscript.                     dream fields. In IEEE Conf. Comput. Vis. Pattern Recog.,
+HC would like to thank Kavya Ravichandran for incredible                       2022. 2
+officemate support, and Michael Maire for the discussion
+and encouragement while riding Metra.                                    [17] Nikolay Jetchev. Clipmatrix: Text-controlled creation of 3D
+                                                                               textured meshes. arXiv preprint arXiv:2109.12922, 2021. 2
+References
+                                                                         [18] Tero Karras, Miika Aittala, Timo Aila, and Samuli Laine.
+ [1] Dmitry Baranchuk, Ivan Rubachev, Andrey Voynov, Valentin                  Elucidating the design space of diffusion-based generative
+      Khrulkov, and Artem Babenko. Label-efficient seman-                      models. arXiv preprint arXiv:2206.00364, 2022. 1, 2, 3, 12
+      tic segmentation with diffusion models. arXiv preprint
+      arXiv:2112.03126, 2021. 4                                          [19] Tero Karras, Samuli Laine, and Timo Aila. A style-based
+                                                                               generator architecture for generative adversarial networks. In
+ [2] Ruojin Cai, Guandao Yang, Hadar Averbuch-Elor, Zekun                      IEEE Conf. Comput. Vis. Pattern Recog., 2019. 4, 6
+      Hao, Serge Belongie, Noah Snavely, and Bharath Hariharan.
+      Learning gradient fields for shape generation. In Eur. Conf.       [20] Nasir Khalid, Tianhao Xie, Eugene Belilovsky, and Tiberiu
+      Comput. Vis., 2020. 2                                                    Popa. Clip-mesh: Generating textured meshes from text using
+                                                                               pretrained image-text models. ACM Trans. Graph., 2022. 2
+ [3] Eric R Chan, Connor Z Lin, Matthew A Chan, Koki Nagano,
+      Boxiao Pan, Shalini De Mello, Orazio Gallo, Leonidas J             [21] Diederik Kingma, Tim Salimans, Ben Poole, and Jonathan Ho.
+      Guibas, Jonathan Tremblay, Sameh Khamis, et al. Efficient                Variational diffusion models. Advances in neural information
+      geometry-aware 3D generative adversarial networks. In IEEE               processing systems, 34:21696­21707, 2021. 1
+      Conf. Comput. Vis. Pattern Recog., 2022. 2, 8
+                                                                         [22] Diederik P Kingma and Jimmy Ba. Adam: A method for
+ [4] Eric R Chan, Marco Monteiro, Petr Kellnhofer, Jiajun Wu,                  stochastic optimization. arXiv preprint arXiv:1412.6980,
+      and Gordon Wetzstein. pi-GAN: Periodic implicit generative               2014. 14
+      adversarial networks for 3d-aware image synthesis. In IEEE
+      Conf. Comput. Vis. Pattern Recog., 2021. 2                         [23] Sebastian Koch, Albert Matveev, Zhongshi Jiang, Francis
+                                                                               Williams, Alexey Artemov, Evgeny Burnaev, Marc Alexa,
+ [5] Angel X Chang, Thomas Funkhouser, Leonidas Guibas, Pat                    Denis Zorin, and Daniele Panozzo. ABC: A big cad model
+      Hanrahan, Qixing Huang, Zimo Li, Silvio Savarese, Manolis                dataset for geometric deep learning. In IEEE Conf. Comput.
+      Savva, Shuran Song, Hao Su, et al. ShapeNet: An information-             Vis. Pattern Recog., 2019. 2
+      rich 3D model repository. arXiv preprint arXiv:1512.03012,
+      2015. 2                                                            [24] Christoph Lassner and Michael Zollhofer. Pulsar: Efficient
+                                                                               sphere-based neural rendering. In IEEE Conf. Comput. Vis.
+ [6] Anpei Chen, Zexiang Xu, Andreas Geiger, Jingyi Yu, and                    Pattern Recog., 2021. 2
+      Hao Su. Tensorf: Tensorial radiance fields. arXiv preprint
+      arXiv:2203.09517, 2022. 2, 5                                       [25] Han-Hung Lee and Angel X Chang. Understanding pure
+                                                                               clip guidance for voxel grid nerf models. arXiv preprint
+ [7] Yizong Cheng. Mean shift, mode seeking, and clustering.                   arXiv:2209.15172, 2022. 2
+      IEEE Trans. Pattern Anal. Mach. Intell., 1995. 3
+                                                                         [26] Tzu-Mao Li, Miika Aittala, Frédo Durand, and Jaakko Lehti-
+ [8] Dorin Comaniciu and Peter Meer. Mean shift analysis and                   nen. Differentiable Monte Carlo ray tracing through edge
+      applications. In Int. Conf. Comput. Vis., 1999. 3                        sampling. ACM Trans. Graph., 2018. 2
+
+ [9] Amélie Deltombe. How much does it cost to create 3D mod-            [27] Lingjie Liu, Jiatao Gu, Kyaw Zaw Lin, Tat-Seng Chua, and
+      els?, Apr 2022. 2                                                        Christian Theobalt. Neural sparse voxel fields. In Adv. Neural
+                                                                               Inform. Process. Syst., 2020. 2
+[10] Prafulla Dhariwal and Alexander Nichol. Diffusion mod-
+      els beat GANs on image synthesis. In Adv. Neural Inform.           [28] Xingchao Liu, Chengyue Gong, Lemeng Wu, Shujian Zhang,
+      Process. Syst., 2021. 2, 6                                               Hao Su, and Qiang Liu. Fusedream: Training-free text-to-
+                                                                               image generation with improved clip+ GAN space optimiza-
+[11] Alexandros Graikos, Nikolay Malkin, Nebojsa Jojic, and Dim-               tion. arXiv preprint arXiv:2112.01573, 2021. 2
+      itris Samaras. Diffusion models as plug-and-play priors. arXiv
+      preprint arXiv:2206.09012, 2022. 3                                 [29] Matthew M Loper and Michael J Black. OpenDR: An ap-
+                                                                               proximate differentiable renderer. In Eur. Conf. Comput. Vis.,
+[12] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising dif-                 2014. 2
+      fusion probabilistic models. In Adv. Neural Inform. Process.
+      Syst., 2020. 1, 2, 3                                               [30] Dimitra Maoutsa, Sebastian Reich, and Manfred Opper. Inter-
+                                                                               acting particle solutions of fokker­planck equations through
+[13] Jonathan Ho and Tim Salimans. Classifier-free diffusion                   gradient­log­density estimation. Entropy, 2020. 13
+      guidance. arXiv preprint arXiv:2207.12598, 2022. 6
+                                                                         [31] Ricardo Martin-Brualla, Noha Radwan, Mehdi SM Sajjadi,
+[14] Fangzhou Hong, Mingyuan Zhang, Liang Pan, Zhongang                        Jonathan T Barron, Alexey Dosovitskiy, and Daniel Duck-
+      Cai, Lei Yang, and Ziwei Liu. Avatarclip: Zero-shot text-                worth. Nerf in the wild: Neural radiance fields for uncon-
+      driven generation and animation of 3D avatars. arXiv preprint            strained photo collections. In IEEE Conf. Comput. Vis. Pat-
+      arXiv:2205.08535, 2022. 2                                                tern Recog., 2021. 2
+
+                                                                         [32] Nelson Max. Optical models for direct volume rendering.
+                                                                               IEEE Trans. Vis. Comput. Graph., 1995. 2, 5
+
+                                                                         [33] Oscar Michel, Roi Bar-On, Richard Liu, Sagie Benaim, and
+                                                                               Rana Hanocka. Text2mesh: Text-driven neural stylization for
+
+                                                                      9
+      meshes. In IEEE Conf. Comput. Vis. Pattern Recog., 2022. 2          [48] Katja Schwarz, Yiyi Liao, Michael Niemeyer, and Andreas
+[34] Ben Mildenhall, Pratul P Srinivasan, Matthew Tancik,                       Geiger. GRAF: Generative radiance fields for 3D-aware im-
+                                                                                age synthesis. In Adv. Neural Inform. Process. Syst., 2020.
+      Jonathan T Barron, Ravi Ramamoorthi, and Ren Ng. Nerf:                    2
+      Representing scenes as neural radiance fields for view synthe-
+      sis. Commun. ACM, 2021. 2, 5                                        [49] Jascha Sohl-Dickstein, Eric Weiss, Niru Maheswaranathan,
+[35] Thu Nguyen-Phuoc, Chuan Li, Lucas Theis, Christian                         and Surya Ganguli. Deep unsupervised learning using
+      Richardt, and Yong-Liang Yang. HoloGAN: Unsupervised                      nonequilibrium thermodynamics. In International Confer-
+      learning of 3D representations from natural images. In Int.               ence on Machine Learning, pages 2256­2265. PMLR, 2015.
+      Conf. Comput. Vis., 2019. 2                                               1, 2
+[36] Alex Nichol, Prafulla Dhariwal, Aditya Ramesh, Pranav
+      Shyam, Pamela Mishkin, Bob McGrew, Ilya Sutskever, and              [50] Jiaming Song, Chenlin Meng, and Stefano Ermon. Denoising
+      Mark Chen. Glide: Towards photorealistic image generation                 diffusion implicit models. In Int. Conf. Learn. Represent.,
+      and editing with text-guided diffusion models. arXiv preprint             2021. 12
+      arXiv:2112.10741, 2021. 2
+[37] Michael Niemeyer and Andreas Geiger. Campari: Camera-                [51] Yang Song and Stefano Ermon. Generative modeling by
+      aware decomposed generative neural radiance fields. In Int.               estimating gradients of the data distribution. In Adv. Neural
+      Conf. 3DV, 2021. 2                                                        Inform. Process. Syst., 2019. 1, 2, 3, 12
+[38] Michael Niemeyer and Andreas Geiger. Giraffe: Representing
+      scenes as compositional generative neural feature fields. In        [52] Yang Song and Stefano Ermon. Improved techniques for
+      IEEE Conf. Comput. Vis. Pattern Recog., 2021. 2, 8                        training score-based generative models. In Adv. Neural Inform.
+[39] Merlin Nimier-David, Delio Vicini, Tizian Zeltner, and Wen-                Process. Syst., 2020. 3, 12
+      zel Jakob. Mitsuba 2: A retargetable forward and inverse
+      renderer. ACM Trans. Graph., 2019. 2                                [53] Yang Song, Jascha Sohl-Dickstein, Diederik P Kingma, Ab-
+[40] Michael Oechsle, Songyou Peng, and Andreas Geiger.                         hishek Kumar, Stefano Ermon, and Ben Poole. Score-based
+      Unisurf: Unifying neural implicit surfaces and radiance fields            generative modeling through stochastic differential equations.
+      for multi-view reconstruction. In Int. Conf. Comput. Vis.,                In Int. Conf. Learn. Represent., 2021. 1, 2, 3, 13
+      2021. 2
+[41] Ben Poole, Ajay Jain, Jonathan T Barron, and Ben Mildenhall.         [54] Cheng Sun, Min Sun, and Hwann-Tzong Chen. Direct voxel
+      DreamFusion: Text-to-3D using 2D diffusion. arXiv preprint                grid optimization: Super-fast convergence for radiance fields
+      arXiv:2209.14988, 2022. 3, 6, 14                                          reconstruction. In IEEE Conf. Comput. Vis. Pattern Recog.,
+[42] Alec Radford, Jong Wook Kim, Chris Hallacy, Aditya                         2022. 2, 5
+      Ramesh, Gabriel Goh, Sandhini Agarwal, Girish Sastry,
+      Amanda Askell, Pamela Mishkin, Jack Clark, et al. Learning          [55] Xingyuan Sun, Jiajun Wu, Xiuming Zhang, Zhoutong Zhang,
+      transferable visual models from natural language supervision.             Chengkai Zhang, Tianfan Xue, Joshua B Tenenbaum, and
+      2021. 2                                                                   William T Freeman. Pix3D: Dataset and methods for single-
+[43] Sai Rajeswar, Fahim Mannan, Florian Golemo, David                          image 3D shape modeling. In IEEE Conf. Comput. Vis. Pat-
+      Vazquez, Derek Nowrouzezahrai, and Aaron Courville.                       tern Recog., 2018. 2
+      Pix2scene: Learning implicit 3d representations from images.
+      openreview, 2018. 2                                                 [56] Pascal Vincent. A connection between score matching and
+[44] Aditya Ramesh, Prafulla Dhariwal, Alex Nichol, Casey Chu,                  denoising autoencoders. Neural computation, 2011. 2
+      and Mark Chen. Hierarchical text-conditional image genera-
+      tion with clip latents. arXiv preprint arXiv:2204.06125, 2022.      [57] Peng Wang, Lingjie Liu, Yuan Liu, Christian Theobalt, Taku
+      2                                                                         Komura, and Wenping Wang. Neus: Learning neural implicit
+[45] Robin Rombach, Andreas Blattmann, Dominik Lorenz,                          surfaces by volume rendering for multi-view reconstruction.
+      Patrick Esser, and Björn Ommer. High-resolution image syn-                arXiv preprint arXiv:2106.10689, 2021. 2
+      thesis with latent diffusion models. In IEEE Conf. Comput.
+      Vis. Pattern Recog., 2022. 2, 3, 6                                  [58] Jiajun Wu, Chengkai Zhang, Tianfan Xue, Bill Freeman, and
+[46] Chitwan Saharia, William Chan, Saurabh Saxena, Lala Li, Jay                Josh Tenenbaum. Learning a probabilistic latent space of
+      Whang, Emily Denton, Seyed Kamyar Seyed Ghasemipour,                      object shapes via 3D generative-adversarial modeling. In Adv.
+      Burcu Karagol Ayan, S Sara Mahdavi, Rapha Gontijo Lopes,                  Neural Inform. Process. Syst., 2016. 2
+      et al. Photorealistic text-to-image diffusion models with deep
+      language understanding. arXiv preprint arXiv:2205.11487,            [59] Zhirong Wu, Shuran Song, Aditya Khosla, Fisher Yu, Lin-
+      2022. 3                                                                   guang Zhang, Xiaoou Tang, and Jianxiong Xiao. 3D
+[47] Christoph Schuhmann, Romain Beaumont, Richard Vencu,                       ShapeNets: A deep representation for volumetric shapes. In
+      Cade Gordon, Ross Wightman, Mehdi Cherti, Theo Coombes,                   IEEE Conf. Comput. Vis. Pattern Recog., 2015. 2
+      Aarush Katta, Clayton Mullis, Mitchell Wortsman, et al.
+      LAION-5B: An open large-scale dataset for training next gen-        [60] Guandao Yang, Xun Huang, Zekun Hao, Ming-Yu Liu, Serge
+      eration image-text models. arXiv preprint arXiv:2210.08402,               Belongie, and Bharath Hariharan. PointFlow: 3D point cloud
+      2022. 2, 6                                                                generation with continuous normalizing flows. In Int. Conf.
+                                                                                Comput. Vis., 2019. 2
+
+                                                                          [61] Lior Yariv, Jiatao Gu, Yoni Kasten, and Yaron Lipman. Vol-
+                                                                                ume rendering of neural implicit surfaces. In Adv. Neural
+                                                                                Inform. Process. Syst., 2021. 2
+
+                                                                          [62] Alex Yu, Sara Fridovich-Keil, Matthew Tancik, Qinhong
+                                                                                Chen, Benjamin Recht, and Angjoo Kanazawa. Plenoxels:
+                                                                                Radiance fields without neural networks. arXiv preprint
+                                                                                arXiv:2112.05131, 2021. 2, 5
+
+                                                                          [63] Fisher Yu, Ari Seff, Yinda Zhang, Shuran Song, Thomas
+                                                                                Funkhouser, and Jianxiong Xiao. LSUN: Construction of a
+                                                                                large-scale image dataset using deep learning with humans in
+
+                                                                      10
+      the loop. arXiv preprint arXiv:1506.03365, 2015. 6
+[64] Yuxuan Zhang, Wenzheng Chen, Huan Ling, Jun Gao, Yinan
+
+      Zhang, Antonio Torralba, and Sanja Fidler. Image GANs meet
+      differentiable rendering for inverse graphics and interpretable
+      3D neural rendering. arXiv preprint arXiv:2010.09125, 2020.
+      2
+[65] Xiaoming Zhao, Fangchang Ma, David Güera, Zhile Ren,
+      Alexander G Schwing, and Alex Colburn. Generative multi-
+      plane images: Making a 2D GAN 3D-Aware. In Eur. Conf.
+      Comput. Vis., 2022. 2
+
+                                                                         11
+Appendix
+
+   · In Sec. A1, we provide diffusion models from a score-based perspective following Karras et al. [18].
+   · In Sec. A2, we provide additional experiments on our approach, including additional ablation study, qualitative results,
+
+      and video results.
+   · In Sec. A3, we document implementation details.
+
+Algorithm 1 Training                                            Algorithm 2 Deterministic Sampling
+
+ 1: repeat                                                      1: {i}Ti=1 descending; 0 = 0
+ 2: x  pdata                                                    2: xT = T z, z  N (0, I)
+ 3:   [min, max]
+ 4: z  N (0, I)                                                 3: for t = T, . . . , 1 do
+
+ 5: Take gradient descent step on                               4: xt-1 = xt + (t - t-1) · t · score(xt, t)
+            D(x + z, ) - x 2
+                                                                5:  = (1 - wt) xt + wtD(xt, t)      wt  =    t -t-1
+ 6: until converged                                                                                               t
+ 7: score(x, ) = x log p(x) = (D(x, ) - x)/2
+                                                                               weighted average
+
+                                                                6: return x0
+
+Figure A1. Training and Sampling Algorithm Card for Score-Based Methods with numerical scaling s(t) = 1 and (t) = t. Note that
+the inference step is analogous to DDIM [50], and simplifies to a weighted averaging between the current iterate xt and the denoiser
+output D(xt, t). This particular scheduling allows for taking large step sizes, and a sample can be generated in as few as 80 network
+evaluations [18] while maintaining high image quality.
+
+A1. Diffusion Models from Score-Based Perspective
+
+   We provide a more detailed recap of diffusion models from the score-based perspective. For a quick overview, we summarize
+the training and deterministic sampling algorithms in Fig. A1; the deterministic sampling algorithm can be made stochastic by
+adding noise and adjusting  level after each update (details see Karras et al. [18]).
+
+   In the following analysis we assume that each dimension of the random vector x is independent, and that the variance in
+each dimension is 1. The general form of the forward noising step of a diffusion model can be described as scaling and adding
+noise, i.e.
+
+xt = s(t)x0 + s(t)(t)z,                                                                                              (28)
+
+where z  N (0, I) and x0 is a sample drawn from data distribution. s(t) and (t) are user-defined coefficients. Here the
+coefficient on noise z is parameterized as the product of s(t) and (t) so that (t) represents the noise-to-signal ratio in xt.
+
+   SMLD [51, 52], DDIM [50] and Karras [18] sets scaling, i.e. s(t) = 1, and therefore adding noise by x0 + (t)z would
+cause xt to numerically get larger as t increases. DDPM on the other hand introduced rapidly decreasing s(t) to scale down the
+successive xt so that at any time t, pt(x) has variance fixed at 1. This goal of maintaining a standard deviation 1 requires that
+
+Var[xt] = Var[s(t)x0] + Var[s(t)(t)z]                                                                                (29)
+
+s(t)2 Var[x0] +s(t)2(t)2 Var[z] = I                                                                                  (30)
+
+=I                                                                  =I
+
+                                              s(t)2 + s(t)2(t)2 = 1                                                  (31)
+
+                                              (t) =                 1 - s(t)2                                        (32)
+                                                                      s(t)2
+
+                                                                    it i =     it(1 - i) , and therefore (t) =       1-¯t  .
+DDPM specifies the s(t) by a set of t, i.e., s(t) = ¯t =                                                               ¯t
+
+                                              12
+   The noising step (28) describes the marginal distribution at pt(x). The infinitesimal time evolution of this process can be
+written as the following stochastic differential equation [53]:
+
+                          dx = f (t)x dt + g(t) dt             where       f (t)   =  s(t)     g(t) = s(t) 2 (t)(t).                                      (33)
+                                                                                      s(t)
+
+Fokker-Planck equation [30] states that a stochastic differential equation of the form (33) is identified with a partial differential
+equation describing the marginal probability density distribution pt(x)
+
+                   dx = f (x, t) dt + g(t) dt                  pt(x)         =  -     ·   f (x, t) pt(x) -        g(t)2  xpt   (x)  .                     (34)
+                                                                 t                                                  2
+
+Applying this identity tells us that a stochastic differential equation like (33) implies a deterministic, ordinary differential
+equation. Here we illustrate the proof schematically:
+
+      dx = f (t) x dt + g(t) dt                      FP                 pt (x)    =   - ·      f (t)  x  pt(x)    -     g(t)2  xpt(x)
+                                                                          t                                               2
+
+                   stochastic
+
+                                                                                                         equal (by log derivative trick; expanded below)  (35)
+
+                          implies
+
+dx =  f (t)  x  -  g(t)2  x  log  pt(x)  dt + 0 dt         FP      pt (x)    =  - ·          f (t) x  -  g(t)2  x  log  pt(x)  pt(x) - 0
+                     2                                               t                                     2
+
+                   deterministic
+
+The application of the log derivative trick is expanded below:
+
+                                   pt(x)    =     -     ·  f (t)  x pt(x)       -  g(t)2  xpt(x)                                                          (36)
+                                     t                                               2
+
+                                            = - ·          f   (t)  x  pt  (x)  -  g(t)2  x    pt  (x)   pt  (x)                                          (37)
+                                                                                     2
+
+                                                                               pt(x)
+
+                                                                                                      
+
+                                            =                                  g(t)2  xpt(x)                                                              (38)
+                                                  - · f (t) x -                  2      pt(x)         pt  (x)
+
+                                                                                                              
+
+                                                                                                              
+
+                                                                                      log derivative
+
+                                            = - ·              f (t)  x   -  g(t)2        log  pt(x)      pt(x) .                                         (39)
+                                                                               2 x
+
+   Substituting the expression for f (t) and g(t) from (33), we obtain an ODE from which we can sample the data by applying
+the score function with a step schedule that theoretically guarantees to take us back to initial, clean data distribution
+
+                                   dx    =  s(t)  x  -  1  s(t)                           2                                                               (40)
+                                            s(t)        2
+                                                                       2 (t)(t) x log pt(x) dt
+
+                                   dx    =  s(t)  x  -  s(t)    (t)       D(x/s(t); (t)) - x/s(t)                 dt .                                    (41)
+                                            s(t)               (t)
+
+When s(t) = 1, (t) = t, the above simplifies to
+
+                                                     dx    =   -t      ·  D(x; t)     -   x  dt                                                           (42)
+                                                                                t2
+
+                                                     dx = -t · score(x, t) dt                                                                             (43)
+
+Note that this schedule with s(t) = 1, (t) = t allows for taking large step sizes during inference since it introduces no
+extra curvature in the trajectory beyond what's induced by the score function itself. The discretized sampling algorithm of
+equation (43) is described in Fig. A1.
+
+                                                                           13
+A high quality photo of french fries from McDonald's
+
+                      a DSLR photo of a rose
+
+No center depth loss                          With center depth loss (weight = 100)
+
+Figure A2. Ablation experiments on the proposed center depth loss. Each pair of corresponding columns of the same prompt are visualized
+from the same camera angle.
+
+A2. Additional Experiments
+
+Ablation on center depth loss. In Fig. A2, we illustrate the effect of the center depth loss proposed in Eq. (27). Without the
+center depth loss, we observe that some objects, e.g., French Fries, are placed far from the center of the scene box and tend to
+drift around when the camera viewpoints are changed. This effect is more pronounced in the provided video result. In contrast,
+a moderate center depth loss forces the object to be placed at the scene box center. Additionally, we observe that the objects
+tend to be enlarged to occupy more of the visible screen space without wasting model capacity.
+
+Additional qualitative results. We provide additional qualitative results from SJC in Fig. A3. Note that we increase the
+resolution of the depth maps beyond the 64 × 64 resolution of the image latents by rendering subpixel rays. In general, we
+observe that the volumetric renderer is powerful enough to hallucinate shadows (horse), water surfaces (Sydney opera house,
+duck), grasslands (zebra) and even a traffic lane (school bus), using the volume densities.
+
+Video results. We have attached numerous video results in the supplemental materials. Please see the attached HTML and
+videos. We have named each file after the text prompt used to generate the 3D asset. In addition, we included the videos for the
+ablation experiments in Fig. 7 and Fig. A2.
+
+A3. Implementation Details
+
+3D scene setup. Our voxel grids are of size 1003, and placed at world origin with a normalized side length [-1, 1]3. We sample
+cameras uniformly on a hemisphere that covers the voxel cube with a radius of 1.5, with look-at directions pointing at the origin.
+The camera field of view is randomly sampled from 40 degrees to 70 degrees during optimization, and fixed to 60 degrees at
+test time. We found the jittering on FoV to help with 3D optimization in some cases, and this data augmentation technique is
+reported in DreamFusion [41]. Our scene background consists of an optimizable image of size 4 × 4 environment-mapped to
+the spherical surface by azimuth and elevation angles of the incoming ray. The small image size with constrained capacity
+helps to avoid confounding visual artifacts accumulating in the background during optimization.
+
+Optimization. We use Adamax [22] optimizer and perform gradient descent at a learning rate of 0.05 for 10, 000 steps, with
+some prompts running at a longer schedule for better quality. Note that when performing gradient descent with NEScore, we
+implicitly rely on the optimizer's momentum state to perform the averaging. We have tried explicitly averaging the scores at
+multiple noise perturbations, but observed no benefits or degradation. The language-guidance scale is set to 100. Our system
+consumes 9GB of GPU memory during optimization, and takes approximately 25 minutes on an A6000 GPU including the
+time spent on miscellaneous tasks like visualization.
+
+View-dependent prompting. An influence of DreamFusion [41] on our work is the use of view-dependent prompting.
+Language prompts are prepended with one of the following: "overhead view of", "front view of", "backside view of", "side
+
+                      14
+view of" depending on the camera location. More specifically, when camera elevation is above 30 degrees we use the "overhead
+view" prompt. Otherwise, the prompts are assigned based on the azimuth quadrant the camera falls into. This technique helps
+to alleviate the degeneracy of multiple frontal faces being painted around an object during optimization. We hope as part of our
+future work to develop a more general solution to induce the optimization towards more plausible geometry without using
+language as guidance.
+
+                                                                         15
+                                         Trump figure
+                                         Obama figure
+                                          Biden figure
+
+                                          Zelda Link
+                        A product photo of a Canon home printer
+
+                                              A pig
+                                 A photo of a zebra walking
+         A wide angle zoomed out photo of Saturn V rocket from distance
+                       A high quality photo of a yellow school bus
+Figure A3. Additional results of text-pro1m6pted generation of 3D models with SJC.
+

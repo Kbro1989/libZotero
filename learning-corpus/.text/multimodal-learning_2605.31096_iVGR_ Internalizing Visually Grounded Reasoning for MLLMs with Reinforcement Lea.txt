@@ -1,0 +1,136 @@
+iVGR: Internalizing Visually Grounded Reasoning for MLLMs with Reinforcement Learning
+
+arXiv:2605.31096v1 [cs.CV] 29 May 2026
+
+Chang-Bin Zhang 1 Yujie Zhong 2 Qiang Zhang 3 Kai Han 1 Project Page: https://visual-ai.github.io/ivgr/
+
+Abstract
+While visually grounded Chain-of-Thought (CoT) has emerged as a promising paradigm to enhance fine-grained perception in multimodal large language models (MLLMs), its efficacy during the inference phase remains underexplored. In this work, we empirically find that mandating explicit object boxes in visually grounded CoT during inference often degrades performance compared to standard textual CoT, which reasons without explicit visual grounding. We hypothesize that the visual localization capability can be internalized into the textual CoT and that the mandatory explicit grounding introduces unnecessary interference with the model's primary objective of answer prediction. To address this problem, we propose Internalizing Visually Grounded Reasoning (iVGR), a novel reinforcement learning framework that transfers localization capabilities into the textual reasoning process. We employ a dual-stream training strategy, where a textual stream is aligned with a high-quality visually grounded stream via a proposed consistency reward, enabling the model to localize accurately without explicit grounding during inference. Extensive experiments demonstrate that our method significantly outperforms existing baselines on fine-grained benchmarks, while maintaining the flexibility to support tool-assisted inference workflows.
+1. Introduction
+Multimodal large language models (MLLMs) (Liu et al., 2023; Team et al., 2025; Yang et al., 2025) have achieved remarkable progress in recent years. While post-training
+1Visual AI Lab, The University of Hong Kong 2Independent Researcher 3University of Science and Technology of China. Correspondence to: Kai Han <kaihanx@hku.hk>.
+Preprint. June 1, 2026.
+
+query
+
+crops
+
+<think>...<tool_call>[x1,y1,x2,y2]</tool_call> ...</think><answer>...</answer>
+
+(a) Visually Grounded CoT with Tools (Crop)
+
+query
+
+<think>...object <box>[x1, y1, x2, y2]</box> ...</think> <answer>...</answer>
+(b) Visually Grounded CoT without Tools
+
+query
+
+<think>...object <box>[x1, y1, x2, y2]</box> ...</think> <answer>...</answer>
+Consistency Reward
+<think>...</think> <answer>...</answer>
+(c) iVGR (ours)
+
+Figure 1. Paradigms of visually grounded reasoning. (a) Toolbased approaches rely on dynamically invoking crop tools to acquire fine-grained visual details. (b) Explicit grounding approaches mandate the generation of bounding boxes interleaved within the CoT, eliminating external tools. (c) iVGR (ours) introduces a dual-stream training strategy. By utilizing a consistency reward to align the textual stream with a high-quality grounded stream, we explicitly internalize localization capabilities into the textual reasoning process.
+
+techniques, such as those based on reinforcement learning (RL) (Shao et al., 2024; Yu et al., 2025b; Zheng et al., 2025a), significantly enhance their general reasoning capabilities, these models still encounter substantial challenges when processing high-resolution images or complex visual scenes (Zheng et al., 2025b; Wang et al., 2025e). In such fine-grained scenarios, standard supervision with textual Chain-of-Thought (CoT) often fails to guide MLLMs to localize and focus on critical visual details accurately. To address this, recent studies introduce visually grounded CoT (Wang et al., 2025d; Zheng et al., 2025b), which explicitly anchors the reasoning process using dynamic crops (see Figure 1(a)) or bounding boxes (see Figure 1(b)), aiming to enhance precise visual perception. Specifically, cropbased methods (e.g., DeepEyes (Zheng et al., 2025b)), as illustrated in Figure 1(a), require the MLLM to invoke an external tool to crop the target region, subsequently integrating the cropped view with the original context for downstream reasoning. Conversely, box-based methods (e.g.,
+
+1
+
+iVGR: Internalizing Visually Grounded Reasoning for MLLMs with Reinforcement Learning
+
+Table 1. Performance comparison between visually grounded CoT and textual CoT. We evaluate off-the-shelf models, DeepEyes (Zheng et al., 2025b) and TreeVGR (Wang et al., 2025a), across two reasoning modes: standard textual CoT (`T') and visually grounded CoT (`G').
+
+Benchmarks Qwen2.5-VL-7B DeepEyes-7B TreeVGR-7B
+
+CoT
+
+T
+
+GT GT
+
+V*
+
+78.5
+
+82.7 81.7 83.8 84.3
+
+HR4K
+
+69.0
+
+75.1 74.9 77.1 76.9
+
+HR8K
+
+65.1
+
+72.6 73.1 73.1 74.7
+
+MME-RW-Lite
+
+44.5
+
+53.2 53.5 54.9 54.7
+
+POPE
+
+86.3
+
+87.7 89.2 87.3 88.4
+
+RealWorldQA
+
+68.1
+
+69.4 69.7 67.3 69.5
+
+CV-Bench-2D
+
+75.7
+
+75.0 77.9 76.6 77.7
+
+CV-Bench-3D
+
+73.6
+
+77.3 80.8 77.2 79.3
+
+Avg.
+
+70.1
+
+74.1 75.1 74.7 75.7
+
+TreeVGR (Wang et al., 2025a)), as shown in Figure 1(b), require the MLLM to generate bounding boxes when referring to objects in the CoT, thereby eliminating the need for external crop tools. However, the actual efficacy of such visually grounded CoT with crops or bounding boxes during inference lacks rigorous scrutiny.
+To investigate the role of explicit crops or grounding in CoT, we conduct a comparative study using representative SOTA models, DeepEyes (Zheng et al., 2025b) and TreeVGR (Wang et al., 2025a). Specifically, we take offthe-shelf models originally trained with visually grounded CoT and evaluate them on multiple Visual Question Answering (VQA) benchmarks. Without any re-training, as reported in Table 1, we compare their default grounded CoT against a typical textual CoT, which is elicited simply by modifying the inference prompts (see Section A). For both models, inferring with visually grounded CoT outperforms the baseline Qwen2.5-VL-7B model (Bai et al., 2025). However, textual CoT achieves superior performance across most benchmarks, despite the models not being trained for text-only CoT. These results demonstrate that the capability of visually grounded reasoning can be implicitly transferred into typical textual CoT, obviating the need for explicit grounding in CoT.
+
+$FFXUDF\ $FFXUDF\
+
+        
+
+(YDOXDWHGZLWK7RRO&URS (YDOXDWHGZLWK7H[WXDO&R7      ,R8,QWHUYDO
+(a) DeepEyes
+
+        
+
+(YDOXDWHGZLWK*URXQGHG&R7 (YDOXDWHGZLWK7H[WXDO&R7
+     ,R8,QWHUYDO
+(b) TreeVGR
+
+Figure 2. Relationship between accuracy and localization quality (IoU). Using HR8K (Wang et al., 2025e), questions are grouped based on the IoU of the generated grounded CoT, and accuracy is calculated for each IoU interval.
+
+hypothesize that inaccurate crops introduce visual noise, which negatively impacts downstream answer prediction. For TreeVGR (Wang et al., 2025a) (see Figure 2b), however, visually grounded CoT consistently underperforms textual CoT across all IoU intervals. We hypothesize that the visual localization capability can be internalized into the textual CoT and that the mandatory task of explicit grounding imposes unnecessary interference, which detracts from the model's primary focus on answer prediction.
+Building upon this insight, we propose iVGR, a reinforcement learning-based dual-stream training strategy. For each training query, the policy MLLM generates two distinct streams of rollouts: a grounded stream that incorporates explicit box predictions, and a textual stream that performs standard reasoning. To transfer the grounding capability across streams, we introduce a novel consistency reward that aligns the textual CoT with high-quality grounded reasoning trajectories selected from the grounded stream. In this way, the model internalizes localization into its textual reasoning without producing explicit coordinates at inference. Moreover, iVGR remains compatible with explicit crop tools at test time, and we further design a test-time workflow that exploits this synergy on fine-grained VQA. Extensive experiments on Qwen2.5-VL and Qwen3-VL demonstrate that iVGR yields significant improvements across multiple benchmarks.
+Our contributions are summarized as follows:
+
+To better understand the mechanism behind this observation, we examine the relationship between answer accuracy and localization quality (IoU, Intersection-over-Union) of the grounded CoT. Specifically, we manually label target bounding boxes for HR8K (Wang et al., 2025e) and group the questions based on the IoU of the generated grounded CoT. We then calculate the accuracy for each IoU interval, as illustrated in Figure 2. For DeepEyes (Zheng et al., 2025b) (see Figure 2a), visually grounded CoT with crops outperforms textual CoT when the crops are of high quality (i.e., IoU > 0.5). Conversely, when crop localization is poor, grounded CoT underperforms textual CoT. We
+
+· We analyze the efficacy of visually grounded reasoning, revealing that this capability can be implicitly transferred into typical textual CoT, thereby obviating the need for explicit grounding outputs during test time.
+· Building on this insight, we propose iVGR, a reinforcement-learning-based dual-stream training strategy. By introducing a novel consistency reward, our method explicitly transfers the visually grounded reasoning capability into the textual reasoning process.
+· We conduct extensive experiments on Qwen2.5-VL
+
+2
+
+

@@ -1,0 +1,790 @@
+                                        [CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and
+                                                                            Adaptive Aggregation
+
+                                        Akang Wang 1 Xili Deng 1 Zhanxuan Hu 1 Yi Zhao 1 Yonghang Tai 1 Huafeng Li 2
+
+arXiv:2605.25821v1 [cs.CV] 25 May 2026                          Abstract                                  Figure 1. Comparison of attention and activation maps. Left:
+                                                                                                          CLIP [CLS] attention is diffuse and often misses true foreground
+                                              Vision-Language Models such as CLIP exhibit                 objects. Right: our learned visual classifier yields top-K activation
+                                              strong zero-shot recognition capability by align-           heatmaps that are more localized and object-aligned, indicating
+                                              ing images with textual concepts, yet they often            improved semantic grounding.
+                                              underperform on multi-label recognition where
+                                              multiple objects co-exist. A key bottleneck is              purpose recognition engines trained on large-scale image-
+                                              that the [CLS] token, as a single global visual             text pairs. By contrastively aligning images with natural-
+                                              representation, is insufficient to faithfully encode        language concepts, they enable open-vocabulary transfer
+                                              diverse targets with varying scales, contexts, and          and strong zero-shot recognition, and are widely adapted via
+                                              co-occurrence patterns. To address this limita-             prompting or lightweight tuning (Khattak et al., 2023; Wu
+                                              tion, we present a new multi-label image recog-             et al., 2024). However, most VLMs still compress an image
+                                              nition framework, termed PIAA, which formu-                 into a single global [CLS] token, implicitly assuming one
+                                              lates prediction as Patch-level Inference followed          dominant semantic target (Zhong et al., 2022). This global
+                                              by Adaptive Aggregation. Specifically, we first             bottleneck works well for single-label recognition but often
+                                              enhance patch-wise predictions from two com-                fails in multi-label scenarios with multiple co-occurring ob-
+                                              plementary perspectives: (i) mitigating seman-              jects at diverse scales and contexts (as illustrated in Fig. 1).
+                                              tic entanglement in the visual encoder to obtain
+                                              more discriminative patch representations, and              To cope with multi-label recognition, a prevalent line of
+                                              (ii) learning an unsupervised visual classifier to          work reformulates it as a collection of single-label predic-
+                                              narrow the vision­language modality gap. We                 tions by cropping the image into object-centric crops (e.g.,
+                                              then introduce an adaptive aggregation module               via class activation maps (Zhou et al., 2016), attention mech-
+                                              that consolidates patch-level scores into the fi-           anisms (Ridnik et al., 2023), or region refinement (Abdelfat-
+                                              nal multi-label prediction. Notably, the entire             tah et al., 2023)) and applying a VLM to each region. While
+                                              pipeline is fully training-free, requiring no gra-          such multi-crop pipelines improve accuracy by promoting
+                                              dient updates or parameter fine-tuning. Experi-             localized reasoning and reducing background interference,
+                                              ments show that our method achieves strong im-              they come with substantial overhead: each image requires
+                                              provements with minimal extra computation, ex-              multiple forward passes, increasing computation time, mem-
+                                              ceeding a 6% mAP gain on the challenging NUS-               ory footprint, and engineering complexity. In addition, their
+                                              WIDE benchmark over representative baselines.               effectiveness is tightly coupled to crop quality and coverage,
+                                              Code is available at https://github.com/                    which can undermine robustness and scalability.
+                                              akang-wang/PIAA.
+
+                                        1. Introduction
+
+                                        Over the past few years, vision-language models (VLMs)
+                                        such as CLIP (Radford et al., 2021) have become general-
+
+                                            1Yunnan Normal University, Kunming, China 2Kunming Uni-
+                                        versity of Science and Technology, Kunming, China. Correspon-
+                                        dence to: Zhanxuan Hu <zhanxuanhu@gmail.com>.
+
+                                        Proceedings of the 43 rd International Conference on Machine
+                                        Learning, Seoul, South Korea. PMLR 306, 2026. Copyright 2026
+                                        by the author(s).
+
+                                                                                                       1
+                                        [CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and Adaptive Aggregation
+
+                     +7.9% +7.0% +3.8%         +7.0% +6.7% +3.8%           CLIP               SCLIP    ITACLIP  +PIAA improvement     ature (Wang et al., 2024a; Aydin et al., 2025), and existing
+         90 +13.9%                      +14.1%                             SC-CLIP            TagCLIP  CCD                            disentanglement techniques can be naturally transferred to
+                                                                                                                                      our patch-level inference setting.
+         80
+                                                                                                                                      Beyond semantic entanglement, however, we emphasize
+                                                                           +15.7%+10.2%+6.4%                                          another critical factor that is largely overlooked by existing
+                                                                                                                                      training-free segmentation-style pipelines: the modality gap
+         70                                                       +39.8%                                                              between the visual and textual spaces in vision­language
+                                                                                                                                      models (Liang et al., 2022). While CLIP-like models align
+mAP (%)  60                                                                                                                           image-level embeddings with text, patch embeddings are of-
+                                                                                                                                      ten not well calibrated to text prototypes, making text-based
+         50                                                                                            +37.6%+30.5%+35.6%+16.9%       classification at the patch level unreliable. To bridge this
+                                                                                                                                      gap without backpropagation, we introduce a patch-based
+         40                                                                                                                           unsupervised visual classifier learning module (Zhang et al.,
+                                                                                                                                      2025b). Specifically, leveraging abundant unlabeled images,
+         30  VOC12                      VOC07                     Dataset  COCO                                 NUS                   we collect patch embeddings and learn a visual classifier
+                                                                                                                                      directly in the visual feature space in an unsupervised man-
+Figure 2. Comparison of mAP performance across four multi-                                                                            ner. The learned visual classifier is then used to replace
+label datasets. TagCLIP and CCD are representative multi-label                                                                        the original text classifier at inference, producing more re-
+recognition methods, while CLIP, ITACLIP, SC-CLIP, and SCLIP                                                                          liable patch-level class scores without any gradient-based
+are originally designed for semantic segmentation. PIAA denotes                                                                       fine-tuning. Together, these two components yield stronger
+our proposed method built upon segmentation-style inference with                                                                      patch-wise evidence.
+additional improvements.
+                                                                                                                                      Further, since patch-level predictions are inevitably noisy,
+A complementary perspective is that multi-label recognition                                                                           we introduce an adaptive aggregation mechanism to consol-
+is intrinsically a weaker task than semantic segmentation:                                                                            idate patch-wise evidence into a robust image-level multi-
+the former only requires identifying what categories are                                                                              label prediction. By automatically down-weighting outlier
+present, whereas the latter additionally demands precise lo-                                                                          patches and suppressing inconsistent activations, the pro-
+calization. This observation naturally raises the question                                                                            posed aggregation strategy effectively filters noise while
+of whether segmentation-style patch reasoning can be ex-                                                                              preserving discriminative cues from informative regions.
+ploited to simplify multi-label recognition. To explore this                                                                          In summary, PIAA improves multi-label recognition by
+idea, we benchmark several recent training-free semantic                                                                              jointly enhancing patch representation quality, reducing vi-
+segmentation methods under a fair and controlled setting 1.                                                                           sion­language modality discrepancy, and adaptively aggre-
+As shown in Fig. 2, we obtain image-level multi-label predic-                                                                         gating patch-wise predictions, enabling accurate and effi-
+tions by converting dense patch-level scores into per-class                                                                           cient multi-label inference with a single forward pass and
+confidences via a simple category-wise max pooling over                                                                               without backpropagation. The main contributions are sum-
+patches. Remarkably, CLIP-based segmentation baselines                                                                                marized as follows:
+such as SC-CLIP (Bai et al., 2025) are already highly com-
+petitive with representative multi-label recognition methods                                                                             · A new perspective. We revisit multi-label recognition
+(e.g., TagCLIP (Lin et al., 2024) and CCD (Kim & Shim,                                                                                      with vision­language models from a patch-level view-
+2025)) across all evaluated datasets. These results highlight                                                                               point, shifting the prediction paradigm from a single
+the promise of addressing multi-label recognition through                                                                                   global [CLS] representation to fine-grained patch-
+patch-level prediction and aggregation.                                                                                                     wise inference.
+
+Building on the above observations, we propose PIAA, a                                                                                   · A simple yet effective framework. We propose PIAA,
+training-free framework that views multi-label recognition                                                                                  a training-free framework that improves patch-level
+as patch-level inference followed by adaptive aggregation.                                                                                  predictions by mitigating semantic entanglement and
+The core of PIAA is to improve patch-wise predictions,                                                                                      reducing the vision­language modality gap via unsu-
+and we tackle this problem from two complementary di-                                                                                       pervised visual classifier learning, followed by adaptive
+rections. First, we mitigate semantic entanglement in the                                                                                   aggregation for robust image-level inference.
+visual encoder to obtain more discriminative patch repre-
+sentations. Semantic entanglement refers to the tendency of                                                                              · Promising results. Extensive experiments on challeng-
+patch tokens to mix foreground semantics with irrelevant                                                                                    ing multi-label benchmarks demonstrate that PIAA
+context or co-occurring objects, leading to ambiguous local                                                                                 consistently outperforms representative baselines by a
+features and unstable patch-level responses. This issue has                                                                                 clear margin, achieving substantial performance gains
+been extensively studied in the semantic segmentation liter-                                                                                with minimal extra computation.
+
+    1Specifically, we restrict our comparison to CLIP-based ap-
+proaches and exclude methods that rely on additional vision back-
+bones or external segmenters (e.g., DINO or SAM-based models).
+
+                                                                                                                                   2
+[CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and Adaptive Aggregation
+
+2. Related Work                                                        structural priors from additional foundation models to refine
+                                                                       localization, such as enforcing geometric/spatial consistency
+2.1. Multi-Label Classification.                                       with VFMs (Lan et al., 2024; Zhang et al., 2025a), lever-
+                                                                       aging SAM-style mask proposals, or exploiting diffusion
+Multi-Label Image Classification (MLC) aims to recognize               cross-attention as implicit localization cues (Wang et al.,
+multiple co-existing semantic entities within a single image.          2025; Zhou et al., 2025).
+Early research predominantly focused on fully supervised
+learning, where methods such as BCE-LS (Cole et al., 2021)             While external-prior-based approaches can yield stronger
+rely on exhaustive multi-label annotations to model label              masks, they inevitably introduce additional models, lead-
+dependencies and achieve strong performance, albeit at the             ing to extra forward passes, higher memory footprint, and
+cost of expensive annotation and limited scalability. With             increased system complexity. In contrast, CLIP-only meth-
+the advent of vision-language models (VLMs), the reliance              ods are lightweight and have achieved strong results by
+on dense supervision has been substantially reduced, giving            refining attention and feature aggregation. However, they
+rise to a growing body of weakly supervised (Pu et al.,                predominantly focus on improving the quality of patch-level
+2022; Chen et al., 2022), unsupervised (Kim & Shim, 2025;              predictions while overlooking the modality discrepancy be-
+Abdelfattah et al., 2023), and zero-shot (Hu et al., 2026; Liu         tween localized visual evidence and global text prototypes.
+et al., 2024; Zhang et al., 2024; Lin et al., 2024; Miller et al.,     Moreover, how to reliably aggregate patch-wise scores into
+2025) methods.                                                         robust image-level outputs remains under-explored.
+
+Weakly supervised methods like single-positive learning                3. Method
+(Chen et al., 2024; Xing et al., 2024; Tran et al., 2025),
+and parameter-efficient visual prompt tuning (e.g., ML-                3.1. Preliminaries
+VPT (Ma et al., 2025)) achieve strong performance but fun-
+damentally rely on task-specific annotations and gradient-             VLM-based Multi-Label Recognition. Given an image
+based training. Meanwhile, unsupervised methods such                   I, a vision­language model (e.g., CLIP) encodes it into a
+as CDUL (Abdelfattah et al., 2023) and CCD (Kim &                      global visual embedding zcls  Rd and aligns it with a set
+Shim, 2025) alleviate label dependence via pseudo-labeling             of textual prototypes {wc}cC=1 constructed from category
+and self-distillation, yet their iterative optimization in-            names. Standard zero-shot prediction is obtained by comput-
+troduces substantial computational overhead. In con-                   ing the cosine similarity between zcls and each wc, followed
+trast to these training-heavy paradigms, we draw inspira-              by thresholding to produce multiple labels. Despite its sim-
+tion from training-free segmentation-style inference (e.g.,            plicity and efficiency, this paradigm is inherently suboptimal
+SPARC (Miller et al., 2025)) and propose PIAA. Our                     for multi-label recognition. First, the global [CLS] token
+method demonstrates that effective patch-level prediction              zcls is optimized to capture the dominant semantics of an
+and adaptive aggregation offer a simple, optimization-free             image, and thus often overlooks multiple co-existing objects,
+alternative for efficient multi-label recognition.                     particularly those that are small, occluded, or less salient.
+                                                                       Second, existing attempts to mitigate these issues typically
+2.2. Open-vocabulary Semantic Segmentation.                            resort to heuristic region selection or multi-crop inference,
+                                                                       which introduces additional computational overhead. These
+Open-vocabulary semantic segmentation (OVSS) has re-                   limitations motivate us to move beyond [CLS]-based rea-
+cently attracted increasing attention as it enables training-          soning and develop a training-free framework that enables
+free dense labeling by repurposing vision­language foun-               reliable patch-level inference and adaptive aggregation.
+dation models such as CLIP. At its core, OVSS aims
+to alleviate CLIP's intrinsic limitations for dense predic-            3.2. Our Method
+tion: CLIP is primarily optimized for global image­text
+alignment, whereas segmentation requires localized patch-              Overview. To overcome the limitations of the global
+wise semantics and reliable separation between foreground              [CLS] token in multi-label scenarios, we propose PIAA
+and background. Existing OVSS methods can be broadly                   (Fig. 3), a training-free framework that reformulates recog-
+grouped into two lines. (i) CLIP-only adaptation modifies              nition as patch-level inference followed by adaptive aggre-
+CLIP's internal mechanisms to better preserve local cues               gation. A key advantage of PIAA is its modularity: the
+and suppress background interference, e.g., repurposing                visual extraction process can be equipped with any CLIP-
+attention for dense masks (Dong et al., 2023), enhancing               based segmentation-style variant or disentanglement front-
+intra-object grouping via correlation-aware attention (Wang            end (e.g., ITACLIP (Aydin et al., 2025), SC-CLIP (Bai
+et al., 2024a), masking distracting regions or fusing multi-           et al., 2025)), which provides dense, discriminative patch
+layer features (Lin et al., 2024; Aydin et al., 2025), and cali-       representations by suppressing background interference and
+brating dense outputs by neutralizing anomaly tokens (Bai              improving locality. Building on these patch features, PIAA
+et al., 2025). (ii) External-prior based methods introduce
+
+                                                                    3
+[CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and Adaptive Aggregation
+
+Figure 3. Overview of the proposed PIAA framework. Given an input image, a CLIP-based segmentation-style image encoder (optionally
+enhanced by semantic disentanglement) produces patch embeddings and a global [CLS] embedding. PIAA consists of two components.
+(i) PVCL learns a patch-based visual classifier from the patch embeddings, aiming to reduce the vision­language modality gap during
+inference and improve patch-level scores. (ii) PAA adaptively combines the calibrated patch-level predictions with the [CLS]-based
+predictions to produce final image-level multi-label outputs. The overall pipeline is training-free and requires no backpropagation.
+
+improves multi-label inference via two synergistic compo-           of this concept is Gaussian Discriminant Analysis (GDA),
+nents. (1) Patch-based Visual Classifier Learning (PVCL):           which admits a closed-form solution for classifier parame-
+it rectifies the vision­language modality gap by analytically       ters and has recently proven highly effective for training-
+estimating an unsupervised visual classifier directly from          free classifier rectification (Hastie & Tibshirani, 1996; Wang
+the patch representations. (2) Prediction Adaptive Aggre-           et al., 2024b; Zhu et al., 2024).
+gation (PAA): it consolidates localized evidence into robust
+image-level predictions by dynamically fusing fine-grained          Formally, let X = {xi}iM=1 denote the collection of unla-
+patch scores with global [CLS] semantic anchors.                    beled patch features for a C-way classification problem. To
+                                                                    achieve efficient, closed-form adaptation, we assume that
+3.3. Patch-based Visual Classifier Learning (PVCL)                  the patch features conditioned on class c follow a multivari-
+                                                                    ate Gaussian distribution with a shared covariance matrix:
+A primary bottleneck in VLM-based multi-label recogni-
+tion lies in the vision­language modality gap (Liang et al.,        pi,c = p(xi | y = c) = N (xi; µc, )
+2022; Huang et al., 2025): while textual prototypes provide
+robust global semantics, they often struggle to faithfully          =     1             -  1  (xi  -  µc)-1(xi  -  µc)  ,
+represent localized patch features, leading to unreliable fine-                    exp     2
+grained predictions. An elegant strategy to bridge this gap
+is to learn an unsupervised visual classifier directly within          (2)d||
+the visual embedding space (Zanella et al., 2024; Zhang
+et al., 2025b). By deriving the classifier purely from visual                                                           (1)
+feature statistics, this approach inherently circumvents cross-
+modal misalignment while completely eliminating the need            where d is the feature dimension, µc is the class mean, and
+for gradient-based training. A representative instantiation          is the shared covariance matrix. While this assumption
+                                                                    may simplify the real-world feature distributions, it crucially
+                                                                    enables analytical inference with minimal computational
+                                                                    overhead, eliminating the need for gradient-based optimiza-
+                                                                    tion.
+
+                                                                 4
+         [CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and Adaptive Aggregation
+
+According to Bayes' theorem, the posterior probability of          Algorithm 1 Patch-based Visual Classifier Learning(PVCL)
+class c given the i-th patch feature xi is given by:
+                                                                   1: Input: Unlabeled patch manifold X , bank size K.
+         p(y = c | xi)  c N (xi; µc, ),           (2)              2: Output: Final classifier weights {wc, bc}cC=1.
+                                                                   3: /* Stage I: Entropy-Guided Bootstrapping */
+where c is the class prior. Assuming a uniform class prior         4: Initialize Bc(0)  top-K patches in X minimizing
+c = 1/C, the Bayes optimal prediction simplifies to maxi-
+mizing the log-posterior. By expanding the Gaussian density           H(xi) = - c pi,c log pi,c for all c.
+function and discarding terms independent of c, the decision       5: Estimate preliminary means µ(c0) and covariance (0)
+boundary becomes strictly linear. Thus, the discriminant
+score for class c is:                                                 via B(0) to form temporary classifier {wc(0), b(c0)}.
+
+                                                                   6: /* Stage II: Vision-Driven Purification */
+
+                                                                   7: Compute vision-driven scores qi,c            
+
+                y~i,c = wcxi + bc,                (3)              Softmax(wc(0)xi + b(c0)) for all xi  Bc(0).
+
+where the closed-form classifier weights wc and biases bc          8: Purify bank: Bc  xi  Bc(0) qi,c  µq,c + q,c
+are given by:
+                                                                   using class-wise empirical statistics.
+
+                                      1                            9: /* Stage III: Robust Shrinkage Induction */
+                                    -
+         wc = -1µc,          bc  =       µc-1µc.  (4)              10: Compute confidence-weighted prototypes µc and
+                                      2                                 pooled empirical covariance ^ via B.
+
+Under the standard i.i.d. assumption, the maximum like-            11: Apply trace-regularized shrinkage: -1 
+lihood estimators for µc and  simply correspond to the
+class-wise empirical averages and the pooled sample covari-        d  (|B| - 1)^ + Tr(^ )Id  -1
+ance matrix of X . However, applying GDA directly to the
+raw patch manifold is highly vulnerable to background clut-                                     .
+ter and semantic ambiguity in unsupervised scenarios. To
+address this, we propose a three-stage purification algorithm      12: Derive final weights: wc  -1µc and biases bc 
+that transitions from initial cross-modal bootstrapping to            1  µc  -1µc.
+refined intra-modal estimation.                                    -  2
+
+                                                                   13: return {wc, bc}Cc=1
+
+Stage I: Entropy-Guided Bootstrapping. To harvest reli-            Stage III: Robust Shrinkage Induction. Armed with the
+able anchors while filtering background noise, we leverage         strictly purified visual bank B, we compute the final GDA
+the zero-shot text-alignment probability pi,c representing         parameters. To further mitigate residual noise, the class pro-
+the likelihood of patch xi belonging to class c to identify        totypes µc are computed as confidence-weighted averages.
+patches with minimum predictive entropy:                           We leverage the vision-driven probabilities qi,c derived from
+                                                                   the Stage II temporary classifier to avoid the modality gap:
+
+                             C                                               µc =           xiBc qi,cxi .          (8)
+                                                                                             xiBc qi,c
+         H(xi) = - pi,c log pi,c.                 (5)
+
+                        c=1
+
+For each class c, we initialize a pristine memory bank Bc(0)       Subsequently, we compute the pooled sample covariance
+by harvesting the top-K patches with the lowest entropy:           matrix ^ across all classes:
+
+Bc(0) =  xi  X  arg max pi,k = c                             .           ^ = 1 C            (xi - µc)(xi - µc).    (9)
+                                                                               |B|
+                     k                   Top-K by min H(xi)                  c=1 xiBc
+
+                                                  (6)
+
+Using this initial bank, we compute the preliminary empiri-        Since estimating the precision matrix in high-dimensional
+                                                                   embedding spaces (e.g., d  512) is often ill-posed and nu-
+cal means µ(c0) and a pooled covariance (0) to instantiate         merically unstable, we apply a trace-regularized shrinkage
+                                                                   estimator:
+a temporary GDA classifier.
+
+Stage II: Vision-Driven Purification. To bridge the vision-              -1 = d     (|B| - 1)^ + Tr(^ )Id  -1      (10)
+language modality gap and its associated artifacts in Bc(0),
+we re-evaluate the bank using the preliminary GDA classifier                                                  .
+to obtain purely vision-driven scores qi,c. By assuming a
+Gaussian distribution of these scores, we strictly purify the      Finally, the optimal, backpropagation-free visual classifier
+bank using an adaptive statistical threshold based on their        weights {wc, bc}Cc=1 are analytically derived using Eq. (4).
+empirical mean µq,c and standard deviation q,c:                    By progressively shifting from textual priors to visual distri-
+
+         Bc = xi  Bc(0) qi,c  µq,c + q,c .        (7)              butions, this process yields highly discriminative patch-level
+
+                                                                   predictors. The complete procedure of PVCL is summarized
+
+                                                                   in Algorithm 1.
+
+                                                                5
+[CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and Adaptive Aggregation
+
+3.4. Prediction Adaptive Aggregation (PAA)                         4. Experiments
+
+Building upon the rectified patch-level scores from PVCL,          4.1. Experimental Setup
+the remaining challenge is to effectively aggregate these
+localized responses into a reliable image-level prediction.        Datasets. We evaluate PIAA on four diverse multi-label
+While PVCL significantly enhances the semantic validity of         benchmarks. PASCAL VOC 2007 and 2012 (Everingham
+individual patches, dense patch-wise predictions inevitably        et al., 2010) (20 classes) serve as foundational benchmarks,
+contain residual noise from background clutter. Given the          containing 5,011/4,952 and 5,717/5,823 images for their
+spatial sparsity inherent to multi-label recognition, where        respective train/test splits. To assess performance in com-
+target objects often occupy only a small fraction of the           plex scenes, we utilize MS COCO (Lin et al., 2014), which
+image, a naive global average pooling would inadvertently          comprises 80 categories with 82,081 training and 40,137
+dilute the localized signals.                                      validation images. Finally, we scale the evaluation to NUS-
+                                                                   WIDE (Chua et al., 2009), encompassing 81 concepts across
+Spatial Evidence Distillation. Recall that the calibrated          150,000 training and 60,260 test samples. These datasets
+                                                                   provide a broad spectrum of label densities and object scales,
+discriminant score for the i-th patch regarding class c is         facilitating a robust assessment of our approach.
+y~i,c = wcxi + bc. Since these GDA outputs are unbounded
+logits, we first normalize them into patch-wise probabilities:     Evaluation Metrics. Following standard protocols (Ever-
+                                                                   ingham et al., 2010), we employ mean Average Precision
+pi,c =  exp(y~i,c)         .                     (11)              (mAP) as the primary metric. Crucially, our framework oper-
+                                                                   ates in a strictly training-free and unsupervised manner (Kim
+        C    exp(y~i,k  )                                          & Shim, 2025; Abdelfattah et al., 2023): ground-truth la-
+        k=1                                                        bels are sequestered solely for performance evaluation and
+                                                                   remain entirely inaccessible during patch bank construction
+Next, to isolate the most discriminative localized evidence,       and inference. This ensures the integrity of our zero-shot
+we perform category-wise max-pooling over these prob-              transfer paradigm.
+abilities. However, these independently aggregated peak
+scores (maxi pi,c) do not naturally sum to one. To form a          Implementation Details. PIAA is instantiated with a
+valid image-level categorical distribution for the subsequent      frozen CLIP ViT-B/16 backbone, operating strictly without
+global-local fusion, we directly apply a secondary Softmax         gradient updates. For PVCL, class-specific memory banks
+recalibration:                                                     are curated by selecting the top K = 512 patches from the
+                                                                   unlabeled manifold based on minimal predictive Shannon
+Spatch,c = Softmax max pi,c .                    (12)              entropy, from which the closed-form classifiers are analyti-
+                                                                   cally derived. We uniformly set K = 512 across all bench-
+                                    i{1,...,M }                    marks, validating the robustness of our entropy-driven se-
+                                                                   lection without per-dataset tuning. During inference, PIAA
+Global-Local Adaptive Fusion. Crucially, as supported by           fuses the aggregated patch scores with the global [CLS]
+our empirical analysis detailed in Appendix A.3, we observe        scores using a trade-off parameter  = 0.9. This heavily
+a fundamental complementarity between local and global             weights localized discriminative cues to uncover co-existing
+semantic representations based on object scale and saliency.       objects while retaining global context for regularization.
+While max-aggregated patch evidence (Spatch,c) excels at
+identifying small or localized objects, it inherently lacks        Baselines. We comprehensively benchmark PIAA across
+a macroscopic perspective, making it occasionally unsta-           diverse supervision paradigms: (1) Supervised & Weakly Su-
+ble for large or globally salient objects that span multiple       pervised: We include BCE-LS (Cole et al., 2021) as a fully
+patches. Conversely, the global [CLS] token softmax pre-           supervised upper bound, alongside robust single-positive
+diction, denoted as Scls,c, acts as a holistic semantic anchor     learning methods (VLPL (Xing et al., 2024), AEVLP (Tran
+that inherently captures large-scale, scene-level consistency.     et al., 2025)). (2) Unsupervised (Training-based): We
+                                                                   evaluate CDUL (Abdelfattah et al., 2023) and CCD (Kim
+To exploit both local sensitivity and global semantic sta-         & Shim, 2025), which rely on iterative pseudo-labeling
+bility, we formulate the final prediction Sf,c as a convex         and self-distillation. (3) Training-free (Ours): We com-
+combination of the two complementary representations:              pare against vanilla CLIP (Radford et al., 2021) and recent
+                                                                   adaptations like TagCLIP (Lin et al., 2024) (heuristic token
+Sf,c = Spatch,c + (1 - )Scls,c,                  (13)              masking) and SPARC (Miller et al., 2025) (score prompting
+                                                                   and adaptive fusion). Unlike CCD, which requires iterative
+where the coefficient   [0, 1] controls the trade-off. In          optimization, or SPARC, which relies on constructing com-
+practice, assigning a decisively larger weight to the patch-
+level evidence (e.g.,  = 0.9) preserves the fine-grained lo-
+calization capabilities essential for small objects, while the
+[CLS]-based prediction effectively regularizes the outputs
+for large, salient targets. This dual-path adaptive aggrega-
+tion ultimately yields substantially larger performance gains
+than using either component alone.
+
+                                                                6
+[CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and Adaptive Aggregation
+
+Table 1. Comparison of mean Average Precision (mAP, %) on four multi-label benchmarks. We evaluate PIAA against various supervision
+paradigms. PIAA consistently establishes a new state-of-the-art (SOTA) among training-free and unsupervised methods, even rivaling
+fully supervised baselines. Bold indicates the best performance in training-free and unsupervised settings.
+
+Supervision level Annotation        Method                                        Frozen VOC12 VOC07 COCO NUS
+
+Fully supervised Fully labeled      BCE-LS (Cole et al., 2021)                      × 91.6 92.6 79.4 51.7
+
+                                                 ASL (Ridnik et al., 2021)          ×        -     82.9 69.7 -
+                   Partial labeled (10%) SARB (Pu et al., 2022)
+                                                                                    ×        -     85.7 72.5 -
+                                                 Chen et al. (Chen et al., 2022)
+                                                                                    ×        -     81.5 68.1 -
+
+Weakly supervised                   LL-R (Kim et al., 2022)                         ×        89.7 90.6 72.6 47.4
+
+                                    G2 NetPL (Abdelfattah et al., 2022) ×                    89.5 89.9 72.5 48.5
+
+                   Single positive labeled GR Loss (Chen et al., 2024)              ×        89.8        -  73.2 49.1
+
+                                    VLPL (Xing et al., 2024)                        ×        89.1        -  71.5 49.6
+
+                                    AEVLP (Tran et al., 2025)                       ×        90.5        -  73.5 50.7
+
+Unsupervised       Annotation free  NaiveAN (Kundu & Tighe, 2020)                   × 85.5 86.5 65.1 40.8
+                                    ROLE (Cole et al., 2021)                        × 82.6 84.6 67.1 43.2
+                                    CDUL (Abdelfattah et al., 2023)                 × 88.6 89.0 69.2 44.0
+                                    CCD (Kim & Shim, 2025)                          × 90.1 91.0 70.3 44.5
+
+                                    CLIP (Radford et al., 2021)                      84.9 85.4 61.7 44.4
+                                    TagCLIP (Lin et al., 2024)
+Training free      Annotation free  SPARC (Miller et al., 2025)                      90.8 91.2 70.0 38.7
+                                    PIAA (ours)
+                                                                                             -     88.7 68.0 47.5
+
+                                                                                     92.2 92.5 73.2 50.6
+
+plex compound prompts and aggregating multiple inference           Table 2. Ablation Study of PIAA Components. Performance
+scores, PIAA establishes a new state-of-the-art in a purely        (mAP, %) is evaluated on four benchmarks using SC-CLIP as the
+training-free, single-pass manner by analytically modeling         disentanglement front-end.  indicates the activation of a module.
+patch-level visual distributions.
+                                                                   PVCL PAA VOC12 VOC07 COCO NUS
+4.2. Main Results
+                                                                                       88.8        89.1     68.8 43.3
+Overall Results. As reported in Tab. 1, PIAA consistently
+achieves the best performance across all four benchmarks                               89.6        90.4     70.3 45.3
+among training-free and unsupervised methods, and is com-
+petitive with weakly supervised and even fully supervised                              91.3        91.7     69.9 45.7
+approaches. Compared with the original CLIP baseline,
+recent unsupervised methods such as CDUL and CCD im-                                   92.2        92.5 73.2 50.6
+prove performance by leveraging unlabeled data to refine
+classifiers and representations, while training-free methods       4.3. Ablation Study
+such as TagCLIP and SPARC further boost performance
+through inference-time calibration and spatial reasoning.          To evaluate the individual contributions and joint synergy
+                                                                   of the proposed components within the PIAA framework,
+Building on these insights, PIAA establishes a new state of        we conduct a series of systematic ablation studies. As de-
+the art by jointly addressing two key limitations: the vision­     tailed in Tab. 2, Tab. 3, and Tab. 4, our empirical results
+language modality gap and the lack of principled patch-to-         highlight the progressive performance enhancements and
+image aggregation. On the challenging NUS-WIDE dataset,            the robust compatibility among various vision backbones,
+PIAA surpasses the strongest training-free method (Tag-            disentanglement techniques, PVCL, and PAA.
+CLIP) by 11.9% mAP and outperforms the optimization-
+based CCD by 6.1% mAP, despite requiring no training,              Effect of PVCL. As demonstrated in Tab. 2, integrating
+backpropagation, or manual annotations. Moreover, PIAA             PVCL standalone consistently enhances performance across
+achieves performance comparable to fully supervised meth-          all benchmarks. Specifically, it yields a +2.6% mAP gain
+ods on VOC2007 and VOC2012, and rivals strong weakly               on VOC07 (89.1% to 91.7%) and a +2.4% improvement on
+supervised methods on MS COCO. These results demon-                the challenging NUS-WIDE dataset (43.3% to 45.7%). This
+strate that fine-grained, training-free patch-level reasoning      demonstrates that even with spatially purified features, the
+can be more effective and robust than traditional training-        vision-language modality gap remains a bottleneck. PVCL
+based unsupervised paradigms.                                      successfully addresses this by rectifying decision boundaries
+                                                                   within the visual manifold. By substituting uncalibrated
+                                                                   textual prototypes with statistically-estimated classifiers, it
+                                                                   ensures that patch-level scores are strictly grounded in visual
+                                                                   evidence, delivering more robust fine-grained predictions.
+
+                                                                7
+         [CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and Adaptive Aggregation
+
+Table 3. Performance gains of PIAA across different segmentation-     Table 4. Scalability across advanced Vision Foundation Mod-
+style variants based on the ViT-B/16 architecture. While various      els. By including our primary baseline (ViT-B/16) as a reference,
+attention disentanglement techniques yield superior base results      we demonstrate that PIAA consistently delivers substantial im-
+over vanilla CLIP, PIAA provides significant and orthogonal im-       provements regardless of the model scale (ViT-L) or pre-training
+provements to all evaluated front-ends, achieving an average mAP      paradigm (EVA-02).
+surge of +13.7% even on the standard CLIP baseline.
+
+                                                                      Architecture Method VOC12 VOC07 COCO NUS Average
+
+Method VOC12 VOC07 COCO NUS Average                                   Standard CLIP
+
+CLIP        78.3       78.6       49.2       34.8       60.2          ViT-B/16 Base        78.3 78.6 49.2 34.8 60.2
++ PIAA   89.2+10.9  89.7+11.1  68.8+19.6  47.9+13.1  73.9+13.7
+                                                                                     + PIAA 89.2 89.7 68.8 47.9 73.9
+SCLIP       84.7       85.7       63.1       37.7       67.8
++ PIAA   91.4+6.7   91.7+6.0   73.0+9.9   49.2+11.5  76.3+8.5         ViT-L/14       Base  70.5 69.9 45.8 32.5 54.7
+
+ITACLIP     86.2       86.5       67.7       36.2       69.2                         + PIAA 88.8 88.3 69.9 47.8 73.7
++ PIAA   92.2+6.0   92.3+5.8   74.6+6.9   49.1+12.9  77.1+7.9
+                                                                      Advanced Foundation Model (EVA-02-CLIP)
+SC-CLIP     88.8       89.1       68.8       43.3       72.5
++ PIAA   92.2+3.4   92.5+3.4   73.2+4.4   50.6+7.3   77.1+4.6         ViT-B/16 Base        83.4 84.0 60.5 38.3 66.6
+
+                                                                                     + PIAA 90.0 90.3 72.2 46.8 74.8
+
+                                                                      ViT-L/14       Base  85.5 83.9 73.3 39.0 70.4
+
+                                                                                     + PIAA 93.4 92.9 79.6 49.4 78.8
+
+Effect of PAA. The Prediction Adaptive Aggregation                    (VFMs). As detailed in Tab. 4, we extend our analysis from
+(PAA) module is the cornerstone for fusing localized ev-              the primary baseline (standard CLIP ViT-B/16) to the larger
+idence. As evidenced in Tab. 2, PAA exhibits a profound               ViT-L/14, as well as the highly optimized EVA-02-CLIP
+synergy with PVCL. For instance, on the complex MS-                   family.
+COCO dataset, combining both modules yields a +4.4%
+surge (reaching 73.2%), which far exceeds the sum of their            The results reveal a compelling and consistent scaling tra-
+individual gains (+1.1% and +1.5%, respectively). Similarly,          jectory. For the standard CLIP ViT-L/14, which typically
+on NUS-WIDE, adding PAA to the PVCL baseline triggers                 suffers from severe uncalibrated domain shifts in zero-
+a massive +4.9% leap (from 45.7% to 50.6%). This strictly             shot multi-label settings (yielding a low 54.7% average
+underscores that PAA reaches peak efficacy when aggregat-             mAP), integrating PIAA triggers an unprecedented surge of
+ing evidence already calibrated by PVCL. By harmonizing               +19.0%, effectively rescuing the baseline. More remarkably,
+fine-grained patch scores with the global [CLS] semantic              when applied to the state-of-the-art EVA-02 pre-training
+anchor, PAA effectively suppresses spurious background                paradigm, PIAA continues to push the performance upper
+noise, culminating in a highly robust, training-free inference        bound without suffering from diminishing returns. Equip-
+pipeline.                                                             ping the massive EVA-02-CLIP (L14) with our module
+                                                                      establishes a formidable new baseline, achieving a 78.8%
+Synergy with Disentangled Representations. As shown                   average mAP. Crucially, on the highly complex MS-COCO
+in Tab. 3, disentanglement techniques inherently improve              dataset, this configuration approaches the 80% milestone
+baseline performance by modifying the attention mecha-                (reaching 79.6% mAP) in a purely training-free manner.
+nisms within the fixed ViT-B/16 architecture, with SC-CLIP            These improvements unequivocally prove that PIAA effec-
+achieving a strong 72.5% average mAP. Crucially, our PIAA             tively harnesses the richer, high-dimensional representations
+acts as a powerful orthogonal enhancement across all these            of advanced VFMs, maintaining strong positive synergy re-
+segmentation-style variants. Remarkably, applying PIAA to             gardless of the backbone's scale or pre-training strategy.
+the vanilla CLIP yields a +13.7% average mAP surge. On
+MS-COCO, PIAA alone boosts vanilla CLIP from 49.2% to                 Effect of Bank Size K. The Top-K selection strategy
+68.8% (+19.6%), effectively matching the sophisticated SC-            serves as a critical mechanism for distilling a pristine vi-
+CLIP base model without any internal architectural modifi-            sual manifold while ensuring computational parsimony. By
+cations. Furthermore, integrating PIAA with top-performing            prioritizing patches with minimal predictive entropy, this
+variants like SC-CLIP pushes the overall upper bound to               approach effectively preserves class-specific feature distri-
+a formidable 77.1% average mAP. This demonstrates that                butions while aggressively filtering out background noise
+PIAA successfully amplifies localized discriminative cues             and semantically ambiguous artifacts. As illustrated in the
+regardless of the underlying attention strategy.                      left panel of Fig. 4, we systematically vary the bank size K
+                                                                      from 128 to 1536. Across all four benchmarks, performance
+4.4. Further Analyses                                                 consistently improves as K increases up to 512, indicating
+                                                                      that a sufficient volume of high-confidence patches is neces-
+Scalability to Advanced Foundation Models. To demon-                  sary to capture intra-class variance. However, relaxing the
+strate that our method does not merely overfit to a specific          selection criteria beyond K = 512 leads to a gradual per-
+backbone, we evaluate the scalability of PIAA across larger           formance degradation. This decline elegantly confirms our
+architectures and more advanced Vision Foundation Models
+
+                                                                   8
+              [CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and Adaptive Aggregation
+
+motivation: incorporating an excessive number of patches               Table 5. Efficiency Analysis: Classifier Acquisition (Learning)
+inevitably introduces high-entropy, out-of-distribution noise          and Inference (Test) Time (min).
+that corrupts the statistically-estimated classifiers. Conse-
+quently, K = 512 emerges as the optimal configuration,                 Dataset  Acquisition (Learning)  Inference (Test)
+striking a perfect balance between representation richness
+and manifold purity.                                                            CCD Ours Speedup TagCLIP Ours Speedup
+
+Analysis of Global-Local Fusion Weight . The right                     VOC12 43.2 0.2 216.0× 5.8 0.2 29.0×
+panel of Fig. 4 evaluates the sensitivity of the hyperpa-              VOC07 45.6 0.2 228.0× 5.4 0.2 27.0×
+rameter , which governs the integration of fine-grained                COCO 512.4 1.6 320.3× 66.1 1.1 60.1×
+patch-level evidence and the global [CLS] semantic prior.              NUS 991.8 2.5 396.7× 83.8 1.6 52.4×
+We observe a remarkably consistent trajectory across all
+datasets: the performance steadily climbs as  increases,               Average 398.3 1.1 362.1× 40.3 0.8 50.4×
+peaking optimally at  = 0.9. This pronounced dominance
+of  validates our core hypothesis that localized, disentan-            5. Conclusion
+gled representations are the primary driving force for identi-
+fying co-existing targets in complex scenes. Notably, setting          We presented PIAA, a training-free framework that refor-
+ = 1.0 (which entirely discards the global token) triggers             mulates multi-label recognition with vision­language mod-
+a distinct performance drop. This underscores the indispens-           els as patch-level inference followed by adaptive aggrega-
+able role of the global semantic anchor; while local patches           tion. By combining Patch-based Visual Classifier Learning
+are crucial for target localization, holistic scene context acts       (PVCL) to reduce the patch-wise vision­language modality
+as a vital regularizer to suppress spurious activations and            gap and Prediction Adaptive Aggregation (PAA) to con-
+contextual false positives.                                            solidate sparse spatial evidence, PIAA delivers consistent
+                                                                       gains across diverse multi-label benchmarks with minimal
+                           92&  92&    &2&2  186                       additional computation. Limitations and future work. Our
+                                                                       approach still depends on the quality of the initial patch
+                                                                       predictions (e.g., the reliability of patch embeddings and
+                                                                       the purity of the selected patch bank). When early patch
+                                                                       evidence is noisy or biased, the subsequent rectification
+                                                                       and aggregation can be affected. An important future di-
+                                                                       rection is to develop more robust patch acquisition and se-
+                                                                       lection mechanisms, as well as reliability-aware calibration,
+P$3                                                                   to further improve stability under challenging clutter and
+                                                                       co-occurrence.
+                                     
+                                                                       Acknowledgements
+                                     
+
+                                                                  
+
+              %DQN6L]H.                           )XVLRQ:HLJKW
+
+Figure 4. Sensitivity analysis of the patch bank capacity K and
+the global-local fusion weight .
+
+Efficiency Analysis. As detailed in Tab. 5, PIAA fun-                  This work is supported by the Basic Research Project of
+damentally redefines the efficiency-accuracy frontier by               Yunnan Province (Grant No. 202501CF070004), Xingdian
+dismantling the computational bottlenecks of traditional               Talent Support Program, and Intelligent Computing Center,
+paradigms. In terms of learning, it achieves a staggering              Yunnan Normal University.
+362.1× speedup over CCD. While CCD relies on com-
+putationally exhaustive recursive self-training with redun-            Impact Statement
+dant forward passes, PIAA employs a single-pass statistical
+sweep to derive optimal weights in closed form, slashing the           This paper presents work whose goal is to advance the field
+adaptation time on NUS-WIDE from 991.8 to a mere 2.5                   of Machine Learning. There are many potential societal
+minutes. During inference, it delivers a robust 50.4× aver-            consequences of our work, none which we feel must be
+age throughput boost over TagCLIP. TagCLIP suffers from                specifically highlighted here.
+sequential re-verification latency, where complexity scales
+linearly with vocabulary size (O(C)). In stark contrast,               References
+PIAA utilizes a fully parallelized, unified forward archi-
+tecture (O(1)) that completely decouples inference speed               Abdelfattah, R., Zhang, X., Fouda, M. M., Wang, X., and
+from scene complexity. This structural elegance yields up                 Wang, S. G2netpl: Generic game-theoretic network
+to a 60.1× advantage on densely populated datasets like                   for partial-label image classification. arXiv preprint
+MS-COCO, establishing a new standard for real-time, high-                 arXiv:2210.11469, 2022.
+capacity multi-label recognition.
+                                                                       Abdelfattah, R., Guo, Q., Li, X., Wang, X., and Wang, S.
+
+                                                                    9
+[CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and Adaptive Aggregation
+
+   Cdul: Clip-driven unsupervised learning for multi-label          Huang, S., Zhang, H., and Li, X. Enhance vision-language
+   image classification. In Proceedings of the IEEE/CVF                alignment with noise. In Proceedings of the AAAI Con-
+  International Conference on Computer Vision, pp. 1348­               ference on Artificial Intelligence, volume 39, pp. 17449­
+  1357, 2023.                                                         17457, 2025.
+
+Aydin, M. A., Cirpar, E. M., Abdinli, E., Unal, G., and Sahin,      Khattak, M. U., Rasheed, H., Maaz, M., Khan, S., and
+  Y. H. Itaclip: Boosting training-free semantic segmenta-             Khan, F. S. Maple: Multi-modal prompt learning. In
+   tion with image, text, and architectural enhancements. In          Proceedings of the IEEE/CVF Conference on Computer
+  Proceedings of the IEEE/CVF Conference on Computer                  Vision and Pattern Recognition, pp. 19113­19122, 2023.
+  Vision and Pattern Recognition, pp. 4142­4152, 2025.
+                                                                    Kim, D. and Shim, H. Classifier-guided clip distillation for
+Bai, S., Liu, Y., Han, Y., Zhang, H., Tang, Y., Zhou, J.,              unsupervised multi-label classification. In Proceedings
+   and Lu, J. Self-calibrated clip for training-free open-             of the IEEE/CVF Conference on Computer Vision and
+  vocabulary segmentation. IEEE Transactions on Image                 Pattern Recognition, pp. 4661­4671, 2025.
+  Processing, 2025.
+                                                                    Kim, Y., Kim, J. M., Akata, Z., and Lee, J. Large loss
+Chen, T., Pu, T., Wu, H., Xie, Y., and Lin, L. Structured              matters in weakly supervised multi-label classification. In
+   semantic transfer for multi-label recognition with par-            Proceedings of the IEEE/CVF Conference on Computer
+   tial labels. In Proceedings of the AAAI Conference on              Vision and Pattern Recognition, pp. 14156­14165, 2022.
+  Artificial Intelligence, volume 36, pp. 339­346, 2022.
+                                                                    Kundu, K. and Tighe, J. Exploiting weakly supervised
+Chen, Y., Li, C., Dai, X., Li, J., Sun, W., Wang, Y., Zhang,          visual patterns to learn from partial annotations. Advances
+   R., Zhang, T., and Wang, B. Boosting single positive                in Neural Information Processing Systems, 33:561­572,
+   multi-label classification with generalized robust loss.            2020.
+   arXiv preprint arXiv:2405.03501, 2024.
+                                                                    Lan, M., Chen, C., Ke, Y., Wang, X., Feng, L., and Zhang,
+Chua, T.-S., Tang, J., Hong, R., Li, H., Luo, Z., and Zheng,          W. Proxyclip: Proxy attention improves clip for open-
+  Y. Nus-wide: a real-world web image database from na-               vocabulary segmentation. In European Conference on
+   tional university of singapore. In Proceedings of the ACM          Computer Vision, pp. 70­88, 2024.
+  International Conference on Image and Video Retrieval,
+   pp. 1­9, 2009.                                                   Liang, V. W., Zhang, Y., Kwon, Y., Yeung, S., and Zou,
+                                                                      J. Y. Mind the gap: Understanding the modality gap
+Cole, E., Mac Aodha, O., Lorieul, T., Perona, P., Morris, D.,          in multi-modal contrastive representation learning. Ad-
+   and Jojic, N. Multi-label learning from single positive             vances in Neural Information Processing Systems, 35:
+   labels. In Proceedings of the IEEE/CVF Conference on               17612­17625, 2022.
+  Computer Vision and Pattern Recognition, pp. 933­942,
+   2021.                                                            Lin, T.-Y., Maire, M., Belongie, S., Hays, J., Perona, P., Ra-
+                                                                       manan, D., Dolla´r, P., and Zitnick, C. L. Microsoft coco:
+Dong, X., Bao, J., Zheng, Y., Zhang, T., Chen, D., Yang, H.,           Common objects in context. In European Conference on
+   Zeng, M., Zhang, W., Yuan, L., Chen, D., et al. Maskclip:          Computer Vision, pp. 740­755, 2014.
+   Masked self-distillation advances contrastive language-
+   image pretraining. In Proceedings of the IEEE/CVF Con-           Lin, Y., Chen, M., Zhang, K., Li, H., Li, M., Yang, Z., Lv, D.,
+   ference on Computer Vision and Pattern Recognition, pp.             Lin, B., Liu, H., and Cai, D. Tagclip: A local-to-global
+  10995­11005, 2023.                                                   framework to enhance open-vocabulary multi-label clas-
+                                                                       sification of clip without training. In Proceedings of the
+Everingham, M., Van Gool, L., Williams, C. K., Winn, J.,              AAAI Conference on Artificial Intelligence, volume 38,
+   and Zisserman, A. The pascal visual object classes (voc)            pp. 3513­3521, 2024.
+   challenge. International Journal of Computer Vision, 88
+  (2):303­338, 2010.                                                Liu, Y., Wen, J., Liu, C., Fang, X., Li, Z., Xu, Y., and Zhang,
+                                                                       Z. Language-driven cross-modal classifier for zero-shot
+Hastie, T. and Tibshirani, R. Discriminant analysis by gaus-           multi-label image recognition. In Forty-first International
+   sian mixtures. Journal of the Royal Statistical Society            Conference on Machine Learning, 2024.
+  Series B: Statistical Methodology, 58(1):155­176, 1996.
+                                                                    Ma, L.-L., Xu, S., Xie, M.-K., Wang, L., Sun, D., and
+Hu, Z., Xu, Q., Duan, Y., Tai, Y., and Li, H. Sota: Self-              Zhao, H. Correlative and discriminative label grouping
+   adaptive optimal transport for zero-shot classification             for multi-label visual prompt tuning. In Proceedings
+  with multiple foundation models. In Proceedings of the               of the IEEE/CVF Conference on Computer Vision and
+  IEEE/CVF Conference on Computer Vision and Pattern                  Pattern Recognition, pp. 25434­25443, 2025.
+  Recognition, 2026.
+
+                                                                10
+[CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and Adaptive Aggregation
+
+Miller, K., Gangrade, A., Mishra, S., Saenko, K., and                  IEEE/CVF Conference on Computer Vision and Pattern
+   Saligrama, V. Sparc: Score prompting and adaptive fusion            Recognition, pp. 7799­7808, 2024.
+   for zero-shot multi-label recognition in vision-language
+   models. In Proceedings of the IEEE/CVF Conference                 Zanella, M., Ge´rin, B., and Ayed, I. Boosting vision-
+   on Computer Vision and Pattern Recognition, pp. 4313­                language models with transduction. Advances in Neural
+  4321, 2025.                                                          Information Processing Systems, 37:62223­62256, 2024.
+
+Pu, T., Chen, T., Wu, H., and Lin, L. Semantic-aware repre-          Zhang, D., Liu, F., and Tang, Q. Corrclip: Reconstructing
+   sentation blending for multi-label image recognition with            patch correlations in clip for open-vocabulary semantic
+   partial labels. In Proceedings of the AAAI Conference on             segmentation. In Proceedings of the IEEE/CVF Interna-
+  Artificial Intelligence, volume 36, pp. 2091­2098, 2022.              tional Conference on Computer Vision, pp. 24677­24687,
+                                                                        2025a.
+Radford, A., Kim, J. W., Hallacy, C., Ramesh, A., Goh, G.,
+  Agarwal, S., Sastry, G., Askell, A., Mishkin, P., Clark,           Zhang, Y., Huang, X., Ma, J., Li, Z., Luo, Z., Xie, Y., Qin,
+  J., Krueger, G., and Sutskever, I. Learning transferable             Y., Luo, T., Li, Y., Liu, S., et al. Recognize anything:
+  visual models from natural language supervision. In                  A strong image tagging model. In Proceedings of the
+  International Conference on Machine Learning, pp. 8748­              IEEE/CVF Conference on Computer Vision and Pattern
+   8763, 2021.                                                         Recognition, pp. 1724­1732, 2024.
+
+Ridnik, T., Ben-Baruch, E., Zamir, N., Noy, A., Fried-               Zhang, Y., Kim, Y., Choi, Y.-G., Kim, H., Liu, H., and
+   man, I., Protter, M., and Zelnik-Manor, L. Asymmetric                Hong, S. Backpropagation-free test-time adaptation
+   loss for multi-label classification. In Proceedings of the          via probabilistic gaussian alignment. arXiv preprint
+  IEEE/CVF International Conference on Computer Vision,                 arXiv:2508.15568, 2025b.
+   pp. 82­91, 2021.
+                                                                     Zhong, Y., Yang, J., Zhang, P., Li, C., Codella, N., Li,
+Ridnik, T., Sharir, G., Ben-Cohen, A., Ben-Baruch, E., and              L. H., Zhou, L., Dai, X., Yuan, L., Li, Y., and Gao, J.
+   Noy, A. Ml-decoder: Scalable and versatile classification            Regionclip: Region-based language-image pretraining. In
+   head. In Proceedings of the IEEE/CVF Winter Conference              Proceedings of the IEEE/CVF Conference on Computer
+   on Applications of Computer Vision, pp. 32­41, 2023.                Vision and Pattern Recognition, pp. 16793­16803, 2022.
+
+Tran, L., Vo, T., Nguyen, A., Dinh, S., and Nguyen, V. More          Zhou, B., Khosla, A., Lapedriza, A., Oliva, A., and Torralba,
+   reliable pseudo-labels, better performance: A generalized           A. Learning deep features for discriminative localiza-
+   approach to single positive multi-label learning. In Pro-            tion. In Proceedings of the IEEE/CVF Conference on
+   ceedings of the IEEE/CVF International Conference on                Computer Vision and Pattern Recognition, June 2016.
+  Computer Vision, pp. 1349­1358, 2025.
+                                                                     Zhou, Y., Zhou, D., Wang, Y., Feng, J., and Hou, Q. Maskd-
+Wang, F., Mei, J., and Yuille, A. Sclip: Rethinking self-               iffusion: Boosting text-to-image consistency with condi-
+   attention for dense vision-language inference. In Eu-                tional mask. International Journal of Computer Vision,
+   ropean Conference on Computer Vision, pp. 315­332,                  133(5):2805­2824, 2025.
+   2024a.
+                                                                     Zhu, X., Zhu, B., Tan, Y., Wang, S., Hao, Y., and Zhang, H.
+Wang, J., Li, X., Zhang, J., Xu, Q., Zhou, Q., Yu, Q., Sheng,           Enhancing zero-shot vision models by label-free prompt
+   L., and Xu, D. Diffusion model is secretly a training-free           distribution learning and bias correcting. Advances in
+   open vocabulary semantic segmenter. IEEE Transactions               Neural Information Processing Systems, 37:2001­2025,
+   on Image Processing, 2025.                                           2024.
+
+Wang, Z., Liang, J., Sheng, L., He, R., Wang, Z., and Tan,
+  T. A hard-to-beat baseline for training-free clip-based
+   adaptation. arXiv preprint arXiv:2402.04087, 2024b.
+
+Wu, J., Zhang, Z., Xia, Y., Li, X., Xia, Z., Chang, A., Yu, T.,
+   Kim, S., Rossi, R. A., Zhang, R., et al. Visual prompting
+   in multimodal large language models: A survey. arXiv
+   preprint arXiv:2409.15310, 2024.
+
+Xing, X., Xiong, Z., Stylianou, A., Sastry, S., Gong, L., and
+  Jacobs, N. Vision-language pseudo-labels for single-
+   positive multi-label learning. In Proceedings of the
+
+                                                                 11
+VOC 07          [CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and Adaptive Aggregation
+
+VOC 12A. Appendix
+
+COCOA.1. Qualitative Comparison of Activation Maps
+Fig. 5 compares class activation maps. While the baseline suffers from severe contextual attention diffusion, PVCL
+NUSsuccessfully concentrates activations strictly on target objects. However, the bottom row reveals a limitation: extremely
+small targets (e.g., fork, remote) are easily overshadowed by dominant surrounding features due to the standard patch
+resolution limit. This causes activation diffusion, presenting a bottleneck for future work.
+
+      error
+
+Figure 5. Comparison of class activation maps. PVCL tightly concentrates activations on target objects, correcting the baseline's contextual
+attention diffusion. The bottom row shows failure cases on extremely small targets due to patch-level resolution limits.
+
+                                                                        12
+                [CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and Adaptive Aggregation
+
+A.2. Qualitative Visualization of Selected Patches
+Fig. 6 visualizes the top-K patches retained by our entropy-driven selection. This approach successfully isolates discrim-
+inative foregrounds (e.g., trains, leaves) while fading out uninformative backgrounds. However, the bottom row reveals
+occasional failures due to semantic co-occurrence bias, such as highlighting the rider instead of the motorbike, or the net
+instead of the soccer match. These ambiguous cases directly underscore the necessity of our subsequent PAA module, which
+leverages the global [CLS] anchor to regularize such localized semantic deviations.
+
+                                                                                              horse
+
+VOC 07
+
+VOC 12                     train
+                          bicycle
+COCO
+                            cup
+
+NUS                       birds
+                          leaf
+
+               motorbike           so cce r
+
+        error
+
+                                             error
+
+Figure 6. Qualitative visualization of the entropy-driven patch selection. Retained top-K patches are displayed clearly, while discarded
+backgrounds are faded. The bottom row illustrates typical failure cases caused by semantic co-occurrence bias (e.g., motorbike, soccer).
+
+                                                                        13
+       [CLS] is Not Enough: Multi-Label Recognition via Patch-Level Inference and Adaptive Aggregation
+
+A.3. Empirical Analysis of Scale Complementarity
+
+To empirically validate the motivation behind Patch-level Inference followed by Adaptive Aggregation (PIAA), Tab. 6
+details the performance breakdown (mAP) on large versus small objects across the COCO, NUS, and VOC12 datasets.
+
+The results reveal a clear scale-based divergence. Max-aggregated Patch scores excel at recognizing small, localized
+objects (e.g., cup, bottle, mouse), significantly outperforming the global [CLS] token. Conversely, the holistic [CLS]
+representation is notably more reliable for large, globally salient objects (e.g., giraffe, aeroplane) that typically span multiple
+patches.
+
+By adaptively fusing both predictions, our PIAA strategy successfully exploits local spatial granularity alongside global
+semantic stability. As demonstrated in Tab. 6, this synergy effectively rescues small object recognition--providing substantial
+gains over the [CLS] baseline--while preserving and occasionally improving the strong baseline performance on large
+targets. This firmly confirms the fundamental complementarity between local patch evidence and global scene-level
+representations.
+
+Table 6. Performance breakdown (mAP) on large vs. small objects across different datasets, demonstrating the clear complementarity
+between CLS and Patch predictions, and the ultimate effectiveness of our PIAA.
+
+                  COCO                        NUS                      VOC12
+
+Scale  Class     CLS Patch  PIAA  Class    CLS Patch  PIAA  Class      CLS Patch                        PIAA
+Large
+Small  giraffe   99.3 95.5  99.4  rainbow  82.5 50.1  82.6  aeroplane  99.4 99.0                        99.6
+       elephant  98.4 96.8  98.8  horses   78.6 75.2  78.9  horse      97.3 96.6                        98.4
+       zebra     97.9 96.8  98.1  sky      72.4 61.3  72.4  cow        97.0 94.4                        98.7
+
+       cup       24.0 32.1  30.9  soccer   56.1 58.4  58.3  tv monitor 77.2 85.5                        80.4
+       spoon     17.3 31.6  23.0  flags    52.1 50.4  54.7                                              95.6
+       mouse     11.2 51.0  16.1  leaf     17.1 21.6  18.7  bottle     65.6 94.1                        72.9
+
+                                                            dining table 63.6 75.7
+
+                                           14
+

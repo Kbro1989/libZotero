@@ -1,0 +1,2710 @@
+                                         Score-based Generative Modeling in Latent Space
+
+                                              Arash Vahdat       Karsten Kreis        Jan Kautz
+                                                 NVIDIA              NVIDIA             NVIDIA
+                                                                                jkautz@nvidia.com
+                                         avahdat@nvidia.com  kkreis@nvidia.com
+
+arXiv:2106.05931v3 [stat.ML] 2 Dec 2021                                              Abstract
+
+                                                    Score-based generative models (SGMs) have recently demonstrated impressive
+                                                    results in terms of both sample quality and distribution coverage. However, they
+                                                    are usually applied directly in data space and often require thousands of network
+                                                    evaluations for sampling. Here, we propose the Latent Score-based Generative
+                                                   Model (LSGM), a novel approach that trains SGMs in a latent space, relying on the
+                                                   variational autoencoder framework. Moving from data to latent space allows us to
+                                                    train more expressive generative models, apply SGMs to non-continuous data, and
+                                                    learn smoother SGMs in a smaller space, resulting in fewer network evaluations
+                                                    and faster sampling. To enable training LSGMs end-to-end in a scalable and stable
+                                                    manner, we (i) introduce a new score-matching objective suitable to the LSGM
+                                                    setting, (ii) propose a novel parameterization of the score function that allows SGM
+                                                    to focus on the mismatch of the target distribution with respect to a simple Normal
+                                                    one, and (iii) analytically derive multiple techniques for variance reduction of the
+                                                    training objective. LSGM obtains a state-of-the-art FID score of 2.10 on CIFAR-10,
+                                                    outperforming all existing generative results on this dataset. On CelebA-HQ-256,
+                                                    LSGM is on a par with previous SGMs in sample quality while outperforming them
+                                                    in sampling time by two orders of magnitude. In modeling binary images, LSGM
+                                                    achieves state-of-the-art likelihood on the binarized OMNIGLOT dataset. Our
+                                                    project page and code can be found at https://nvlabs.github.io/LSGM.
+
+                                         1 Introduction
+
+                                         The long-standing goal of likelihood-based generative learning is to faithfully learn a data distribution,
+                                         while also generating high-quality samples. Achieving these two goals simultaneously is a tremendous
+                                         challenge, which has led to the development of a plethora of different generative models. Recently,
+                                         score-based generative models (SGMs) demonstrated astonishing results in terms of both high sample
+                                         quality and likelihood [1, 2]. These models define a forward diffusion process that maps data to noise
+                                         by gradually perturbing the input data. Generation corresponds to a reverse process that synthesizes
+                                         novel data via iterative denoising, starting from random noise. The problem then reduces to learning
+                                         the score function--the gradient of the log-density--of the perturbed data [3]. In a seminal work,
+                                         Song et al. [2] show how this modeling approach is described with a stochastic differential equation
+                                         (SDE) framework which can be converted to maximum likelihood training [4]. Variants of SGMs
+                                         have been applied to images [1, 2, 5, 6], audio [7, 8, 9, 10], graphs [11] and point clouds [12, 13].
+
+                                         Albeit high quality, sampling from SGMs is computationally expensive. This is because generation
+                                         amounts to solving a complex SDE, or equivalently ordinary differential equation (ODE) (denoted as
+                                         the probability flow ODE in [2]), that maps a simple base distribution to the complex data distribution.
+                                         The resulting differential equations are typically complex and solving them accurately requires
+                                         numerical integration with very small step sizes, which results in thousands of neural network
+                                         evaluations [1, 2, 6]. Furthermore, generation complexity is uniquely defined by the underlying data
+                                         distribution and the forward SDE for data perturbation, implying that synthesis speed cannot be
+
+                                             Equal contribution.
+
+                                         35th Conference on Neural Information Processing Systems (NeurIPS 2021).
+Figure 1: In our latent score-based generative model (LSGM), data is mapped to latent space via an encoder
+q(z0|x) and a diffusion process is applied in the latent space (z0  z1). Synthesis starts from the base
+distribution p(z1) and generates samples in latent space via denoising (z0  z1). Then, the samples are mapped
+from latent to data space using a decoder p(x|z0). The model is trained end-to-end.
+
+increased easily without sacrifices. Moreover, SDE-based generative models are currently defined for
+continuous data and cannot be applied effortlessly to binary, categorical, or graph-structured data.
+
+Here, we propose the Latent Score-based Generative Model (LSGM), a new approach for learning
+SGMs in latent space, leveraging a variational autoencoder (VAE) framework [14, 15]. We map the
+input data to latent space and apply the score-based generative model there. The score-based model is
+then tasked with modeling the distribution over the embeddings of the data set. Novel data synthesis
+is achieved by first generating embeddings via drawing from a simple base distribution followed by
+iterative denoising, and then transforming this embedding via a decoder to data space (see Fig. 1).
+We can consider this model a VAE with an SGM prior. Our approach has several key advantages:
+
+Synthesis Speed: By pretraining the VAE with a Normal prior first, we can bring the marginal
+distribution over encodings (the aggregate posterior) close to the Normal prior, which is also the
+SGM's base distribution. Consequently, the SGM only needs to model the remaining mismatch,
+resulting in a less complex model from which sampling becomes easier. Furthermore, we can tailor
+the latent space according to our needs. For example, we can use hierarchical latent variables and
+apply the diffusion model only over a subset of them, further improving synthesis speed.
+
+Expressivity: Training a regular SGM can be considered as training a neural ODE directly on the
+data [2]. However, previous works found that augmenting neural ODEs [16, 17] and more generally
+generative models [18, 19, 20, 21] with latent variables improves their expressivity. Consequently,
+we expect similar performance gains from combining SGMs with a latent variable framework.
+
+Tailored Encoders and Decoders: Since we use the SGM in latent space, we can utilize carefully de-
+signed encoders and decoders mapping between latent and data space, further improving expressivity.
+Additionally, the LSGM method can therefore be naturally applied to non-continuous data.
+
+LSGMs can be trained end-to-end by maximizing the variational lower bound on the data likelihood.
+Compared to regular score matching, our approach comes with additional challenges, since both the
+score-based denoising model and its target distribution, formed by the latent space encodings, are
+learnt simultaneously. To this end, we make the following technical contributions: (i) We derive a
+new denoising score matching objective that allows us to efficiently learn the VAE model and the
+latent SGM prior at the same time. (ii) We introduce a new parameterization of the latent space
+score function, which mixes a Normal distribution with a learnable SGM, allowing the SGM to
+model only the mismatch between the distribution of latent variables and the Normal prior. (iii) We
+propose techniques for variance reduction of the training objective by designing a new SDE and
+by analytically deriving importance sampling schemes, allowing us to stably train deep LSGMs.
+Experimentally, we achieve state-of-the-art 2.10 FID on CIFAR-10 and 7.22 FID on CelebA-HQ-256,
+and significantly improve upon likelihoods of previous SGMs. On CelebA-HQ-256, we outperform
+previous SGMs in synthesis speed by two orders of magnitude. We also model binarized images,
+MNIST and OMNIGLOT, achieving state-of-the-art likelihood on the latter.
+
+2 Background
+
+Here, we review continuous-time score-based generative models (see [2] for an in-depth discussion).
+Consider a forward diffusion process {zt}tt==01 for continuous time variable t  [0, 1], where z0 is the
+starting variable and zt its perturbation at time t. The diffusion process is defined by an Itô SDE:
+
+              dz = f (t)z dt + g(t) dw  (1)
+
+where f : R  R and g : R  R are scalar drift and diffusion coefficients, respectively, and w is
+the standard Wiener process. f (t) and g(t) can be designed such that z1  N (z1; 0, I) follows a
+
+              2
+Normal distribution at the end of the diffusion process.2 Song et al. [2] show that the SDE in Eq. 1
+
+can be converted to a generative model by first sampling from z1  N (z1; 0, I) and then running the
+reverse-time SDE dz = [f (t)z-g(t)2z log qt(z)] dt+g(t) dw¯ , where w¯ is a reverse-time standard
+Wiener process and dt is an infinitesimal negative time step. The reverse SDE requires knowledge of
+zt log qt(zt), the score function of the marginal distribution under the forward diffusion at time t.
+One approach for estimating it is via the score matching objective3:
+
+min EtU[0,1]  (t)Eq(z0)Eq(zt|z0)[||zt log q(zt) - zt log p(zt)||22]                           (2)
+
+  
+
+that trains the parameteric score function zt log p(zt) at time t  U [0, 1] for a given weighting
+coefficient (t). q(z0) is the z0-generating distribution and q(zt|z0) is the diffusion kernel, which is
+available in closed form for certain f (t) and g(t). Since zt log q(zt) is not analytically available,
+Song et al. [2] rely on denoising score matching [22] that converts the objective in Eq. 2 to:
+
+min EtU[0,1]  (t)Eq(z0)Eq(zt|z0)[||zt log q(zt|z0) - zt log p(zt)||22]      +C                (3)
+
+  
+
+Vincent [22] shows C = EtU[0,1][(t)Eq(z0)Eq(zt|z0)[||zt log q(zt)||22 - ||zt log q(zt|z0)||22]] is
+independent of , making the minimizations in Eq. 3 and Eq. 2 equivalent. Song et al. [4] show
+that for (t) = g(t)2/2, the minimizations correspond to approximate maximum likelihood training
+based on an upper on the Kullback-Leibler (KL) divergence between the target distribution and the
+
+distribution defined by the reverse-time generative SDE with the learnt score function. In particular,
+
+the objective of Eq. 2 can then be written:
+
+KL q(z0)||p(z0)  EtU[0,1]          g(t)2                ||zt log q(zt) - zt log p(zt)||22     (4)
+                                     2 Eq(z0)Eq(zt|z0)
+
+which can again be transformed into denoising score matching (Eq. 3) following Vincent [22].
+
+3 Score-based Generative Modeling in Latent Space
+
+The LSGM framework in Fig. 1 consists of the encoder q(z0|x), SGM prior p(z0), and decoder
+p(x|z0). The SGM prior leverages a diffusion process as defined in Eq. 1 and diffuses z0  q(z0|x)
+samples in latent space to the standard Normal distribution p(z1) = N (z1; 0, I). Generation uses
+the reverse SDE to sample from p(z0) with time-dependent score function zt log p(zt), and the
+decoder p(x|z0) to map the synthesized encodings z0 to data space. Formally, the generative process
+is written as p(z0, x) = p(z0)p(x|z0). The goal of training is to learn {, , }, the parameters
+of the encoder q(z0|x), score function zt log p(zt), and decoder p(x|z0), respectively.
+
+We train LSGM by minimizing the variational upper bound on negative data log-likelihood log p(x):
+
+L(x, , , ) = Eq(z0|x) - log p(x|z0) +KL q(z0|x)||p(z0)                                        (5)
+
+= Eq(z0|x) - log p(x|z0) +Eq(z0|x) log q(z0|x) +Eq(z0|x) - log p(z0)                          (6)
+
+              reconstruction term  negative encoder entropy  cross entropy
+
+following a VAE approach [14, 15], where q(z0|x) approximates the true posterior p(z0|x).
+
+In this paper, we use Eq. 6 with decomposed KL divergence into its entropy and cross entropy terms.
+The reconstruction and entropy terms are estimated easily for any explicit encoder as long as the
+reparameterization trick is available [14]. The challenging part in training LSGM is to train the
+cross entropy term that involves the SGM prior. We motivate and present our expression for the
+cross-entropy term in Sec. 3.1, the parameterization of the SGM prior in Sec. 3.2, different weighting
+mechanisms for the training objective in Sec. 3.3, and variance reduction techniques in Sec. 3.4.
+
+3.1 The Cross Entropy Term
+
+One may ask, why not train LSGM with Eq. 5 and rely on the KL in Eq. 4. Directly using the
+KL expression in Eq. 4 is not possible, as it involves the marginal score zt log q(zt), which is
+unavailable analytically for common non-Normal distributions q(z0) such as Normalizing flows.
+
+    2Other distributions at t = 1 are possible; for instance, see the "variance-exploding" SDE in [2]. In this
+paper, however, we use only SDEs converging towards N (z1; 0, I) at t = 1.
+
+    3We omit the t-subscript of the diffused distributions qt in all score functions of the form zt log qt(zt).
+
+                                   3
+Transforming into denoising score matching does not help either, since in that case the problematic
+zt log q(zt) term appears in the C term (see Eq. 3). In contrast to previous works [2, 22], we cannot
+simply drop C, since it is, in fact, not constant but depends on q(zt), which is trainable in our setup.
+
+To circumvent this problem, we instead decompose the KL in Eq. 5 and rather work directly with the
+cross entropy between the encoder distribution q(z0|x) and the SGM prior p(z0). We show:
+
+Theorem 1. Given two distributions q(z0|x) and p(z0), defined in the continuous space RD, denote
+the marginal distributions of diffused samples under the SDE in Eq. 1 at time t with q(zt|x) and
+p(zt). Assuming mild smoothness conditions on log q(zt|x) and log p(zt), the cross entropy is:
+
+CE(q(z0|x)||p(z0)) = EtU[0,1]  g(t)2            ||zt log q(zt|z0)-zt log p(zt)||22    D       2e02         ,
+                                 2 Eq(zt,z0|x)                                      + log
+
+                                                                                       2
+
+with q(zt, z0|x) = q(zt|z0)q(z0|x) and a Normal transition kernel q(zt|z0) = N (zt; µt(z0), t2I),
+where µt and t2 are obtained from f (t) and g(t) for a fixed initial variance 02 at t = 0.
+
+A proof with generic expressions for µt and t2 as well as an intuitive interpretation are in App. A.
+
+Importantly, unlike for the KL objective of Eq. 4, no problematic terms depending on the marginal
+score zt log q(zt|x) arise. This allows us to use this denoising score matching objective for the
+cross entropy term in Theorem 1 not only for optimizing p(z0) (which is commonly done in the
+score matching literature), but also for the q(z0|x) encoding distribution. It can be used even
+with complex q(z0|x) distributions, defined, for example, in a hierarchical fashion [20, 21] or via
+Normalizing flows [23, 24]. Our novel analysis shows that, for diffusion SDEs following Eq. 1, only
+the cross entropy can be expressed purely with zt log q(zt|z0). Neither KL nor entropy in [4] can
+be expressed without the problematic term zt log q(zt|x) (details in the Appendix).
+
+Note that in Theorem 1, the term zt log p(zt) in the score matching expression corresponds to the
+score that originates from diffusing an initial p(z0) distribution. In practice, we use the expression to
+learn an SGM prior p(z0), which models zt log p(zt) by a neural network. With the learnt score
+zt log p(zt) (here we explicitly indicate the parameters  to clarify that this is the learnt model), the
+actual SGM prior is defined via the generative reverse-time SDE (or, alternatively, a closely-connected
+ODE, see Sec. 2 and App. D), which generally defines its own, separate marginal distribution p(z0)
+at t = 0. Importantly, the learnt, approximate score zt log p(zt) is not necessarily the same as one
+would obtain when diffusing p(z0). Hence, when considering the learnt score zt log p(zt), the
+score matching expression in our Theorem only corresponds to an upper bound on the cross entropy
+between q(z0|x) and p(z0) defined by the generative reverse-time SDE. This is discussed in detail
+in concurrent works [4, 25]. Hence, from the perspective of the learnt SGM prior, we are training
+
+with an upper bound on the cross entropy (similar to the bound on the KL in Eq. 4), which can also be
+
+considered as the continuous version of the discretized variational objective derived by Ho et al. [1].
+
+3.2 Mixing Normal and Neural Score Functions
+
+In VAEs [14], p(z0) is often chosen as a standard Normal N (z0; 0, I). For recent hierarchical
+VAEs [20, 21], using the reparameterization trick, the prior can be converted to N (z0; 0, I) (App. E).
+
+Considering a single dimensional latent space, we can assume that the prior at time t is in the
+form of a geometric mixture p(zt)  N (zt; 0, 1)1-p(zt) where p(zt) is a trainable SGM prior
+and   [0, 1] is a learnable scalar mixing coefficient. Formulating the prior this way has crucial
+advantages: (i) We can pretrain LSGM's autoencoder networks assuming =0, which corresponds
+
+to training the VAE with a standard Normal prior. This pretraining step will bring the distribution
+of latent variable close to N (z0; 0, 1), allowing the SGM prior to learn a much simpler distribution
+
+in the following end-to-end training stage. (ii) The score function for this mixture is of the form
+zt log p(zt) = -(1 - )zt + zt log p(zt). When the score function is dominated by the linear
+term, we expect that the reverse SDE can be solved faster, as its drift is dominated by this linear term.
+
+For our multivariate latent space, we obtain diffused samples at time t by sampling zt  q(zt|z0)
+
+with zt = µt(z0) + t , where  N ( ; 0, I). Since we have zt log q(zt|z0) = - /t, similar
+to [1], we parameterize the score function by zt log p(zt) := - (zt, t)/t, where (zt, t) :=
+t(1 - ) zt +  (zt, t) is defined by our mixed score parameterization that is applied
+elementwise to the components of the score. With this, we simplify the cross entropy expression to:
+
+                                              w(t)  || - (zt, t)||22    D           2e02   ,  (7)
+CE(q(z0|x)||p(z0)) = EtU[0,1] 2 Eq(zt,z0|x),                          + log
+
+                                                                         2
+
+                                                4
+where w(t) = g(t)2/t2 is a time-dependent weighting scalar.
+
+3.3 Training with Different Weighting Mechanisms                                                   Table 1: Weighting mechanisms
+
+The weighting term w(t) in Eq. 7 trains the prior with maximum Mechanism Weights
+
+likelihood. Similar to [1, 2], we observe that when w(t) is dropped                                Weighted wll(t) = g(t)2/t2
+while training the SGM prior (i.e., w(t) = 1), LSGM often yields
+higher quality samples at a small cost in likelihood. However, in our                              Unweighted wun(t) = 1
+                                                                                                   Reweighted wre(t) = g(t)2
+case, we can only drop the weighting when training the prior. When
+
+updating the encoder parameters, we still need to use the maximum likelihood weighting to ensure
+
+that the encoder q(z0|x) is brought closer to the true posterior p(z0|x)4. Tab. 1 summarizes three
+weighting mechanisms we consider in this paper: wll(t) corresponds to maximum likelihood, wun(t)
+is the unweighted objective used by [1, 2], and wre(t) is a variant obtained by dropping only 1/t2.
+This weighting mechanism has a similar affect on the sample quality as wun(t) = 1; however, in
+
+Sec. 3.4, we show that it is easier to define a variance reduction scheme for this weighting mechanism.
+
+The following summarizes our training objectives (with t  U[0, 1] and  N ( ; 0, I)):
+
+min  Eq (z0 |x)   -log p(x|z0) +Eq(z0|x)               log q(z0|x) +Et, ,q(zt|z0),q(z0|x)               wll(t) ||  -  (zt, t)||22  (8)
+                                                                                                          2
+,
+
+min  Et,  ,q(zt |z0 ),q (z0 |x)  wll/un/re(t) ||  -    (zt, t)||22        with q(zt|z0) = N (zt; µt(z0), t2I),                     (9)
+                                      2
+
+where Eq. 8 trains the VAE encoder and decoder parameters {, } using the variational bound
+L(x, , , ) from Eq. 6. Eq. 9 trains the prior with one of the three weighting mechanisms. Since
+the SGM prior participates in the objective only in the cross entropy term, we only consider this term
+
+when training the prior. Efficient algorithms for training with the objectives are presented in App. G.
+
+3.4 Variance Reduction
+
+The objectives in Eqs. 8 and 9 involve sampling of the time variable t, which has high variance [26].
+
+We introduce several techniques for reducing this variance for all three objective weightings. We focus
+
+on   the     "variance   preserving"   SDEs         (VPSDEs)      [2,    1,  27],  defined  by  dz  =  -  1  (t)z  dt   +  (t) dw
+                                                                                                          2
+where (t) = 0 + (1 - 0)t linearly interpolates in [0, 1] (other SDEs discussed in App. B).
+
+We denote the marginal distribution of latent variables by q(z0) := Epdata(x)[q(z0|x)]. Here, we
+derive variance reduction techniques for CE(q(z0)||p(z0)), assuming that both q(z0) = p(z0) =
+N (z0; 0, I). This is a reasonable simplification for our analysis because pretraining our LSGM model
+with a N (z0; 0, I) prior brings q(z0) close to N (z0; 0, I) and our SGM prior is often dominated by
+
+the fixed Normal mixture component. We empirically observe that the variance reduction techniques
+
+developed with this assumption still work well when q(z0) and p(z0) are not exactly N (z0; 0, I).
+
+Variance reduction for likelihood weighting: In App. B, for q(z0) = p(z0) = N (z0; 0, I), we
+
+show      CE(q(z0)||p(z0))       is  given  by      D  EtU    [0,1]  [d  log  t2/dt]   +  const.   We  consider    two  approaches:
+                                                    2
+
+(1) Geometric VPSDE: To reduce the variance sampling uniformly from t, we can design the SDE such
+
+that      d  log  t2/dt  is  constant  for  t       [0,  1].  We  show       in  App.  B  that  a  (t)  =    log(m2 ax  /m2 in  )     t2  )
+                                                                                                                                   (1-t2
+with geometric variance t2 = m2 in(m2 ax/m2 in)t satisfies this condition. We call a VPSDE with this
+(t) a geometric VPSDE. m2 in and m2 ax are the hyperparameters of the SDE, with 0 < m2 in < m2 ax < 1.
+
+Although our geometric VPSDE has a geometric variance progression similar to the "variance
+
+exploding" SDE (VESDE) [2], it still enjoys the "variance preserving" property of the VPSDE. In
+
+App. B, we show that the VESDE does not come with a reduced variance for t-sampling by default.
+
+(2) Importance sampling (IS): We can keep (t) and t2 unchanged for the original linear VPSDE, and
+instead use IS to minimize variance. The theory of IS shows that the proposal r(t)  d log t2/dt has
+minimum variance [28]. In App. B, we show that we can sample from r(t) using inverse transform
+sampling t = var-1((12)(02)1-) where var-1 is the inverse of t2 and   U [0, 1]. This variance
+reduction technique is available for any VPSDE with arbitrary (t).
+
+In Fig. 2, we train a small LSGM on CIFAR-10 with wll weighting using (i) the original VPSDE
+with uniform t sampling, (ii) the same SDE but with our IS from t, and (iii) the proposed geometric
+
+     4Minimizing L(x, , , ) w.r.t  is equivalent to minimizing KL q(z0|x)||p(z0|x) w.r.t q(z0|x).
+
+                                                                       5
+VPSDE. Note how both (ii) and (iii) significantly reduce the variance and allow us to monitor the
+progress of the training objective. In this case, (i) has difficulty minimizing the objective due to the
+high variance. In App. B, we show how IS proposals can be formed for other SDEs, including the
+VESDE and Sub-VPSDE from [2].
+
+Variance reduction for unweighted and reweighted objectives:             Training NELBO (nats)  9000  Lin. VPSDE, Un
+When training with wun, analytically deriving IS proposal distri-                                     Lin. VPSDE, IS
+butions for arbitrary (t) is challenging. For linear VPSDEs, we                                 8500  Geo. VPSDE, Un
+provide a derivation in App. B to obtain the optimal IS distribution.
+In contrast, defining IS proposal distributions is easier when training                         8000
+with wre. In App. B, we show that the optimal distribution is in the
+form r(t)  dt2/dt which is sampled by t=var-1((1-)02 +12)                                       7500
+with   U[0, 1]. In Fig. 3, we visualize the IS distributions for the
+three weighting mechanisms for the linear VPSDE with the original                              7000
+[0, 1] parameters from [2]. r(t) for the likelihood weighting is                                       0 100 200 300 400 500
+more tilted towards t = 0 due to the 1/t2 term in wll.                                                               Epochs
+
+When using differently weighted objectives for training, we can                               Figure 2: Variance reduction
+either sample separate t with different IS distributions for each
+objective, or use IS for the SGM objective (Eq. 9) and reweight the      r(t)                         weighted
+samples according to the likelihood objective for encoder training                                    unweighted
+(Eq. 8). See App. G for details.                                                                      reweighted
+
+                                                                                                0.0 0.2 0.4 0.6 0.8 1.0
+
+                                                                                                                      t
+
+                                                                                                 Figure 3: IS distributions
+
+4 Related Work
+
+Our work builds on score-matching [29, 30, 31, 32, 33, 34, 35, 36, 37], specifically denoising score
+matching [22], which makes our work related to recent generative models using denoising score
+matching- and denoising diffusion-based objectives [3, 38, 1, 2, 6]. Among those, [1, 6] use a
+discretized diffusion process with many noise scales, building on [27], while Song et al. [2] introduce
+the continuous time framework using SDEs. Experimentally, these works focus on image modeling
+and, contrary to us, work directly in pixel space. Various works recently tried to address the slow
+sampling of these types of models and further improve output quality. [39] add an adversarial
+objective, [5] introduce non-Markovian diffusion processes that allow to trade off synthesis speed,
+quality, and sample diversity, [40] learn a sequence of conditional energy-based models for denoising,
+[41] distill the iterative sampling process into single shot synthesis, and [42] learn an adaptive noise
+schedule, which is adjusted during synthesis to accelerate sampling. Further, [26] propose empirical
+variance reduction techniques for discretized diffusions and introduce a new, heuristically motivated,
+noise schedule. In contrast, our proposed noise schedule and our variance reduction techniques are
+analytically derived and directly tailored to our learning setting in the continuous time setup.
+
+Recently, [11] presented a method to generate graphs using score-based models, relaxing the entries
+of adjacency matrices to continuous values. LSGM would allow to model graph data more naturally
+using encoders and decoders tailored to graphs [43, 44, 45, 46].
+
+Since our model can be considered a VAE [14, 15] with score-based prior, it is related to approaches
+that improve VAE priors. For example, Normalizing flows and hierarchical distributions [23, 24, 47,
+48, 20, 21], as well as energy-based models [49, 50, 51, 52, 53] have been proposed as VAE priors.
+Furthermore, classifiers [54, 55, 56], adversarial methods [57], and other techniques [58, 59] have
+been used to define prior distributions implicitly. In two-stage training, a separate generative model
+is trained in latent space as a new prior after training the VAE itself [60, 61, 62, 63, 64, 10]. Our
+work also bears a resemblance to recent methods on improving the sampling quality in generative
+adversarial networks using gradient flows in the latent space [65, 66, 67, 68], with the main difference
+that these prior works use a discriminator to update the latent variables, whereas we train an SGM.
+
+Concurrent works: [10] proposed to learn a denoising diffusion model in the latent space of a VAE
+for symbolic music generation. This work does not introduce an end-to-end training framework of
+the combined VAE and denoising diffusion model and instead trains them in two separate stages. In
+contrast, concurrently with us [69] proposed an end-to-end training approach, and [70] combines
+contrastive learning with diffusion models in the latent space of VAEs for controllable generation.
+However, [10, 69, 70] consider the discretized diffusion objective [1], while we build on the continu-
+ous time framework. Also, these models are not equipped with the mixed score parameterization and
+variance reduction techniques, which we found crucial for the successful training of SGM priors.
+
+                6
+Additionally, [71, 4, 25] concurrently with us proposed likelihood-based training of SGMs in data
+space5. [4] developed a bound for the data likelihood in their Theorem 3 of their second version,
+using a denoising score matching objective, closely related to our cross entropy expression. However,
+our cross entropy expression is much simpler as we show how several terms can be marginalized
+out analytically for the diffusion SDEs employed by us (see our proof in App. A). The same
+marginalization can be applied to Theorem 3 in [4] when the drift coefficient takes a special affine
+form (i.e., f (z, t) = f (t)z). Moreover, [25] discusses the likelihood-based training of SGMs from
+a fundamental perspective and shows how several score matching objectives become a variational
+bound on the data likelihood. [71] introduced a notion of signal-to-noise ratio (SNR) that results in a
+noise-invariant parameterization of time that depends only on the initial and final noise. Interestingly,
+our importance sampling distribution in Sec. 3.4 has a similar noise-invariant parameterization of
+time via t = var-1((12)(02)1-), which also depends only on the initial and final diffusion process
+variances. We additionally show that this time parameterization results in the optimal minimum-
+variance objective, if the distribution of latent variables follows a standard Normal distribution.
+Finally, [72] proposed a modified time parameterization that allows modeling unbounded data scores.
+
+5 Experiments
+
+Here, we examine the efficacy of LSGM in learning generative models for images.
+
+Implementation details: We implement LSGM using the NVAE [20] architecture as VAE backbone
+and NCSN++ [2] as SGM backbone. NVAE has a hierarchical latent structure. The diffusion process
+input z0 is constructed by concatenating the latent variables from all groups in the channel dimension.
+For NVAEs with multiple spatial resolutions in latent groups, we only feed the smallest resolution
+groups to the SGM prior and assume that the remaining groups have a standard Normal distribution.
+
+Sampling: To generate samples from LSGM at test time, we use a black-box ODE solver [73] to
+sample from the prior. Prior samples are then passed to the decoder to generate samples in data space.
+
+Evaluation: We measure NELBO, an upper bound on negative log-likelihood (NLL), using Eq. 6.
+For estimating log p(z0), we rely on the probability flow ODE [2], which provides an unbiased but
+stochastic estimation of log p(z0). This stochasticity prevents us from performing an importance
+weighted estimation of NLL [74] (see App. F for details). For measuring sample quality, Fréchet
+inception distance (FID) [75] is evaluated with 50K samples. Implementation details in App. G.
+
+5.1 Main Results
+
+Unconditional color image generation: Here, we present our main results for unconditional image
+generation on CIFAR-10 [89] (Tab. 2) and CelebA-HQ-256 (5-bit quantized) [88] (Tab. 3). For
+CIFAR-10, we train 3 different models: LSGM (FID) and LSGM (balanced) both use the VPSDE
+with linear (t) and wun-weighting for the SGM prior in Eq. 9, while performing IS as derived in
+Sec. 3.4. They only differ in how the backbone VAE is trained. LSGM (NLL) is a model that is
+trained with our novel geometric VPSDE, using wll-weighting in the prior objective (further details
+in App. G). When set up for high image quality, LSGM achieves a new state-of-the-art FID of
+2.10. When tuned towards NLL, we achieve a NELBO of 2.87, which is significantly better than
+previous score-based models. Only autoregressive models, which come with very slow synthesis, and
+VDVAE [21] reach similar or higher likelihoods, but they usually have much poorer image quality.
+
+For CelebA-HQ-256, we observe that when LSGM is trained with different SDE types and weighting
+mechanisms, it often obtains similar NELBO potentially due to applying the SGM prior only to small
+latent variable groups and using Normal priors at the larger groups. With wre-weighting and linear
+VPSDE, LSGM obtains the state-of-the-art FID score of 7.22 on a par with the original SGM [2].
+
+For both datasets, we also report results for the VAE backbone used in our LSGM. Although this
+baseline achieves competitive NLL, its sample quality is behind our LSGM and the original SGM.
+
+Modeling binarized images: Next, we examine LSGM on dynamically binarized MNIST [93] and
+OMNIGLOT [74]. We apply LSGM to binary images using a decoder with pixel-wise independent
+Bernoulli distributions. For these datasets, we report both NELBO and NLL in nats in Tab. 4 and
+Tab. 5. On OMNIGLOT, LSGM achieves state-of-the-art likelihood of 87.79 nat, outperforming
+previous models including VAEs with autoregressive decoders, and even when comparing its NELBO
+
+    5We build on the V1 version of [4], which was substantially updated after the NeurIPS submission deadline.
+
+                                                           7
+Table 2: Generative performance on CIFAR-10.         Table 3: Generative results on CelebA-HQ-256.
+
+       Method                       NLL FID                     Method           NLL              FID
+
+       LSGM (FID)                   3.43 2.10        Ours       LSGM             0.70             7.22
+       LSGM (NLL)                   2.87 6.89        VAEs                                         30.87
+Ours   LSGM (balanced)              2.95 2.17        Score      VAE Backbone 0.70
+VAEs   VAE Backbone                                                                               29.76
+Score                                 2.96 43.18                NVAE [20]        0.70             20.38
+                                                                                                  24.79
+                                                                VAEBM [76]       -                15.80
+
+       VDVAE [21]                   2.87 -                      NCP-VAE [56] -                    7.23
+       NVAE [20]                    2.91 23.49
+       VAEBM [76]                                               DC-VAE [77]      -
+       NCP-VAE [56]                   - 12.19
+       BIVA [48]                      - 24.08                   SDE [2]          -
+       DC-VAE [77]                  3.08 -
+                                      - 17.90        Flows      GLOW [85]        1.03 68.93
+
+       NCSN [3]                       - 25.32        Aut. Reg. SPN [86]          0.61             -
+       Rec. Likelihood [40]         3.18 9.36
+       DSM-ALS [39]                 3.65 -                      Adv. LAE [87] - 19.21
+       DDPM [1]                     3.75 3.17
+       Improved DDPM [26]           2.94 11.47       GANs       VQ-GAN [64]      - 10.70
+       SDE (DDPM++) [2]             2.99 2.92
+       SDE (NCSN++) [2]                                         PGGAN [88]       -                8.03
+                                      - 2.20
+                                                            80                                12
+
+Flows  VFlow [19]                   2.98 -           NFE    60                                10
+       ANF [18]                     3.05 -                                                   FID40
+
+             DistAug aug [78]       2.53 42.90              20                                8
+             Sp. Transformers [79]  2.80 -
+Aut. Reg. -VAE [80]                 2.83 -                      10 5 10 4 10 3 10 2 10 1
+             PixelSNAIL [81]        2.85 -                        ODE Solver Error Tolerance
+             PixelCNN++ [82]        2.92 -
+                                                     Figure 4: FID and number of function evaluations
+GANs   AutoGAN [83]                 - 12.42          (NFEs) for different ODE solver error tolerances on
+                                                     CelebA-HQ-256. LSGM takes 4.15 sec. for sampling
+       StyleGAN2-ADA [84] - 2.92                     while the original SGM [2] takes 45 min. with PC and
+                                                     3.9 min. with ODE-based sampling.
+
+Table 4: Dyn. binarized OMNIGLOT results.            Table 5: Dynamically binarized MNIST results.
+
+       Method             NELBO NLL                             Method           NELBO NLL
+
+Ours   LSGM               87.79 87.79                Ours       LSGM             78.47 78.47
+VAEs                                                 VAEs
+       NVAE [20]          93.92     90.75                       NVAE [20]        79.56            78.01
+       BIVA [48]          93.54     91.34                       BIVA [48]        80.06            78.41
+       DVAE++ [51]                  92.38                       IAF-VAE [24]     80.80            79.10
+       Ladder VAE [90]      -       102.11                      DVAE++ [51]                       78.49
+                            -                                                      -
+
+       VLVAE [47]         -         89.83                       PixelVAE++ [91]     -             78.00
+                                    89.76                                                         78.45
+Aut. Reg. VampPrior [59]  -         88.29            Aut. Reg. VampPrior [59]       -             77.98
+
+       PixelVAE++ [91]    -                                     MAE [92]            -
+
+against importance weighted estimation of NLL for other methods. On MNIST, LSGM outperforms
+previous VAEs in NELBO, reaching a NELBO 1.09 nat lower than the state-of-the-art NVAE.
+
+Qualitative results: We visualize qualitative results for all datasets in Fig. 5. On the complex
+multimodal CIFAR-10 dataset, LSGM generates sharp and high-quality images. On CelebA-HQ-256,
+LSGM generates diverse samples from different ethnicity and age groups with varying head poses and
+facial expressions. On MNIST and OMNIGLOT, the generated characters are sharp and high-contrast.
+
+Sampling time: We compare LSGM against the original SGM [2] trained on the CelebA-HQ-256
+dataset in terms of sampling time and number of function evaluations (NFEs) of the ODE solver. Song
+et al. [2] propose two main sampling techniques including predictor-corrector (PC) and probability
+flow ODE. PC sampling involves 4000 NFEs and takes 44.6 min. on a Titan V for a batch of 16
+images. It yields 7.23 FID score (see Tab. 3). ODE-based sampling from SGM takes 3.91 min. with
+335 NFEs, but it obtains a poor FID score of 128.13 with 10-5 as ODE solver error tolerance6.
+
+In a stark contrast, ODE-based sampling from our LSGM takes 0.07 min. with average of 23 NFEs,
+yielding 7.22 FID score. LSGM is 637× and 56× faster than original SGM's [2] PC and ODE
+
+    6We use the VESDE checkpoint at https://github.com/yang-song/score_sde_pytorch. Song et
+al. [2] report that ODE-based sampling yields worse FID scores for their models (see D.4 in [2]). The problem is
+more severe for VESDEs. Unfortunately, at submission time only a VESDE model was released.
+
+                                                  8
+                                                                          (c) OMNIGLOT
+
+(a) CIFAR-10                            (b) CelebA-HQ-256                 (d) MNIST
+
+Figure 5: Generated samples for different datasets. For binary datasets, we visualize the decoder mean. LSGM
+successfully generates sharp, high-quality, and diverse samples (additional samples in appendix).
+
+Table 6: Ablations on SDEs, objectives, weighting mechanisms, and variance reduction. Details in App. G.
+
+ SGM-obj.-weighting          wll                 wun                      wre
+t-sampling (SGM-obj.)  U [0, 1] rll(t)
+                                        U[0, 1]       run(t)     U[0, 1]       rre(t)
+  t-sampling (q-obj.)   rew. rew.
+                                        rew. rll(t) rew. rll(t)  rew. rll(t) rew. rll(t)
+
+Geom.-        FID      10.18 n/a NaN NaN n/a n/a 22.21 NaN 7.29 7.18
+
+VPSDE NELBO 2.96 n/a NaN NaN n/a n/a 3.04 NaN 2.99 2.99
+
+VPSDE     FID          6.15 8.00 NaN NaN 5.39 5.39 NaN 4.99 15.12 6.19
+        NELBO          2.97 2.97 NaN NaN 2.98 2.98 NaN 2.99 3.03 2.99
+
+sampling, respectively. In Fig. 4, we visualize FID scores and NFEs for different ODE solver error
+tolerances. Our LSGM achieves low FID scores for relatively large error tolerances.
+
+We identify three main reasons for this significantly faster sampling from LSGM: (i) The SGM prior
+in our LSGM models latent variables with 32×32 spatial dim., whereas the original SGM [2] directly
+models 256×256 images. The larger spatial dimensions require a deeper network to achieve a large
+receptive field. (ii) Inspecting the SGM prior in our model suggests that the score function is heavily
+dominated by the linear term at the end of training, as the mixing coefficients  are all < 0.02. This
+makes our SGM prior smooth and numerically faster to solve. (iii) Since SGM is formed in the latent
+space in our model, errors from solving the ODE can be corrected to some degree using the VAE
+decoder, while in the original SGM [2] errors directly translate to artifacts in pixel space.
+
+5.2 Ablation Studies
+
+SDEs, objective weighting mechanisms and variance reduction. In Tab. 6, we analyze the differ-
+ent weighting mechanisms and variance reduction techniques and compare the geometric VPSDE
+with the regular VPSDE with linear (t) [1, 2]. In the table, SGM-obj.-weighting denotes the weight-
+ing mechanism used when training the SGM prior (via Eq. 9). t-sampling (SGM-obj.) indicates the
+sampling approach for t, where rll(t), run(t) and rre(t) denote the IS distributions for the weighted
+(likelihood), the unweighted, and the reweighted objective, respectively. For training the VAE encoder
+q(z0|x) (last term in Eq. 8), we either sample a separate batch t with importance sampling following
+rll(t) (only necessary when the SGM prior is not trained with wll itself), or we reweight the samples
+drawn for training the prior according to the likelihood objective (denoted by rew.). n/a indicates
+fields that do not apply: The geometric VPSDE has optimal variance for the weighted (likelihood)
+objective already with uniform sampling; there is no additional IS distribution. Also, we did not
+derive IS distributions for the geometric VPSDE for wun. NaN indicates experiments that failed due
+to training instabilities. Previous work [20, 21] have reported instability in training large VAEs. We
+find that our method inherits similar instabilities from VAEs; however, importance sampling often
+stabilizes training our LSGM. As expected, we obtain the best NELBOs (red) when training with
+the weighted, maximum likelihood objective (wll). Importantly, our new geometric VPSDE achieves
+the best NELBO. Furthermore, the best FIDs (blue) are obtained either by unweighted (wun) or
+reweighted (wre) SGM prior training, with only slightly worse NELBOs. These experiments were run
+on the CIFAR10 dataset, using a smaller model than for our main results above (details in App. G).
+
+                                        9
+End-to-end training. We proposed to train LSGM end-to-end, in contrast to [10]. Using a similar
+setup as above we compare end-to-end training of LSGM during the second stage with freezing the
+VAE encoder and decoder and only training the SGM prior in latent space during the second stage.
+When training the model end-to-end, we achieve an FID of 5.19 and NELBO of 2.98; when freezing
+the VAE networks during the second stage, we only get an FID of 9.00 and NELBO of 3.03. These
+results clearly motivate our end-to-end training strategy.
+
+Mixing Normal and neural score functions. We generally found training LSGM without our
+proposed "mixed score" formulation (Sec. 3.2) to be unstable during end-to-end training, highlighting
+its importance. To quantify the contribution of the mixed score parametrization for a stable model,
+we train a small LSGM with only one latent variable group. In this case, without the mixed score,
+we reached an FID of 34.71 and NELBO of 3.39; with it, we got an FID of 7.60 and NELBO of
+3.29. Without the inductive bias provided by the mixed score, learning that the marginal distribution
+is close to a Normal one for large t purely from samples can be very hard in the high-dimensional
+latent space, where our diffusion is run. Furthermore, due to our importance sampling schemes, we
+tend to oversample small, rather than large t. However, synthesizing high-quality images requires an
+accurate score function estimate for all t. On the other hand, the log-likelihood of samples is highly
+sensitive to local image statistics and primarily determined at small t. It is plausible that we are still
+able to learn a reasonable estimate of the score function for these small t even without the mixed
+score formulation. That may explain why log-likelihood suffers much less than sample quality, as
+estimated by FID, when we remove the mixed score parameterization.
+
+Additional experiments and model samples are presented in App. H.
+
+6 Conclusions
+
+We proposed the Latent Score-based Generative Model, a novel framework for end-to-end training of
+score-based generative models in the latent space of a variational autoencoder. Moving from data
+to latent space allows us to form more expressive generative models, model non-continuous data,
+and reduce sampling time using smoother SGMs. To enable training latent SGMs, we made three
+core contributions: (i) we derived a simple expression for the cross entropy term in the variational
+objective, (ii) we parameterized the SGM prior by mixing Normal and neural score functions, and
+(iii) we proposed several techniques for variance reduction in the estimation of the training objective.
+Experimental results show that latent SGMs outperform recent pixel-space SGMs in terms of both
+data likelihood and sample quality, and they can also be applied to binary datasets. In large image
+generation, LSGM generates data several orders of magnitude faster than recent SGMs. Nevertheless,
+LSGM's synthesis speed does not yet permit sampling at interactive rates, and our implementation of
+LSGM is currently limited to image generation. Therefore, future work includes further accelerating
+sampling, applying LSGMs to other data types, and designing efficient networks for LSGMs.
+
+7 Broader Impact
+
+Generating high-quality samples while fully covering the data distribution has been a long-standing
+challenge in generative learning. A solution to this problem will likely help reduce biases in generative
+models and lead to improving overall representation of minorities in the data distribution. SGMs
+are perhaps one of the first deep models that excel at both sample quality and distribution coverage.
+However, the high computational cost of sampling limits their widespread use. Our proposed LSGM
+reduces the sampling complexity of SGMs by a large margin and improves their expressivity further.
+Thus, in the long term, it can enable the usage of SGMs in practical applications.
+
+Here, LSGM is examined on the image generation task which has potential benefits and risks
+discussed in [94, 95]. However, LSGM can be considered a generic framework that extends SGMs to
+non-continuous data types. In principle LSGM could be used to model, for example, language [96,
+97], music [98, 10], or molecules [99, 100]. Furthermore, like other deep generative models, it
+can potentially be used also for non-generative tasks such as semi-supervised and representation
+learning [101, 102, 103]. This makes the long-term social impacts of LSGM dependent on the
+downstream applications.
+
+Funding Statement
+
+All authors were funded by NVIDIA through full-time employment.
+
+                                                          10
+References
+
+   [1] Jonathan Ho, Ajay Jain, and Pieter Abbeel. Denoising Diffusion Probabilistic Models. arXiv:2006.11239,
+        2020.
+
+   [2] Yang Song, Jascha Sohl-Dickstein, Diederik P Kingma, Abhishek Kumar, Stefano Ermon, and Ben Poole.
+        Score-based generative modeling through stochastic differential equations. In International Conference
+        on Learning Representations, 2021.
+
+   [3] Yang Song and Stefano Ermon. Generative Modeling by Estimating Gradients of the Data Distribution.
+        In Advances in Neural Information Processing Systems 32, 2019.
+
+   [4] Yang Song, Conor Durkan, Iain Murray, and Stefano Ermon. Maximum likelihood training of score-based
+        diffusion models. arXiv e-prints, 2021.
+
+   [5] Jiaming Song, Chenlin Meng, and Stefano Ermon. Denoising diffusion implicit models. In International
+        Conference on Learning Representations, 2021.
+
+   [6] Prafulla Dhariwal and Alex Nichol. Diffusion models beat gans on image synthesis. arXiv preprint
+        arXiv:2105.05233, 2021.
+
+   [7] Nanxin Chen, Yu Zhang, Heiga Zen, Ron J. Weiss, Mohammad Norouzi, and William Chan. WaveGrad:
+        Estimating Gradients for Waveform Generation. arXiv:2009.00713, 2020.
+
+   [8] Zhifeng Kong, Wei Ping, Jiaji Huang, Kexin Zhao, and Bryan Catanzaro. DiffWave: A Versatile Diffusion
+        Model for Audio Synthesis. arXiv:2009.09761, 2020.
+
+   [9] Myeonghun Jeong, Hyeongju Kim, Sung Jun Cheon, Byoung Jin Choi, and Nam Soo Kim. Diff-tts: A
+        denoising diffusion model for text-to-speech. arXiv:2104.01409, 2021.
+
+ [10] Gautam Mittal, Jesse Engel, Curtis Hawthorne, and Ian Simon. Symbolic music generation with diffusion
+        models. arXiv preprint arXiv:2103.16091, 2021.
+
+ [11] Chenhao Niu, Yang Song, Jiaming Song, Shengjia Zhao, Aditya Grover, and Stefano Ermon. Permutation
+        invariant graph generation via score-based generative modeling. In The 23rd International Conference on
+        Artificial Intelligence and Statistics, AISTATS 2020, 26-28 August 2020, Online [Palermo, Sicily, Italy],
+        2020.
+
+ [12] Ruojin Cai, Guandao Yang, Hadar Averbuch-Elor, Zekun Hao, Serge J. Belongie, Noah Snavely, and
+        Bharath Hariharan. Learning gradient fields for shape generation. In Computer Vision - ECCV 2020 -
+        16th European Conference, Glasgow, UK, August 23-28, 2020, Proceedings, Part III, volume 12348 of
+        Lecture Notes in Computer Science, pages 364­381. Springer, 2020.
+
+ [13] Shitong Luo and Wei Hu. Diffusion probabilistic models for 3d point cloud generation. arXiv:2103.01458,
+        2021.
+
+ [14] Diederik P Kingma and Max Welling. Auto-encoding variational bayes. In The International Conference
+        on Learning Representations (ICLR), 2014.
+
+ [15] Danilo Jimenez Rezende, Shakir Mohamed, and Daan Wierstra. Stochastic backpropagation and approx-
+        imate inference in deep generative models. In International Conference on Machine Learning, pages
+        1278­1286, 2014.
+
+ [16] Emilien Dupont, Arnaud Doucet, and Yee Whye Teh. Augmented neural ODEs. In Advances in Neural
+        Information Processing Systems, pages 3140­3150, 2019.
+
+ [17] Zhifeng Kong and Kamalika Chaudhuri. The expressive power of a class of normalizing flow models.
+        arXiv preprint arXiv:2006.00392, 2020.
+
+ [18] Chin-Wei Huang, Laurent Dinh, and Aaron Courville. Augmented normalizing flows: Bridging the gap
+        between generative flows and latent variable models. arXiv preprint arXiv:2002.07101, 2020.
+
+ [19] Jianfei Chen, Cheng Lu, Biqi Chenli, Jun Zhu, and Tian Tian. Vflow: More expressive generative flows
+        with variational data augmentation. arXiv preprint arXiv:2002.09741, 2020.
+
+ [20] Arash Vahdat and Jan Kautz. NVAE: A Deep Hierarchical Variational Autoencoder. arXiv:2007.03898,
+        2020.
+
+ [21] Rewon Child. Very deep VAEs generalize autoregressive models and can outperform them on images. In
+        International Conference on Learning Representations, 2021.
+
+ [22] Pascal Vincent. A Connection between Score Matching and Denoising Autoencoders. Neural Computa-
+        tion, 23(7):1661­1674, 2011.
+
+ [23] Danilo Jimenez Rezende and Shakir Mohamed. Variational inference with normalizing flows. arXiv
+        preprint arXiv:1505.05770, 2015.
+
+ [24] Diederik P Kingma, Tim Salimans, Rafal Jozefowicz, Xi Chen, Ilya Sutskever, and Max Welling.
+        Improved variational inference with inverse autoregressive flow. In Advances in Neural Information
+        Processing Systems, pages 4743­4751, 2016.
+
+                                                          11
+[25] Chin-Wei Huang, Jae Hyun Lim, and Aaron Courville. A variational perspective on diffusion-based
+      generative models and score matching. arXiv preprint arXiv:2106.02808, 2021.
+
+[26] Alex Nichol and Prafulla Dhariwal. Improved denoising diffusion probabilistic models. arXiv preprint
+      arXiv:2102.09672, 2021.
+
+[27] Jascha Sohl-Dickstein, Eric A. Weiss, Niru Maheswaranathan, and Surya Ganguli. Deep Unsupervised
+      Learning Using Nonequilibrium Thermodynamics. In Proceedings of the 32nd International Conference
+      on International Conference on Machine Learning - Volume 37, ICML'15, page 2256­2265. JMLR.org,
+      2015.
+
+[28] c. Monte Carlo theory, methods and examples. 2013.
+
+[29] Aapo Hyvärinen. Estimation of Non-Normalized Statistical Models by Score Matching. J. Mach. Learn.
+      Res., 6:695­709, December 2005.
+
+[30] Siwei Lyu. Interpretation and Generalization of Score Matching. In Proceedings of the Twenty-Fifth
+      Conference on Uncertainty in Artificial Intelligence, UAI '09, page 359­366, Arlington, Virginia, USA,
+      2009. AUAI Press.
+
+[31] Durk P Kingma and Yann L. Cun. Regularized estimation of image statistics by Score Matching. In
+      Advances in Neural Information Processing Systems 23, 2010.
+
+[32] Yoshua Bengio, Li Yao, Guillaume Alain, and Pascal Vincent. Generalized Denoising Auto-Encoders
+      as Generative Models. In Proceedings of the 26th International Conference on Neural Information
+      Processing Systems, 2013.
+
+[33] Krzysztof J. Geras and Charles A. Sutton. Scheduled denoising autoencoders. In 3rd International
+      Conference on Learning Representations, ICLR, 2015.
+
+[34] Saeed Saremi, Arash Mehrjou, Bernhard Schölkopf, and Aapo Hyvärinen. Deep Energy Estimator
+      Networks. arXiv:1805.08306, 2018.
+
+[35] Yang Song, Sahaj Garg, Jiaxin Shi, and Stefano Ermon. Sliced Score Matching: A Scalable Approach to
+      Density and Score Estimation. In Proceedings of the Thirty-Fifth Conference on Uncertainty in Artificial
+      Intelligence, UAI 2019, Tel Aviv, Israel, July 22-25, 2019, 2019.
+
+[36] Zengyi Li, Yubei Chen, and Friedrich T. Sommer. Learning Energy-Based Models in High-Dimensional
+      Spaces with Multi-scale Denoising Score Matching. arXiv:1910.07762, 2019.
+
+[37] Tianyu Pang, Kun Xu, Chongxuan Li, Yang Song, Stefano Ermon, and Jun Zhu. Efficient Learning of
+      Generative Models via Finite-Difference Score Matching. arXiv:2007.03317, 2020.
+
+[38] Yang Song and Stefano Ermon. Improved Techniques for Training Score-Based Generative Models.
+      arXiv:2006.09011, 2020.
+
+[39] Alexia Jolicoeur-Martineau, Rémi Piché-Taillefer, Ioannis Mitliagkas, and Remi Tachet des Combes.
+      Adversarial score matching and improved sampling for image generation. In International Conference on
+      Learning Representations, 2021.
+
+[40] Ruiqi Gao, Yang Song, Ben Poole, Ying Nian Wu, and Diederik P Kingma. Learning energy-based
+      models by diffusion recovery likelihood. In International Conference on Learning Representations, 2021.
+
+[41] Eric Luhman and Troy Luhman. Knowledge distillation in iterative generative models for improved
+      sampling speed. arXiv preprint arXiv:2101.02388, 2021.
+
+[42] Robin San-Roman, Eliya Nachmani, and Lior Wolf. Noise estimation for generative diffusion models.
+      arXiv preprint arXiv:2104.02600, 2021.
+
+[43] Martin Simonovsky and Nikos Komodakis. Graphvae: Towards generation of small graphs using
+      variational autoencoders. arXiv:1802.03480, 2018.
+
+[44] Wengong Jin, Regina Barzilay, and Tommi Jaakkola. Junction tree variational autoencoder for molecular
+      graph generation. In Proceedings of the 35th International Conference on Machine Learning, 2018.
+
+[45] Aditya Grover, Aaron Zweig, and Stefano Ermon. Graphite: Iterative generative modeling of graphs. In
+      Proceedings of the 36th International Conference on Machine Learning, 2019.
+
+[46] Renjie Liao, Yujia Li, Yang Song, Shenlong Wang, Will Hamilton, David K Duvenaud, Raquel Urtasun,
+      and Richard Zemel. Efficient graph generation with graph recurrent attention networks. In Advances in
+      Neural Information Processing Systems, 2019.
+
+[47] Xi Chen, Diederik P Kingma, Tim Salimans, Yan Duan, Prafulla Dhariwal, John Schulman, Ilya Sutskever,
+      and Pieter Abbeel. Variational lossy autoencoder. arXiv preprint arXiv:1611.02731, 2016.
+
+[48] Lars Maaløe, Marco Fraccaro, Valentin Liévin, and Ole Winther. BIVA: A very deep hierarchy of
+      latent variables for generative modeling. In Advances in neural information processing systems, pages
+      6548­6558, 2019.
+
+[49] Jason Tyler Rolfe. Discrete variational autoencoders. arXiv preprint arXiv:1609.02200, 2016.
+
+                                                         12
+[50] Arash Vahdat, Evgeny Andriyash, and William G Macready. DVAE#: Discrete variational autoencoders
+      with relaxed Boltzmann priors. In Neural Information Processing Systems, 2018.
+
+[51] Arash Vahdat, William G. Macready, Zhengbing Bian, Amir Khoshaman, and Evgeny Andriyash.
+      DVAE++: Discrete variational autoencoders with overlapping transformations. In International Confer-
+      ence on Machine Learning (ICML), 2018.
+
+[52] Arash Vahdat, Evgeny Andriyash, and William G Macready. Undirected graphical models as approximate
+      posteriors. In International Conference on Machine Learning (ICML), 2020.
+
+[53] Bo Pang, Tian Han, Erik Nijkamp, Song-Chun Zhu, and Ying Nian Wu. Learning latent space energy-
+      based prior model. In H. Larochelle, M. Ranzato, R. Hadsell, M. F. Balcan, and H. Lin, editors, Advances
+      in Neural Information Processing Systems, volume 33, pages 21994­22008. Curran Associates, Inc.,
+      2020.
+
+[54] Jesse Engel, Matthew Hoffman, and Adam Roberts. Latent constraints: Learning to generate conditionally
+      from unconditional generative models. In International Conference on Learning Representations, 2018.
+
+[55] Matthias Bauer and Andriy Mnih. Resampled priors for variational autoencoders. In Kamalika Chaudhuri
+      and Masashi Sugiyama, editors, Proceedings of the Twenty-Second International Conference on Artificial
+      Intelligence and Statistics, volume 89 of Proceedings of Machine Learning Research, pages 66­75.
+      PMLR, 16­18 Apr 2019.
+
+[56] Jyoti Aneja, Alexander Schwing, Jan Kautz, and Arash Vahdat. NCP-VAE: Variational autoencoders with
+      noise contrastive priors. arXiv preprint arXiv:2010.02917, 2020.
+
+[57] Alireza Makhzani, Jonathon Shlens, Navdeep Jaitly, Ian Goodfellow, and Brendan Frey. Adversarial
+      autoencoders, 2016.
+
+[58] Hiroshi Takahashi, Tomoharu Iwata, Yuki Yamanaka, Masanori Yamada, and Satoshi Yagi. Variational
+      autoencoder with implicit optimal priors. Proceedings of the AAAI Conference on Artificial Intelligence,
+      33(01):5066­5073, Jul. 2019.
+
+[59] Jakub Tomczak and Max Welling. Vae with a vampprior. In International Conference on Artificial
+      Intelligence and Statistics, pages 1214­1223, 2018.
+
+[60] Bin Dai and David Wipf. Diagnosing and enhancing VAE models. In International Conference on
+      Learning Representations, 2019.
+
+[61] Aaron van den Oord, Oriol Vinyals, and Koray Kavukcuoglu. Neural discrete representation learning.
+      arXiv preprint arXiv:1711.00937, 2018.
+
+[62] Ali Razavi, Aaron van den Oord, and Oriol Vinyals. Generating diverse high-fidelity images with vq-vae-2.
+      In Advances in Neural Information Processing Systems, pages 14837­14847, 2019.
+
+[63] Partha Ghosh, Mehdi S. M. Sajjadi, Antonio Vergari, Michael Black, and Bernhard Scholkopf. From
+      variational to deterministic autoencoders. In International Conference on Learning Representations,
+      2020.
+
+[64] Patrick Esser, Robin Rombach, and Björn Ommer. Taming transformers for high-resolution image
+      synthesis. arXiv preprint arXiv:2012.09841, 2020.
+
+[65] Abdul Fatir Ansari, Ming Liang Ang, and Harold Soh. Refining deep generative models via discriminator
+      gradient flow. In International Conference on Learning Representations, 2021.
+
+[66] Tong Che, Ruixiang ZHANG, Jascha Sohl-Dickstein, Hugo Larochelle, Liam Paull, Yuan Cao, and
+      Yoshua Bengio. Your gan is secretly an energy-based model and you should use discriminator driven
+      latent sampling. In Advances in Neural Information Processing Systems, 2020.
+
+[67] Akinori Tanaka. Discriminator optimal transport. In Advances in Neural Information Processing Systems,
+      2019.
+
+[68] Weili Nie, Arash Vahdat, and Anima Anandkumar. Controllable and compositional generation with
+      latent-space energy-based models. In Neural Information Processing Systems (NeurIPS), 2021.
+
+[69] Antoine Wehenkel and Gilles Louppe. Diffusion priors in variational autoencoders. In ICML Workshop
+      on Invertible Neural Networks, Normalizing Flows, and Explicit Likelihood Models, 2021.
+
+[70] Abhishek Sinha, Jiaming Song, Chenlin Meng, and Stefano Ermon. D2c: Diffusion-denoising models for
+      few-shot conditional generation. arXiv preprint arXiv:2106.06819, 2021.
+
+[71] Diederik P Kingma, Tim Salimans, Ben Poole, and Jonathan Ho. Variational diffusion models. arXiv
+      preprint arXiv:2107.00630, 2021.
+
+[72] Dongjun Kim, Seungjae Shin, Kyungwoo Song, Wanmo Kang, and Il-Chul Moon. Score matching model
+      for unbounded data score. arXiv preprint arXiv:2106.05527, 2021.
+
+[73] Ricky T. Q. Chen, Yulia Rubanova, Jesse Bettencourt, and David Duvenaud. Neural ordinary differential
+      equations. Advances in Neural Information Processing Systems, 2018.
+
+                                                         13
+[74] Yuri Burda, Roger Grosse, and Ruslan Salakhutdinov. Importance weighted autoencoders. arXiv preprint
+      arXiv:1509.00519, 2015.
+
+[75] Martin Heusel, Hubert Ramsauer, Thomas Unterthiner, Bernhard Nessler, and Sepp Hochreiter. Gans
+      trained by a two time-scale update rule converge to a local nash equilibrium. In Advances in neural
+      information processing systems, pages 6626­6637, 2017.
+
+[76] Zhisheng Xiao, Karsten Kreis, Jan Kautz, and Arash Vahdat. VAEBM: A symbiosis between variational
+      autoencoders and energy-based models. In International Conference on Learning Representations, 2021.
+
+[77] Gaurav Parmar, Dacheng Li, Kwonjoon Lee, and Zhuowen Tu. Dual contradistinctive generative
+      autoencoder. arXiv preprint arXiv:2011.10063, 2020.
+
+[78] Heewoo Jun, Rewon Child, Mark Chen, John Schulman, Aditya Ramesh, Alec Radford, and Ilya Sutskever.
+      Distribution augmentation for generative modeling. In International Conference on Machine Learning,
+      pages 5006­5019. PMLR, 2020.
+
+[79] Rewon Child, Scott Gray, Alec Radford, and Ilya Sutskever. Generating long sequences with sparse
+      transformers. arXiv preprint arXiv:1904.10509, 2019.
+
+[80] Ali Razavi, Aäron van den Oord, Ben Poole, and Oriol Vinyals. Preventing posterior collapse with
+      delta-vaes. In The International Conference on Learning Representations (ICLR), 2019.
+
+[81] XI Chen, Nikhil Mishra, Mostafa Rohaninejad, and Pieter Abbeel. PixelSNAIL: An improved autoregres-
+      sive generative model. In International Conference on Machine Learning, 2018.
+
+[82] Tim Salimans, Andrej Karpathy, Xi Chen, and Diederik P Kingma. PixelCNN++: Improving
+      the pixelCNN with discretized logistic mixture likelihood and other modifications. arXiv preprint
+      arXiv:1701.05517, 2017.
+
+[83] Xinyu Gong, Shiyu Chang, Yifan Jiang, and Zhangyang Wang. Autogan: Neural architecture search for
+      generative adversarial networks. In The IEEE International Conference on Computer Vision (ICCV), Oct
+      2019.
+
+[84] Tero Karras, Miika Aittala, Janne Hellsten, Samuli Laine, Jaakko Lehtinen, and Timo Aila. Training
+      generative adversarial networks with limited data. In NeurIPS, 2020.
+
+[85] Durk P Kingma and Prafulla Dhariwal. Glow: Generative flow with invertible 1x1 convolutions. In
+      S. Bengio, H. Wallach, H. Larochelle, K. Grauman, N. Cesa-Bianchi, and R. Garnett, editors, Advances
+      in Neural Information Processing Systems 31, pages 10236­10245, 2018.
+
+[86] Jacob Menick and Nal Kalchbrenner. Generating high fidelity images with subscale pixel networks and
+      multidimensional upscaling. In International Conference on Learning Representations, 2019.
+
+[87] Stanislav Pidhorskyi, Donald A Adjeroh, and Gianfranco Doretto. Adversarial latent autoencoders. In
+      Proceedings of the IEEE Computer Society Conference on Computer Vision and Pattern Recognition
+      (CVPR), 2020.
+
+[88] Tero Karras, Timo Aila, Samuli Laine, and Jaakko Lehtinen. Progressive growing of GANs for improved
+      quality, stability, and variation. In International Conference on Learning Representations, 2018.
+
+[89] Alex Krizhevsky et al. Learning multiple layers of features from tiny images, 2009.
+
+[90] Casper Kaae Sønderby, Tapani Raiko, Lars Maaløe, Søren Kaae Sønderby, and Ole Winther. Ladder
+      variational autoencoders. In Advances in neural information processing systems, pages 3738­3746, 2016.
+
+[91] Hossein Sadeghi, Evgeny Andriyash, Walter Vinci, Lorenzo Buffoni, and Mohammad H Amin. Pixel-
+      vae++: Improved pixelvae with discrete prior. arXiv preprint arXiv:1908.09948, 2019.
+
+[92] Xuezhe Ma, Chunting Zhou, and Eduard Hovy. MAE: Mutual posterior-divergence regularization for
+      variational autoencoders. In The International Conference on Learning Representations (ICLR), 2019.
+
+[93] Yann LeCun. The mnist database of handwritten digits. http://yann. lecun. com/exdb/mnist/, 1998.
+
+[94] J. Bailey. The tools of generative art, from flash to neural networks. Art in America, 2020.
+
+[95] Cristian Vaccari and Andrew Chadwick. Deepfakes and disinformation: Exploring the impact
+      of synthetic political video on deception, uncertainty, and trust in news. Social Media+ Society,
+      6(1):2056305120903408, 2020.
+
+[96] Samuel R Bowman, Luke Vilnis, Oriol Vinyals, Andrew Dai, Rafal Jozefowicz, and Samy Bengio.
+      Generating sentences from a continuous space. In Proceedings of The 20th SIGNLL Conference on
+      Computational Natural Language Learning, pages 10­21, 2016.
+
+[97] Chunyuan Li, Xiang Gao, Yuan Li, Xiujun Li, Baolin Peng, Yizhe Zhang, and Jianfeng Gao. Optimus:
+      Organizing sentences via pre-trained modeling of a latent space. In EMNLP, 2020.
+
+[98] Prafulla Dhariwal, Heewoo Jun, Christine Payne, Jong Wook Kim, Alec Radford, and Ilya Sutskever.
+      Jukebox: A generative model for music. arXiv preprint arXiv:2005.00341, 2020.
+
+                                                         14
+ [99] Benjamin Sanchez-Lengeling and Alán Aspuru-Guzik. Inverse molecular design using machine learning:
+        Generative models for matter engineering. Science, 361(6400):360­365, 2018.
+
+[100] Zaccary Alperstein, Artem Cherkasov, and Jason Tyler Rolfe. All smiles variational autoencoder. arXiv
+        preprint arXiv:1905.13343, 2019.
+
+[101] Diederik P Kingma, Shakir Mohamed, Danilo Jimenez Rezende, and Max Welling. Semi-supervised
+        learning with deep generative models. In Advances in Neural Information Processing Systems, pages
+        3581­3589, 2014.
+
+[102] Augustus Odena. Semi-supervised learning with generative adversarial networks. arXiv preprint
+        arXiv:1606.01583, 2016.
+
+[103] Daiqing Li, Junlin Yang, Karsten Kreis, Antonio Torralba, and Sanja Fidler. Semantic segmentation with
+        generative models: Semi-supervised learning and strong out-of-domain generalization. In Conference on
+        Computer Vision and Pattern Recognition (CVPR), 2021.
+
+[104] Simo Särkkä and Arno Solin. Applied Stochastic Differential Equations. Institute of Mathematical
+        Statistics Textbooks. Cambridge University Press, United Kingdom, 2019.
+
+[105] Brian D.O. Anderson. Reverse-time diffusion equation models. Stochastic Process. Appl., 12(3):313­326,
+        1982.
+
+[106] Will Grathwohl, Ricky T. Q. Chen, Jesse Bettencourt, Ilya Sutskever, and David Duvenaud. Ffjord:
+        Free-form continuous dynamics for scalable reversible generative models. International Conference on
+        Learning Representations, 2019.
+
+[107] Richard Zhang. Making convolutional networks shift-invariant again. In ICML, 2019.
+[108] Diederik Kingma and Jimmy Ba. Adam: A method for stochastic optimization. arXiv preprint
+
+        arXiv:1412.6980, 2014.
+[109] J. R. Dormand and P. J. Prince. A family of embedded Runge­Kutta formulae. Journal of Computational
+
+        and Applied Mathematics, 6(1):19­26, 1980.
+
+                                                          15
+Appendix
+
+1 Introduction                                                            1
+
+2 Background                                                              2
+
+3 Score-based Generative Modeling in Latent Space                         3
+
+3.1 The Cross Entropy Term . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 3
+
+3.2 Mixing Normal and Neural Score Functions . . . . . . . . . . . . . . . . . . . . . 4
+
+3.3 Training with Different Weighting Mechanisms . . . . . . . . . . . . . . . . . . . 5
+
+3.4 Variance Reduction . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 5
+
+4 Related Work                                                            6
+
+5 Experiments                                                             7
+
+5.1 Main Results . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 7
+
+5.2 Ablation Studies . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 9
+
+6 Conclusions                                                             10
+
+7 Broader Impact                                                          10
+
+A Proof for Theorem 1                                                     18
+
+B Variance Reduction                                                      21
+
+B.1 Generic Mixed Score Parameterization for Non-Variance Preserving SDEs . . . . . 22
+
+B.2 Variance Reduction of Cross Entropy with Importance Sampling for Generic SDEs 22
+
+B.3 VPSDE . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 24
+
+B.3.1 Variance Reduction for Likelihood Weighting (Geometric VPSDE) . . . . 24
+
+B.3.2 Variance Reduction for Likelihood Weighting (Importance Sampling) . . . 25
+
+B.3.3 Variance Reduction for Unweighted Objective . . . . . . . . . . . . . . . 25
+
+B.3.4 Variance Reduction for Reweighted Objective . . . . . . . . . . . . . . . . 26
+
+B.4 VESDE . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 27
+
+B.4.1 Variance Reduction for Likelihood Weighting . . . . . . . . . . . . . . . . 27
+
+B.4.2 Variance Reduction for Unweighted Objective . . . . . . . . . . . . . . . 28
+
+B.4.3 Variance Reduction for Reweighted Objective . . . . . . . . . . . . . . . . 28
+
+B.5 Sub-VPSDE . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 29
+
+C Expressions for the Normal Transition Kernel                            29
+
+D Probability Flow ODE                                                    30
+
+E Converting VAE with Hierarchical Normal Prior to Standard Normal Prior  30
+
+E.1 Converting NVAE Prior to Standard Normal Prior . . . . . . . . . . . . . . . . . . 31
+
+                        16
+F Bias in Importance Weighted Estimation of Log-Likelihood  31
+
+G Additional Implementation Details                         32
+
+G.1 VAE Backbone . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 32
+
+G.2 Latent SGM Prior . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 32
+
+G.3 Training Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 33
+
+G.4 Evaluation Details . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 33
+
+G.5 Ablation Experiments . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 33
+
+G.5.1 Ablation: SDEs, Objective Weighting Mechanisms and Variance Reduction 33
+
+G.5.2 Ablation: End-to-End Training . . . . . . . . . . . . . . . . . . . . . . . . 34
+
+G.5.3 Ablation: Mixing Normal and Neural Score Functions . . . . . . . . . . . 35
+
+G.6 Training Algorithms . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 35
+
+G.7 Computational Resources . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 36
+
+H Additional Experiments                                    36
+
+H.1 Additional Samples . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 36
+
+H.2 MNIST: Small VAE Experiment . . . . . . . . . . . . . . . . . . . . . . . . . . . 37
+
+H.3 CIFAR-10: Neural Network Evaluations during Sampling . . . . . . . . . . . . . . 37
+
+H.4 CIFAR-10: Sub-VPSDE vs. VPSDE . . . . . . . . . . . . . . . . . . . . . . . . . 37
+
+H.5 CelebA-HQ-256: Different ODE Solver Error Tolerances . . . . . . . . . . . . . . 37
+
+H.6 CelebA-HQ-256: Ancestral Sampling . . . . . . . . . . . . . . . . . . . . . . . . 40
+
+H.7 CelebA-HQ-256: Sampling from VAE Backbone vs. LSGM . . . . . . . . . . . . 40
+
+H.8 Evolution Samples on the ODE and SDE Reverse Generative Process . . . . . . . 40
+
+                                     17
+A Proof for Theorem 1
+
+Without loss of generality, we state the theorem in general form without conditioning on x.
+Theorem 1. Given two distributions q(z0) and p(z0) defined in the continuous space RD, denote the
+marginal distributions of diffused samples under the SDE dz = f (t)z dt + g(t) dw at time t  [0, 1]
+with q(zt) and p(zt). Assuming that log q(zt) and log p(zt) are smooth with at most polynomial
+growth at zt  ±, and also assuming that f (t) and g(t) are chosen such that q(z1) = p(z1) at
+t = 1, the cross entropy is given by:
+
+CE(q(z0)||p(z0)) = EtU[0,1]     g(t)2                   ||zt log q(zt|z0)-zt log p(zt)||22      D    2e02  ,
+                                  2 Eq(zt,z0|x)                                               + log
+
+                                                                                                 2
+
+with q(zt, z0) = q(zt|z0)q(z0) and a Normal transition kernel q(zt|z0) = N (zt; µt(z0), t2I)
+where µt and t2 are obtained from f (t) and g(t) for a fixed initial variance 02 at t = 0.
+
+Theorem 1 amounts to estimating the cross entropy between q(z0) and p(z0) with denoising score
+matching and can be understood intuitively in the context of LSGM: We are drawing samples from
+a potentially complex encoding distribution q(z0), add Gaussian noise with small initial variance
+02 to obtain a well-defined initial distribution, and then smoothly perturb the sampled encodings
+using a diffusion process, while learning a denoising model, the SGM prior. Note that from the
+perspective of the learnt SGM prior, which is defined by the separate reverse-time generative SDE
+with the learnt score function model (see Sec. 2), the expression in our theorem becomes an upper
+bound (see discussion in Sec. 3.1).
+
+Proof. The first part of our proof follows a similar proof strategy as was used by Song et al. [4]. We
+start the proof with a more generic diffusion process in the form:
+
+                                        dz = f (z, t)dt + g(t)dw
+
+The time-evolution of probability densities q(zt) and p(zt) under this SDE is described by the
+
+Fokker-Planck equation [104] (note that we follow the same notation as in the main paper: We omit
+the t-subscript of the diffused distributions qt, indicating the time dependence at the variable, i.e.
+q(zt)  qt(zt)):
+
+      q(zt)                  =  zt      1  g  2  (t)q(zt)zt    log  q(zt)  -  f (z,  t)q(zt)
+        t                               2
+                                                                                                     (10)
+
+                             = zt hq(zt, t)q(zt)
+
+with
+
+                             hq(zt, t)  :=       1  g2  (t)zt  log  q(zt)  -  f (z, t)               (11)
+                                                 2
+
+and analogously for p(zt).
+The cross entropy can be written as
+
+      CE(q(z0)||p(z0)) = CE(q(z1)||p(z1)) +                          0        CE(q(zt)||p(zt))dt
+                                                                    1   t
+
+                                = H q(z1)               -   1       CE(q(zt)||p(zt))dt
+                                                           0   t
+
+since q(z1) = p(z1), as assumed in the Theorem (in practice, the used SDEs are designed such that
+q(z1) = p(z1)).
+
+                                                        18
+Furthermore, we have
+
+   CE(q(zt)||p(zt))   =  -    q(zt)        log  p(zt)  +  q(zt)  p(zt)      dz
+t                               t                         p(zt)    t
+
+                      (=i) -  zt (hq(zt,        t)q(zt))  log  p(zt)  +  q(zt  )  zt  (hp   (zt  ,  t)p(zt))  dz
+                                                                         p(zt  )
+
+                      (=ii)   hq(zt, t)    q(zt)zt log p(zt) + hp(zt, t)              p(zt  )zt     q(zt)  dz
+                                                                                                    p(zt)
+
+                      (=iii)  q(zt) hq(zt, t) zt log p(zt)
+
+                                     + hp(zt, t) zt log q(zt)
+
+                                     - hp(zt, t) zt log p(zt) dz
+
+                      (=iv)   q(zt)  -  1  g2(t)||zt   log  p(zt)||2  -  f  (zt,  t)  zt log q(zt)
+                                        2
+
+                                     + g2(t)zt log q(zt) zt log p(zt) dz
+
+where (i) inserts the Fokker Planck equations for q(zt) and p(zt), respectively. Furthermore, (ii)
+is integration by parts assuming similar limiting behavior of q(zt) and p(zt) at zt  ± as
+Song et al. [4]. Specifically, we know that q(zt) and p(zt) must decay towards zero at zt  ±
+to be normalized. Furthermore, we assumed log q(zt) and log p(zt) to have at most polynomial
+growth (or decay, when looking at it from the other direction) at zt  ±, which implies faster
+exponential growth/decay of q(zt) and p(zt). Also, zt log q(zt) and zt log p(zt) grow/decay at
+most polynomially, too, since the gradient of a polynomial is still a polynomial. Hence, one can work
+out that all terms to be evaluated at zt  ± after integration by parts vanish. Finally, (iii) uses the
+log derivative trick and some rearrangements, and (iv) is obtained by inserting hq and hp.
+
+Hence, we obtain
+
+CE(q(z0)||p(z0)) = H q(z1)    +       1         1      g2(t)||zt  log  p(zt)||22  +   f  (zt,  t)zt  log   q(zt)
+                                                2
+                                        Eq(zt)
+
+                                     0
+
+                                                - g2(t)zt log q(zt) zt log p(zt) dt,
+
+which we can interpret as a general score matching-based expression for calculating the cross entropy,
+analogous to the expressions for the Kullback-Leibler divergence and entropy derived by Song et
+al. [4].
+However, as discussed in the main paper, dealing with the marginal score zt log q(zt) is problematic
+for complex "input" distributions q(z0). Hence, we further transform the cross entropy expression
+into a denoising score matching-based expression:
+
+                                                          19
+CE(q(z0)||p(z0)) = H q(z1)  +    1         1  g2(t)||zt    log  p(zt)||22        +  f  (zt,  t)zt  log  q(zt)
+                                           2
+                                  Eq(zt )
+
+                               0
+
+        - g2(t)zt log q(zt) zt log p(zt) dt
+
+        (i) 1       1                    -2z log q(zt|z0) zt log p(zt) + ||zt log p(zt)||22                          dt
+        =
+                     g (t)2 Eq(z0 ,zt )
+           2
+                  0
+
+                 11                  2f (z, t) zt log q(zt|z0) dt + H q(z1)
+        +            Eq(z0 ,zt )
+           2
+                  0
+
+        (=ii) 1     1                      ||zt log q(zt|z0)||22 - 2zt log q(zt|z0)                 zt log p(zt) + ||zt log p(zt)||22  dt
+            2
+                     g (t)2 Eq(z0 ,zt )
+
+                  0
+
+        +1          1                                                                                   dt + H q(z1)
+           2
+                     Eq(zt) 2f (z, t) zt log q(zt|z0) - g(t)2||zt log q(zt|z0)||22
+
+                  0
+
+        (=iii) 1    1                      ||zt log q(zt|z0) - zt log p(zt)||22                 dt
+             2
+                     g (t)2 Eq(z0 ,zt )
+
+                  0
+
+                 11                      2f (z, t) - g(t)2zt log q(zt|z0)              zt log q(zt|z0) dt +H q(z1)
+        +            Eq(z0 ,zt )
+           2
+                  0
+
+                                                    (I): Model-independent term
+
+with q(z0, zt) = q(zt|z0)q(z0) and where in (i) we have used the following identity from Vin-
+cent [22]:
+
+Eq(zt) zt log q(zt) = Eq(zt) Eq(z0|zt) zt log q(zt|z0) = Eq(z0)q(zt|z0) zt log q(zt|z0) .
+
+In (ii), we have added and subtracted g(t)2||zt log q(zt|z0)||22 and in (iii) we rearrange the terms
+into denoising score matching. In the following, we show that the term marked by (I) depends only
+on the diffusion parameters and does not depend on q(z0) when f (z, t) takes a special affine (linear)
+form f (z, t) := f (t)z, which is often used for training SGMs and which we assume in our Theorem.
+
+Note that for linear f (z, t) := f (t)z, we can derive the mean and variance (there are no "off-
+
+diagonal" co-variance terms here, since all dimensions undergo diffusion independently) of the
+distribution q(zt|z0) at any time t in closed form, essentially solving the Fokker-Planck equation
+for this special case analytically. In that case, if the initial distribution at t = 0 is Normal then
+
+the distribution stays Normal and the mean and variance completely describe the distribution, i.e.
+q(zt|z0) = N (zt; µt(z0), t2I). The mean and variance are given by the differential equations and
+their solutions [104]:
+
+dµ   =  f (t)µ                   µt  =   z0e  t  f  (s)ds                                                                   (12)
+dt                                            0
+
+d2                                         1           t  F~(s)g2(s)ds + 02                     F~(t) := e-2   t
+ dt                                      F~(t)                                                                 0
+     =  2f (t)2   + g2(t)        t2  =                                                       ,                    f  (s)ds  (13)
+
+                                                    0
+
+Here, z0 denotes the mean of the distribution at t = 0 and 02 the component-wise variance at
+t = 0. After transforming into the denoising score matching expression above, what we are doing
+is essentially drawing samples z0 from the potentially complex q(z0), then placing simple Normal
+distributions with variance 02 at those samples, and then letting those distributions evolve according
+to the SDE. 02 acts as a hyperparameter of the model.
+In this case, i.e. when the distribution q(zt|z0) is Normal at all t, we can represent samples zt from
+the intermediate distributions in reparameterized from zt = µt(z0) + t where  N ( ; 0, I). We
+
+                                                          20
+also know that z log q(zt|z0) = - t With this we can write down (i) as:
+
+                  1      1                                                         T
+                  2
+(I )  =                    Eq (z0 ),       2f (t)(µt(z0) + t ) + g(t)2 t                 - t dt            (14)
+
+                        0
+
+      =               1 f (t)                 µt(z0)T          2f  (t)t2 +  g(t)2  E  [  T  ] dt           (15)
+                     0 - t Eq(z0),                           -         2t2
+
+                                              =0                                      =D
+
+      =           -  D   1  2f (t)t2 +        g(t)2  dt                                                    (16)
+                     2  0           t2
+
+      =           -  D   12   1       dt2  =  D   (log  02   - log 12),                                    (17)
+                     2  02    t2              2
+
+where we have used Eq. 13.
+
+Furthermore, since q(zT )  N (zT , 0, 12I) at t = 1, its entropy is H q(zT )                =     D  log(2e12).
+                                                                                                  2
+With this, we get the following simple expression for the cross-entropy:
+
+CE(q(z0)||p(z0))  =  1   1                                                                                 2e02)
+                     2
+                           g(t)2Eq(z0,zt) ||z log q(zt|z0) - z log p(zt)||22 dt + D log(
+
+                        0
+
+Expressing the integral as an expectation completes the proof:
+
+CE(q(z0)||p(z0)) = EtU[0,1]   g(t)2                      ||zt log q(zt|z0)-zt log p(zt)||22          +  D  log  2e02
+                                2 Eq(zt,z0)                                                             2
+
+The expression in Theorem 1 measures the cross entropy between q and p at t = 0. However, one
+should consider practical implications of the choice of initial variance 02 when estimating the cross
+
+entropy between two distributions using our expression, as we discuss below.
+
+Consider two arbitrary distributions q (z) and p (z). If the forward diffusion process has a non-
+zero initial variance (i.e., 02 > 0), the actual distributions q and p at t = 0 in the score matching
+expression are defined by q(z0) := q (z)N (z0, z, 02I)dz and p(z0) := p (z)N (z0, z, 02I)dz,
+which correspond to convolving q (z) and p (z) each with a Normal distribution with variance 02I. In
+this case, q (z) and p (z) are not identical to q(z0) and p(z0), respectively, in general. However, we
+can approximate q (z) and p (z) using p(z0) and q(z0), respectively, when 02 is small. That is why
+our expression in Theorem 1 that measures CE(q(z0)||p(z0)), can be considered as an approximation
+of CE(q (z)||p (z)) when 02 takes a positive small value. Note that in practice, our 02 is indeed
+generally very small (see Tab. 7).
+
+On the other hand, when 02 = 0 (e.g., when using the VPSDE from Song et al. [2]), we know that
+q (z) and p (z) are identical to q(z0) and p(z0). However, in this case, the initial distribution at t = 0
+is essentially an infinitely sharp Normal and we cannot evaluate the integral over the full interval
+t  [0, 1]. Hence, we limit its range to t  [ , 1], where is another hyperparameter. In this case, we
+can approximate the cross entropy CE(q (z)||p (z)) using:
+
+CE(q(z0)||p(z0))     1  1
+                     2
+                         g(t)2Eq(z0,zt) ||z log q(zt|z0) - z log p(zt)||22 dt + D log( 2e2)
+
+                  = EtU[ ,1]  g(t)2                      ||zt log q(zt|z0)-zt log p(zt)||22          +  D  log  2e2
+                                2 Eq(zt,z0)                                                             2
+
+B Variance Reduction
+
+The variance of the cross entropy in a mini-batch update depends on the variance of CE(q(z0)||p(z0))
+where q(z0) := Epdata(x)[q(z0|x)] is the aggregate posterior (i.e., the distribution of latent vari-
+ables) and pdata is the data distribution. This is because, for training, we use a mini-batch
+
+                                                         21
+estimation of Epdata(x)[L(x, , , )]. For the cross entropy term in L(x, , , ), we have
+Epdata(x)[CE(q(z0|x)||p(z0))] = CE(q(z0)||p(z0)).
+
+In order to study the variance of the training objective, we derive CE(q(z0)||p(z0)) analytically,
+assuming that both q(z0) = p(z0) = N (z0; 0, I). This is a reasonable simplification for our analysis
+because pretraining our LSGM model with a N (z0; 0, I) prior brings q(z0) close to N (z0; 0, I)
+and our SGM prior is often dominated by the fixed Normal mixture component. Nevertheless, we
+empirically observe that the variance reduction techniques developed with this simplification still
+work well when q(z0) and p(z0) are not exactly N (z0; 0, I).
+
+In this section, we start with presenting the mixed score parameterization for generic SDEs in
+App. B.1. Then, we discuss variance reduction with importance sampling for these generic SDEs in
+App. B.2. Finally, in App. B.3 and App. B.4, we focus on variance reduction of the VPSDEs and
+VESDEs, respectively, and we briefly discuss the Sub-VPSDE [2] in App. B.5.
+
+B.1 Generic Mixed Score Parameterization for Non-Variance Preserving SDEs
+
+The mixed score parameterization uses the score that is obtained when dealing with Normal input
+data and just predicts an additional residual score. In the main text, we assume that the variance
+of the standard Normal data stays the same throughout the diffusion process, which is the case for
+VPSDEs. But the way Normal data diffuses depends generally on the underlying SDE and generic
+SDEs behave differently than the regular VPSDE in that regard.
+
+Consider the generic forward SDEs in the form:
+
+                                                  dz = f (t)z dt + g(t) dw                                       (18)
+
+If our data distribution is standard Normal, i.e. z0  N (z0; 0, I), using Eq. 13, we have
+
+                          °t2    :=     1          t                       =        1    ~t2 + 1                 (19)
+                                      F~(t)                                       F~(t)
+                                                    F~(s)g2(s)ds + 1
+
+                                                  0
+
+with the definition ~t2 :=            t  F~(s)g   2(s)ds.  Hence,     the  score  function  at  time  t  is  zt  log p(zt)  =
+                                      0
+   zt                                                          N (zt; 0, °t2)1-p(zt),
+-  °t2  .  Using  the  geometric      mixture     p(zt)                                     we  can   generally  define  our
+
+mixed score parameterization as
+
+                                       (zt ,  t)  :=  t    (1  -  )   zt +        (zt, t).                       (20)
+                                                      °t2
+
+In the case of VPSDEs, we have °t2 = 1 which corresponds to the mixed score introduced in the
+main text.
+
+Remark: It is worth noting that both °t2 and t2 are solutions to the same differential equation in
+Eq. 13 with different initial conditions. It is easy to see that °t2 - t2 = (1 - 02)F~(t)-1.
+
+B.2 Variance Reduction of Cross Entropy with Importance Sampling for Generic SDEs
+
+Let's consider the cross entropy expression for p(z0) = N (z0, 0, I) and q(z0) = N (z0, 0, (1 - 02)I)
+where we have scaled down the variance of q(z0) to (1 - 02) to accommodate the fact that the
+diffusion process with initial variance 02 applies a perturbation with variance 02 in its initial step
+(hence, the marginal distribution at t = 0 is N (z0, 0, I) and we know that the optimal score is
+              t
+(zt, t)    =  °t2  zt  ,  i.e.,  the  Normal  component).
+
+                                                                  22
+The cross entropy CE(q(z0)||p(z0)) with the optimal score                               (zt, t)    =   z t     t  is:
+
+                                                                                                       °t2
+
+CE     -    const.   =   1      1 g2(t)            || - (zt, t)||22 dt                                                          (21)
+                         2         t2 Ez0,
+
+                     =   1      1 g2(t)            ||    -    t    zt||22    dt                                                 (22)
+                         2         t2 Ez0,                    °t2
+
+                     =   1      1 g2(t)            ||    -    t    (F~(t)-     1  z0  +     t)||22     dt                       (23)
+                         2         t2 Ez0,                    °t2              2
+
+                     =   1      1 g2(t)              ||  °t2 -    t2     -   t    F~  (t)-  1  z0||22  dt                       (24)
+                         2         t2 Ez0,                  °t2              °t2            2
+
+                     =   1      1 g2(t)     (°t2 -       t2)2     E    || ||22    +    t2      F~(t)-1Ez0         ||z0||22  dt  (25)
+                         2         t2          (°t2      )2                           (°t2)2
+
+                     =   D      1 g2(t)        (°t2 - t2)2         +    t2        F~(t)-1(1    -    02)    dt                   (26)
+                         2         t2             (°t2)2               (°t2)2
+
+                     =   D      1 g2(t)        (°t2 - t2)2         +   t2(°t2 - t2)            dt                               (27)
+                         2         t2             (°t2)2                   (°t2)2
+
+                         D      1  g2(t)           D       1  g2(t)
+                         2          t2             2           °t2
+                     =                     dt  -                         dt                                                     (28)
+
+                         D      1  d   t2  + 2f    (t)t2              D       1   ddt°t2  + 2f  (t)°t2
+                         2         dt       t2                        2                    °t2
+                     =                                        dt  -                                        dt                   (29)
+
+                         D      1  d   t2          D       1  ddt°t2
+                         2         dt              2          °t2
+                     =                     dt  -                        dt                                                      (30)
+                                   t2
+
+                                                                            
+
+                     =  D   1  -   EtU [             d   log       t2                                                           (31)
+                               2                    dt             °t2
+                                              ,1]                           
+
+                                                                                      
+
+                     =  D   1  -   EtU [             d   log         ~t2 + 02         ,                                         (32)
+                               2                    dt               ~t2 + 1
+                                              ,1]
+
+where  in  Eq.  23,  we  have   used   zt  =   F~  (t)-    1  z0  +     t. In Eq. 25, we have used the fact that z0 and
+                                                           2
+
+are independent. In Eq. 27, we have used the identity °t2 - t2 = (1 - 02)F~(t)-1. In Eq. 29, we
+                        d
+have  used  g2(t)    =  dt  t2  +  2f (t)t2    from      Eq.  13.
+
+Therefore, the IW distribution with minimum variance for CE(q(z0)||p(z0)) is
+
+                                               r(t)           d   log      ~t2 + 02                                             (33)
+                                                              dt           ~t2 + 1
+
+with normalization constant
+
+                                                                                                
+
+                                       R~ = log            ~12 + 02               ~2 + 1                                        (34)
+                                                           ~12 + 1                ~2 + 02 
+
+and CDF                                                                                                
+
+                                   R(t)    =   1   log            ~t2 + 02            ~2 + 1                                    (35)
+                                               R~                 ~t2 + 1             ~2 + 02 
+
+Hence, the inverse CDF is                                                          1- ~12+02 
+                              t=
+                                       ~t2     inv  02 -              ~ 2 +02             ~12+1                                 (36)
+                                                                       ~ 2 +1
+
+                                                              ~2+02 1-            ~12 +02      
+                                                                                   ~12 +1        -1 
+
+                                                              ~ 2 +1
+
+                                                                     23
+Finally, the cross entropy objective with importance weighting becomes
+
+     1    1 g2(t)              ||  -   (zt, t)||22        dt   =   R~               1 + ~t2            ||     -    (zt, t)||22          (37)
+     2       t2 Ez0,                                               2 Etr(t)         1 - 02 Ez0,
+
+                                                                   
+
+              =    1  log      ~12 + 02             ~2 + 1          Etr(t)          1 + ~t2               ||  -     (zt, t)||22         (38)
+                   2           ~12 + 1              ~2 + 02                         1 - 02 Ez0,
+
+The idea here is to write everything as a function of ~t2 =                                t  F~  (s)g2    (s)ds.      We see that ~t2 is
+                                                                                           0
+monotonically increasing for any g(t) and f (t); hence, it always has an inverse and inverse transform
+
+sampling is, in principle, always possible. However, we should pick g(t) and f (t) such that ~t2 and
+
+its inverse are also analytically tractable to avoid dealing with numerical methods.
+
+B.3 VPSDE
+
+Consider the simple forward diffision process in the form:
+
+                                                dz  =    -  1  (t)zdt    +     (t)dw                                                    (39)
+                                                            2
+
+which corresponds to the VPSDE from Song et al. [2]. The appealing characteristic of this diffusion
+
+model is that if z0  N (z0; 0, I), intermediate z(t) will also have a standard Normal distribution and
+
+its  variance  is  constant    (i.e.,  d   °t2  =   0).  In  the   original    VPSDE,      (t)     is  defined      by  a  linear    function
+                                       dt
+(t) = 0 + (1 - 0)t that interpolates between [0, 1].
+
+B.3.1 Variance Reduction for Likelihood Weighting (Geometric VPSDE)
+
+Our analysis in App. B.2, Eq. 30 shows that the cross entropy can be expressed as:
+
+                                                                   D        1  d   t2         D        1   ddt°t2
+                                                                   2           dt             2            °t2
+                      CE(q(z0)||p(z0))             -   const   =                       dt  -                       dt                   (40)
+                                                                               t2
+
+                                                                   D        1  d   t2
+                                                                   2           dt
+                                                               =                       dt                                               (41)
+                                                                               t2
+
+                                                               =   D  1  -     EtU[ ,1]       d    t2                                   (42)
+                                                                         2                    dt
+
+                                                                                                  t2
+
+where   for   the  VPSDE    we     have    used    d   °t2  =  0.
+                                                   dt
+
+A    sample-based     estimation       of  this     expectation      has    a  low     variance     if      1 dt2   is  constant     for  all
+                                                                                                           t2 dt
+                                                dt2
+t    [0, 1].  By solving the ODE            1    dt    =    const., we can see that a log-linear noise schedule of the
+                                           t2
+                ( 2 m2ax
+form  t2  =                )t  satisfies   this  condition,        with  t     [0,  1],  0 < m2 in  < m2 ax      < 1,  and    m2 in  =  02.
+                 min m2in
+
+Using Eq. 13, we can find an expression for (t) that generates such noise schedule:
+
+                   (t) =       1       dt2      =     t2       log(  m2 ax  )  =        ( ) 2 m2ax t          log(  m2 ax  )            (43)
+                            1 - t2      dt          1 - t2           m2 in                                          m2 in
+                                                                                         min m2in
+
+                                                                                    1  -   m2 in(  m2ax   )t
+                                                                                                   m2in
+
+We call a VPSDE with (t) defined as above a geometric VPSDE. For small m2 in and m2 ax close to 1,
+all inputs diffuse closely towards the standard Normal prior at t = 1. In that regard, notice that our
+
+geometric VPSDE is well-behaved with positive (t) only within the relevant interval t  [0, 1] and
+for 0 < m2 in < m2 ax < 1. These conditions also imply t2 < 1 for all t  [0, 1]. This is expected for
+any VPSDE. We can approach unit variance arbitrarily closely but not reach it exactly.
+
+Importantly, our geometric VPSDE is different from the "variance-exploding" SDE (VESDE),
+proposed by Song et al. [5] (also see App. C). The VESDE leverages a SDE in which the variance
+grows in an almost unbounded way, while the mean of the input distribution stays constant. Because
+
+                                                                   24
+of this, the hyperparameters of the VESDE must be chosen carefully in a data-dependent manner [38],
+which can be problematic in our case (see discussion in App. B.4). Furthermore, Song et al. also
+found that the VESDE does not perform well when used with probability flow-based sampling [2]. In
+contrast, our geometric VPSDE combines the variance preserving behavior (i.e. standard Normal
+input data remains standard Normal throughout the diffusion process; all individual inputs diffuse
+towards standard Normal prior) of the VPSDE with the geometric growth of the variance in the
+diffusion process, which was first used in the VESDE.
+
+Finally,  for  the  geometric       VPSDE    we  also    have  that       CE(q(zt)||p(zt))  =  const.  for  Normal  input
+                                                                       t
+data. Hence, data is encoded "as continuously as possible" throughout the diffusion process. This
+
+is in line with the arguments made by Song et al. in [38]. We hypothesize that this is particularly
+
+beneficial towards learning models with strong likelihood or NELBO performance. Indeed, in our
+
+experiments we observe the geometric VPSDE to perform best on this metric.
+
+B.3.2 Variance Reduction for Likelihood Weighting (Importance Sampling)
+
+Above, we have assumed that we sample from a uniform distribution for t and we have defined
+(t) and t2 such that the variance of a Monte-Carlo estimation of the expectation is minimum.
+Another approach for improving the sample-based estimate of the expectation is to keep (t) and t2
+
+unchanged and to use importance sampling such that the variance of the estimate is minimum.
+
+Using importance sampling, we can rewrite the expectation in Eq. 42 as:
+
+                                    EtU[ ,1]     1 dt2      = Etr(t)          1 1 dt2                               (44)
+                                                 t2 dt                       r(t) t2 dt
+
+where r(t) is a proposal distribution. The theory of importance sampling [28] shows that r(t) 
+
+ 1  dt2  =   d log t2  will have the smallest variance.         In order to use this proposal distribution, we require
+t2   dt          dt
+
+(i) sampling from r(t) and (ii) evaluating the objective using this importance sampling technique.
+
+Sampling from r(t) by inverse transform sampling: It's easy to see that the normalization constant
+
+for r(t) is    1  d log t2  dt   =  log  12  -  log  2.  Thus,     the  PDF  r(t)  is:
+                      dt
+
+                             r(t)   =    log 12  1          1   dt2     =      (t)(1 - t2)                          (45)
+                                                 - log 2    t2   dt        (log 12 - log 2)t2
+
+We can derive inverse transform sampling by deriving the inverse CDF:
+
+                            log  t2              t2         12                                        1-
+                            log  2               2          2
+               R(t)    =               =             =                 t = var-1        12 2                        (46)
+                                 12
+                                 2
+
+where var-1 is the inverse of t2.
+
+Importance Weighted Objective: The cross entropy is then written as (ignoring the constants here):
+
+    1    1 (t)           ||      -  (zt, t)||22  dt  =   1                (log 12 - log 2)  Ez0,  ||   -    (zt, t)||22
+    2      t2 Ez0,                                       2 Etr(t)
+                                                                             (1 - t2)
+
+                                                                                                                    (47)
+
+B.3.3 Variance Reduction for Unweighted Objective
+
+Using a similar derivation as in App. B.2, we can show that for the unweighted objective for
+p(z0) = N (z0, 0, I) and q(z0) = N (z0, 0, (1 - 02)I), we have
+
+                  1                                         D       1     (°t2 - t2)2      t2(°t2 - t2)
+                                                            2                (°t2)2            (°t2)2
+                   Ez0,      ||  -     (zt, t)||22   dt  =                              +                   dt      (48)
+
+                                                         =  D   1  -    EtU[ ,1]   1 - t2                           (49)
+                                                                   2
+
+                                                         =  D   1  -    Etr(t)     1 - t2                           (50)
+                                                                   2                r(t)
+
+                                                                25
+with proposal distribution r(t)  1-t2. Recall that in the VPSDE with linear (t) = 0 +(1 -0)t,
+
+we have                                                                                                    t2
+                                                                                                            2
+                            1 - t2 = (1 - 02)e-             t  (s)ds  =  (1  -  02  )e-0  t-(1    -0    )                       (51)
+                                                            0
+
+Hence, the normalization constant of r(t) is
+
+R~ =      1    -  02)e-0t-(1-0)       t2        dt                                                                              (52)
+                                       2
+           (1
+
+                                                                                                                                            
+                                        
+=     (1  -  02  )e  1      0      2(1 - 0) erf                   1 - 0      1  +      0              - erf        1 - 0        +     0     
+                     2  1 -0                                          2                -                               2           1 -
+
+                                                                                    1     0                                              0
+
+                            :=AR~
+
+                                                                                                                                (53)
+
+Similarly, we can write the CDF of r(t) as
+
+                                                                                                                            
+
+R(t)        =  AR~      erf        1 - 0        t    +   1  0  0      - erf         1 - 0             +    1   0  0             (54)
+               R~                      2                    -                           2                      -
+
+solving  = R(t) for t then results in
+
+                                                                                                      
+
+             t=         1   2                R~      +   erf      1 - 0         +   1  0  0                -      0             (55)
+                            -  0 erfinv  AR~                          2                -                       1 - 0
+
+Importance Weighted Objective:
+
+                  1          || - (zt, t)||22 dt = Etr(t)                    R~                   -     (zt, t)||22             (56)
+                                                                         (1 - t2) Ez0, ||
+                   Ez0,
+
+B.3.4 Variance Reduction for Reweighted Objective
+
+For the reweighted mechanism, we drop only t2 from the cross entropy objective but we keep
+g2(t) = (t). Using a similar derivation in App. B.2, we can show that unweighted objective for
+p(z0) = N (z0, 0, I) and q(z0) = N (z0, 0, (1 - 02)I), we have
+
+1                                                           1  -                dt2               1  -              dt2 
+                                                               2                 dt                  2
+ (t)Ez0,                ||  -      (zt, t)||22  dt   =   D        EtU[ ,1]             =  D                Etr(t)     dt        (57)
+
+                                                                                                                     r(t)
+
+with proposal distribution r(t)                 dt2  =   (t)(1 - t2).
+                                                 dt
+
+In this case, we have the following proposal r(t), its CDF R(t) and inverse CDF R-1():
+
+      r(t)  =  (t)(1 - t2)         ,  R(t)      =    t2  -  2  ,  t = R-1() = var-1((1 - )2 + 12)                               (58)
+                 12 - 2                              12  -  2
+
+Note that usually 2 0 and 12 1. In that case, the inverse CDF can be thought of as R-1() 
+var-1().
+
+Importance Weighted Objective:
+
+      1     1                ||    -  (zt, t)||22       dt  =  1             (12 - 2)     Ez0  ,  ||    -      (zt, t)||22      (59)
+      2                                                        2 Etr(t)      (1 - t2)
+             (t)Ez0,
+
+Remark: It is worth noting that the derivation of the importance sampling distribution for the
+reweighted objective does not make any assumption on the form of (t). Thus, the IS distribution
+
+can be formed for any VPSDE when training with the reweighted objective, including the original
+VPSDE with linear (t) and also our new geometric VPSDE.
+
+                                                                  26
+B.4 VESDE
+
+The VESDE [2] is defined by:
+
+                                  dz = d (t)2dw                                                                            (60)
+                                            dt
+
+                                       =     m2 in log       m2 ax        m2 ax      t                                     (61)
+                                                             m2 in        m2 in
+                                                                                      dw
+
+with (t)2 = m2 in   . m2ax t
+
+                    m2in
+
+Solving the Fokker-Planck equation for input distribution N (µ0, 02) results in
+
+                            µt = µ0;            t2 = 02 - m2 in + m2 in                            t                       (62)
+
+                                                                                        m2 ax
+                                                                                        m2 in
+
+Typical values for  m2 in   and m2 ax  are   m2 in  =    0.012   and      m2 ax  =   502     (CIFAR10).          Usually,  we  use
+m2 in = 02.
+
+Note that when the input data is distributed as z0  N (z0; 0, I), the variance at time t in VESDE is
+given by:
+
+                                                                          m2 ax      t
+                                                                          m2 in
+                                       °t2 = 1 - m2 in + m2 in                                                             (63)
+
+Note that m2 ax is typically very large and chosen empirically based on the scale of the data [38].
+However, this is tricky in our case, as the role of the data is played by the latent space encodings,
+which themselves are changing during training. We did briefly experiment with the VESDE and
+calculated m2 ax as suggested in [38] using the encodings after the VAE pre-training stage. However,
+these experiments were not successful and we suffered from significant training instabilities, even
+with variance reduction techniques. Therefore, we did not further explore this direction.
+
+Nevertheless, our proposed variance reduction techniques via importance sampling can be derived
+also for the VESDE. Hence, for completeness, they are shown below.
+
+B.4.1 Variance Reduction for Likelihood Weighting
+
+Let's have a closer look at the likelihood objective when using the VESDE for modeling the standard
+
+Normal data. Following similar arguments as in previous sections, we have z0  N (z0; 0, (1 -
+m2 in)I). With the optimal score                    t
+                                      (zt, t)   =   °t2  zt  (i.e.,  the  Normal     component),       we  have   the    following
+
+expression for CE(q(z0)||p(z0)) from Eq. 30:
+
+1          1 g2(t)                                                   D    1      d   t2         D      1  ddt°t2
+2             t2 Eµ0,                                                2           dt             2         °t2
+                                  ||   -  (zt, t)||22        dt  =                       dt  -                    dt  =    (64)
+                                                                                 t2
+
+D          1        d   t2     ddt°t2               1  -                  d      t2      ddt°t2
+2                   dt         °t2                     2                  dt             °t2
+                            -          dt    =  D            EtU[ ,1]                -                                     (65)
+                    t2                                                       t2
+
+Since the term inside the expectation is not constant in t, the VESDE does not result in an objective
+with naturally minimal variance, opposed to our proposed geometric VPSDE.
+
+We derive an importance sampling scheme with a proposal distribution
+
+r(t)                1   dt2    -   1   d°t2  =  log       m2 ax                          m2 in   m2ax     t                (66)
+                    t2   dt       °t2   dt                m2 in      1 -                         m2in      m2ax
+                                                                                                           m2in    
+                                                                      1 - m2 in + m2 in                           t
+                                                                                                                   
+
+                                                             27
+                                                                             m2ax     t
+                                                                             m2in
+                                                                      m2in                  t  1 with m2 in < 1. In this case
+
+Note that the quantity above is always positive as                                 m2ax
+                                                                                   m2in
+                                                                 1-m2in +m2in
+
+the normalization constant of r(t) is R~ = log                   °2 m2ax     and the CDF is:
+                                                                 2 °12
+
+                     R(t)     =   1   log t2 - log 2 + log °2 - log °t2                  =  1      log  °2t2                              (67)
+                                  R~                                                        R~          °t22
+
+And the inverse CDF is:
+
+                                                                                            
+
+                                      t     =   v°ar-1               1 - m2 in                                                            (68)
+                                                                                         
+                                                                 2 1-
+                                                         1 -     °2             m2ax      
+                                                                                °12
+
+where v°ar-1 is the inverse of °t2.
+So, the objective with importance sampling is then:
+
+                                                                                                                                                
+
+1   1 g2(t)             ||    -   (zt, t)||22       dt   =  1         log       °2 m2 ax           1     °t2       Ez0  ,  ||  -       (zt, t)||22
+2      t2 Ez0,                                              2 Etr(t)            2 °12                   - m2 in
+
+In contrast to the VESDE, the geometric VPSDE combines the geometric progression in diffusion
+
+variance directly with minimal variance in the objective by design. Furthermore, it is simpler to set
+up, because we can always choose m2 ax  1 for the geometric VPSDE and do not have to use a
+data-specific m2 ax as proposed by [38].
+
+B.4.2 Variance Reduction for Unweighted Objective
+
+When we drop all "prefactors" in the objective, the importance sampling distribution stays the same
+
+as  above,  since    g 2 (t)  is  constant  in  t.  The  objective   becomes:
+                      t2
+
+                                                                     °2 m2ax                                                           
+                                                              log    2 °12
+    1            ||  -  (zt, t)||22   dt    =       Etr(t)                            °t2               ||     -     (zt   ,   t)||22     (69)
+                                                                       m2ax        1 - m2 in Ez0,                                      
+     Ez0,                                                              m2in
+                                                             log
+
+B.4.3 Variance Reduction for Reweighted Objective
+
+To define the    importance sampling for the reweighted               objective by t2,          we    use the fact that        dt2     =  d°t2
+                                                                                                                                dt         dt
+in VESDEs. Using a similar derivation as in App. B.2, we show:
+
+            1        1                                                    D     1  dt2             D        1  d°t2  t2
+            2                                                             2         dt             2            dt   °t2
+                      g2(t)Ez0,       ||    -       (zt, t)||22  dt  =                      dt  -                          dt             (70)
+
+                                                                     =    D     1 d°t2          °t2 - t2       dt                         (71)
+                                                                          2        dt              °t2
+
+                                                                          D(1 - 02)             1   1   d°t2
+                                                                               2                   °t2   dt
+                                                                     =                                         dt                         (72)
+
+Thus, the optimal proposal for reweighted objective and the inverse CDF are:
+
+    r(t)     1   d°t2    r(t) =             11           d°t2   R(t) =       log(  °t2   )   t = v°ar-1            (°2)1-(°12)
+            °t2   dt                                      dt                       °2                                              (73)
+
+                                      log(  °12  )  °t2                      log(  °12   )
+                                            °2                                     °2
+
+                                                                 28
+So, the reweighted objective with importance sampling is:
+
+                                                                                                                                        
+
+1  1           ||       -      (zt, t)||22          dt    =  1  Etr(t)                 log            °12    °t2Eµ0, || - (zt, t)||22 (74)
+2                                                            2                                        °2
+    g2(t)Eµ0,
+
+Note that in practice, we can safely set = 0 as initial 02 is non-zero in the VESDE.
+
+B.5 Sub-VPSDE
+
+Song et al. also proposed the Sub-VPSDE [2]. It is defined as:
+
+                        dz     =  -      1      (t)zdt    +     (t)                    1 - e-2        t    (s)ds  dw                      (75)
+                                         2                                                            0
+
+with the same linear (t) as for the regular VPSDE.
+
+Solving the Fokker-Planck equation for input distribution N (µ0, 02) at t = 0 results in
+
+   µt  =       e-  1    t      (s)ds     µ0  ;            t2 =  1.0 - e-                         t    (s)ds  2          t  (s)ds          (76)
+                   2    0                                                                        0                      0
+                                                                                                               + 02 e-
+
+Deriving importance sampling distributions for
+
+variance reduction for the Sub-VPSDE can be
+
+more complicated than for the VPSDE, Geomet-                    Training NELBO (nats)  20000                            SubVPSDE, Uniform
+ric VPSDE, and VESDE and we did not investi-                                           17500                            SubVPSDE, IS
+gate this in detail. However, for the same linear                                      15000
+(t) the Sub-VPSDE is close to the VPSDE,
+                                                                                       12500
+only slightly reducing the the variance t2 of the                                      10000
+diffusion process distribution for small t. This
+
+suggests that the IS distribution derived using                                        7500
+
+the regular VPSDE will likely also significantly                                       5000
+
+reduce the variance of the objective due to t- 2500
+
+sampling of the Sub-VPSDE, just not as opti-                                             0    0       50        100 Ep1o5c0hs 200  250     300
+mally as theoretically possible. In Fig. 6, we
+show the training NELBO of an LSGM trained
+
+on CIFAR-10 with wll-weighting using the Sub-                   Figure 6: Variance reduction of the sample-based esti-
+VPSDE. We show the NELBO both for uniform                       mate of the training objective for the Sub-VPSDE, using
+t sampling as well as for t sampling from the IS                an IS distribution derived from the regular VPSDE.
+distribution that was originally derived for the
+
+regular VPSDE with the same (t) (the experi-
+
+ment and model setup is otherwise the same as the one for the ablation study on SDEs, weighting
+
+mechanisms and variance reduction). We indeed observe a significantly reduced training objective
+
+variance. We were consequently able to train large LSGM models in a stable manner using the
+
+Sub-VPSDE with VPSDE-based IS. However, the strongest generative performance in either NLL or
+
+FID was not achieved using the Sub-VPSDE, but with the Geometric VPSDE or regular VPSDE. For
+
+that reason, we did not focus on the Sub-VPSDE in our main experiments. However, a generative
+
+modeling performance comparison of the VPSDE vs. Sub-VPSDE in a smaller LSGM model is
+
+presented in App. H.4.
+
+C Expressions for the Normal Transition Kernel
+
+In our derivations of the Normal transition kernel q(zt|z0), we only considered the general case in
+Eq. 12 and Eq. 13. However, the expression for q(zt|z0) can be further simplified for different SDEs
+that are considered in this paper. For completeness, we provide the expressions for q(zt|z0) below:
+
+   
+
+   N           zt  ;    e-  1  t  (s)dsz0,                1 - (1 - 02)e-                      t  (s)ds       I    VPSDE (linear (t))
+                            2  0                                                              0                   Geometric VPSDE (77)
+                                                                                                                  VESDE
+   
+
+   
+
+                            z ,  ( ) I 1-m2in(m2ax)t
+                                         m2in             2 m2ax t
+                               1-m2in                  0  min m2in
+q(zt|z0) = N zt;
+              
+              
+
+               zt  ;    z0  ,  m2 in  (  m2ax   )t  I
+   N                                     m2in
+   
+
+                                                                29
+In both VESDE and Geometric VPSDE, the initial variance 02          diastadeant ott=ed0.bIynVm2EinS>DE0,.m2Tahxebsye
+diffusion processes start from a slightly perturbed version of the
+
+definition is large (as the name variance exploding SDE suggests) and it is set based on the scale of
+
+the data [38]. In contrast, m2 ax in the Geometric VPSDE does not depend on the scale of the data
+and it is set to m2 ax  1. In the VPSDE, the initial variance is denoted by the hyperparameter 02.
+
+In contrast to VESDE and Geometric VPSDE, we often set the initial variance to zero in VPSDE,
+
+meaning that the diffusion process models the data distribution exactly at t = 0. However, using
+the VPSDE with 02 = 0 comes at the cost of not being able to sample t in the full interval [0, 1]
+
+during training and also prevents us from solving the probability flow ODE all the way to zero during
+
+sampling [2].
+
+D Probability Flow ODE
+
+In LSGM, to sample from our SGM prior in latent space and to estimate NELBOs, we follow Song
+et al. [2] and build on the connection between SDEs and ODEs. We use black-box ODE solvers to
+solve the probability flow ODE. Here, we briefly recap this approach.
+
+All SDEs used in this paper can be written in the general form
+
+                                             dz = f (z, t)dt + g(t)dw
+
+The reverse of this diffusion process is also a diffusion process running backwards in time [105, 2],
+defined by
+
+                             dz = f (z, t) - g2(t)zt log q(zt) dt + g(t)dw¯ ,
+
+where dw¯ denotes a standard Wiener process going backwards in time, dt now represents a negative
+infinitesimal time increment, and zt log q(zt) is the score function of the diffusion process distribu-
+tion at time t. Interestingly, Song et al. have shown that there is a corresponding ODE that generates
+the same marginal probability distributions q(zt) when acting upon the same prior distribution q(z1).
+
+It is given by
+
+               dz =     f (z,  t)  -  g2(t)   log  q(zt)            dt
+                                        2 zt
+
+and usually called the probability flow ODE. This connects score-based generative models using
+diffusion processes to continuous Normalizing flows, which are based on ODEs [73, 106]. Note that
+in practice zt log q(zt) is approximated by a learnt model. Therefore, the generative distributions
+defined by the ODE and SDE above are formally not exactly equivalent when inserting this learnt
+model for the score function expression. Nevertheless, they often achieve quite similar performance
+in practice [2]. This aspect is discussed in detail in concurrent work by Song et al. [4].
+
+We can use the above ODE for efficient sampling of the model via black-box ODE solvers. Specifi-
+cally, we can draw samples from the standard Normal prior distribution at t = 1 and then solve this
+ODE towards t = 0. In fact, this is how we perform sampling from the latent SGM prior in our paper.
+Similarly, we can also use this ODE to calculate the probability of samples under this generative
+process using the instantaneous change of variables formula (see [73, 106] for details). We rely on
+this for calculating the probability of latent space samples under the score-based prior in LSGM.
+Note that this involves calculating the trace of the Jacobian of the ODE function. This is usually
+approximated via Hutchinson's trace estimator, which is unbiased but has a certain variance (also see
+discussion in Sec. F).
+
+This approach is applicable similarly for all diffusion processes and SDEs considered in this paper.
+
+E Converting VAE with Hierarchical Normal Prior to Standard Normal
+     Prior
+
+Converting a VAE with hierarchical prior to a standard Normal prior can be done using a simple
+change of variables. Consider a VAE with hierarchical encoder q(z|x) = l q(zl|z<l, x) and
+
+                                                          30
+hierarchical prior p(z) = l p(zl|z<l) where z = {zl}lL=1 represent all latent variables and:
+
+                                       p(zl|z<l) = N (zl; µl(z<l), l2(z<l)I)                                              (78)
+
+                                      q(zl|z<l, x) = N (zl; µl(z<l, x), l2(z<l, x)I)                                      (79)
+
+where for simplicity we have assumed that the variance is shared for all the components. We can
+
+reparameterize the latent variables by introducing           l   =        . zl -µl (z<l )  With  this  reparameterization,  the
+
+                                                                             l (z<l )
+
+equivalent VAE is:
+
+                                       p( l) = N ( l; 0, I)                                                               (80)
+
+                    q(            l|   <l, x) = N (  l;  µl(z<l, x) - µl(z1)      ,  l2(z<l, x)        I),                (81)
+                                                                l(z<l)                l2(z<l)
+
+                                                                                                                          (82)
+
+where zl = µl(z<l) + l(z<l) l. In this equivalent parameterization, we can consider l as latent
+variables with a standard Normal prior.
+
+E.1 Converting NVAE Prior to Standard Normal Prior
+
+In NVAE [20], the prior has the same hierarchical form as in Eq. 78. However, the authors observe
+that the residual parameterization of the encoder often improves the generative performance. In this
+parameterization, with a small modification, the encoder is defined by:
+
+        q(zl|z<l, x) = N (zl; µl(z<l) + l(z<l)µl(z<l, x), l2(z<l)l2(z<l, x)I),                                            (83)
+
+where the encoder is tasked to predict the residual parameters µl(z<l, x) and l2(z<l, x). Using
+
+the same reparameterization as above (               l  =  zl -µl (z<l )  ),  we  have  the  equivalent     VAE  in  the  form:
+                                                              l (z<l )
+
+                                       p( l) = N ( l; 0, I)                                                               (84)
+
+                                  q( l| <l, x) = N ( l; µl(z<l, x), l2(z<l, x)I),                                         (85)
+
+where zl = µl(z<l)+l(z<l) l. In other words, the residual parameterization of encoder, introduced
+in NVAE, predicts the mean and variance for the l distributions directly.
+
+F Bias in Importance Weighted Estimation of Log-Likelihood
+
+A common approach for estimating test log-likelihood in VAEs is to use the importance weighted
+
+bound on log-likelihood [74]. In LSGM, we have access to an unbiased but stochastic estimation of
+the prior likelihood log p(z0) which we obtain using the probability flow ODE [2]. The stochasticity
+in the estimation comes from Hutchinson's trick [106]. In VAEs, the test log-likelihood is estimated
+
+using importance weighted (IW) estimation [74]:
+
+                               1  K                  where   w(k) = log p(z(k))+log p(x|z(k))-log q(z(k)|x)               (86)
+Ez(1),...,z(K)q(z|x)[log( K
+                                     exp(w(k)))]
+
+                                  k=1
+
+which is a statistical lower bound on log p(x).
+
+In this section, we provide an informal analysis that shows that IW estimation with K > 1 can
+
+overestimate the log-likelihood when log p(z) is measured with an unbiased estimator with variance
+2. In our analysis we assume that 2 is small and we use Taylor expansion to study how the IW
+bound varies. Under our analysis, we observe that the bias has O(2) and it can be minimized by
+ensuring that 2 is sufficiently small.
+
+Consider the Taylor expansion around w up to second order of the function log exp(w) =
+log k ewi where w = {w(k)}Kk=1 (log exp : RK  R). With  N ( , 0, I) and assuming that
+2 is sufficiently small so that all terms beyond second order contribute negligibly, we have:
+
+E [log  exp(w +  )]  log                                                   0                                               trace(H)
+                                                  exp(w) + E ¨[ T¨B ¨]w log                  exp(w) + 2$E $[ $T H$$ X] (87)
+
+                                                                ¨
+
+                                                             31
+where H is the Hessian matrix for the log exp function at w. Note that the gradient
+
+w log exp(w) =  ewi    is the softmax function and trace(H) =         ewi  1-  ewi     1.
+Thus, we have:  j ewj                                            i j ewj       j ewj
+
+                E [log exp(w +  )] log exp(w) + 2                                     (88)
+
+So, when the importance weights w = {w(k)}kK=1 are estimated with sufficiently small variance 2,
+the bias is proportional to the variance of this estimate.
+
+In our experiments, we observe that the variance of the log p(z0) estimate is not small enough to
+obtain a reliable estimate of test likelihood using the importance weighted bound. One way to reduce
+the variance is to use many randomly sampled noise vectors in Hutchinson's trick. However, this
+makes NLL estimation computationally too expensive. Fortunately, when evaluating NELBO (which
+corresponds to K = 1 here), the NELBO estimate is unbiased and its variance is small because of
+averaging across big test datasets (with often 10k samples). For example, on MNIST the standard
+deviation of our log p(z0) estimate is 0.36 nat, while the standard deviation of NELBO is 0.07 nat.
+
+G Additional Implementation Details
+
+All hyperparameters for our main models are provided in Tab. 7.
+
+G.1 VAE Backbone
+
+The VAE backbone for all LSGM models is NVAE [20]7, one of the best-performing VAEs in
+the literature. It has a hierarchical latent space with group-wise autoregressive latent variable
+dependencies and it leverages residual neural networks (for architecture details see [20]). It uses
+depth-wise separable convolutions in the decoder. Although both the approximate posterior and the
+prior are hierarchical in its original version, we can reparametrize the prior and write it as a product
+of independent Normal distributions (see Sec. E).
+
+The VAE's most important hyperparameters include the number of latent variable groups and their
+spatial resolution, the channel depth of the latent variables, the number of residual cells per group,
+and the number of channels in the convolutions in the residual cells. Furthermore, when training the
+VAE during the first stage we are using KL annealing and KL balancing, as described in [20]. For
+some models, we complete KL annealing during the pre-training stage, while for other models we
+found it beneficial to anneal only up to a KL-weight KL < 1.0 in the ELBO during the first stage and
+complete KL annealing during the main end-to-end LSGM training stage. This provides additional
+flexibility in learning an expressive distribution in latent space during the second training stage, as
+it prevents more latent variables from becoming inactive while the prior is being trained gradually.
+However, when using a very large backbone VAE together with an SGM objective that does not
+correspond to maximum likelihood training, i.e. wun- or wre-weighting, we empirically observe that
+this approach can also hurt NLL, while slightly improving FID (see CIFAR10 (best FID) model).
+
+Note that the VAE Backbone performance for CIFAR10 reported in Tab. 2 in the main paper
+corresponds to the 20-group backbone VAE (trained to full KL-weight KL = 1.0) from the CIFAR10
+(balanced) LSGM model (see hyperparameter Tab. 7).
+
+Image Decoders: Since SGMs [2] assume that the data is continuous, they rely on uniform de-
+quantization when measuring data likelihood. However, in LSGM, we rely on decoders designed
+specifically for images with discrete intensity values. On color images, we use mixtures of discretized
+logistics [82], and on binary images, we use Bernoulli distributions. These decoder distributions are
+both available from the NVAE implementation.
+
+G.2 Latent SGM Prior
+
+Our denoising networks for the latent SGM prior are based on the NCSN++ architecture from Song et
+al. [2], adapted such that the model ingests and predicts tensors according to the VAE's latent variable
+dimensions. We vary hyperparameters such as the number of residual cells per spatial resolution level
+
+    7https://github.com/NVlabs/NVAE (NVIDIA Source Code License)
+
+                       32
+and the number of channels in convolutions. Note that all our models use 0.2 dropout in the SGM
+prior. Some of our models use upsampling and downsampling operations with anti-aliasing based on
+Finite Impulse Response (FIR) [107], following Song et al. [2].
+
+NVAE has a hierarchical latent structure. For small image datasets including CIFAR-10, MNIST and
+OMNIGLOT all the latent variables have the same spatial dimensions. Thus, the diffusion process
+input z0 is constructed by concatenating the latent variables from all groups in the channel dimension.
+Our NVAE backbone on the CelebA-HQ-256 dataset comes with multiple spatial resolutions in latent
+groups. In this case, we only feed the smallest resolution groups to the SGM prior and assume that
+the remaining groups have a standard Normal distribution.
+
+G.3 Training Details
+
+To optimize our models, we are mostly following the previous literature. The VAE's encoder and
+decoder networks are trained using an Adamax optimizer [108], following NVAE [20]. In the
+second stage, the whole model is trained with an Adam optimizer [108] and we perform learning
+rate annealing for the VAE network optimization, while we keep the learning rate constant when
+optimizing the SGM prior parameters. At test time, we use an exponential moving average (EMA)
+of the parameters of the SGM prior with 0.9999 EMA decay rate, following [1, 2]. Note that, when
+using the VPSDE with linear (t), we are also generally following [1, 2] and use 0 = 0.1 and
+1 = 20.0. We did not observe any benefits in using the EMA parameters for the VAE networks.
+
+G.4 Evaluation Details
+
+For evaluation, we are drawing samples and calculating log-likelihoods using the probability flow
+ODE, leveraging black-box ODE solvers, following [73, 106, 2]. Similar to [2], we are using an
+RK45 ODE solver [109], based on scipy, using the torchdiffeq interface 8. Integration cutoffs
+close to zero and ODE solver error tolerances used for evaluation are indicated in Tab. 7 (for example,
+for the VPSDE with linear (t) we usually use 02 = 0 and therefore have that t2 goes to 0 at t = 0,
+hence preventing us from integrating the probability flow ODE all the way to exactly 0. This was
+handled similarly by Song et al. [2]).
+
+Following the conventions established by previous work [88, 3, 1, 5], when evaluating our main
+models we compute FID at frequent intervals during training and report FID and NLL at the minimum
+observed FID.
+
+Vahdat and Kautz in NVAE [20] observe that setting the batch normalization (BN) layers to train mode
+during sampling (i.e., using batch statistics for normalization instead of moving average statistics)
+improves sample quality. We similarly observe that setting BN layers to train mode improves sample
+quality by about 1 FID score on the CelebA-HQ-256 dataset, but it does not affect performance on
+the CIFAR-10 dataset. In contrast to NVAE, we do not change the temperature of the prior during
+sampling, as we observe that it hurts generation quality.
+
+G.5 Ablation Experiments
+
+Here we provide additional details and discussions about the ablation experiments performed in the
+paper.
+
+G.5.1 Ablation: SDEs, Objective Weighting Mechanisms and Variance Reduction
+
+The models that were used for the ablation experiment on SDEs, objective weighting mechanisms
+and variance reduction and produced the results in Tab. 6 in the main paper use an overall similar
+setup as the CIFAR10 (best NLL) one, with a few exceptions: They are trained only for 1000 epochs
+and evaluation always happens using the checkpoint at the end of training. Furthermore, the total
+batchsize over all GPUs is reduced from 256 to 128. Additionally, only 2 instead of 8 cells per
+residual are used in the latent SGM prior networks. Finally, the VAE's KL term is annealed all the
+way to KL = 1.0 during the first training stage for these experiments. All other hyperparameters
+correspond to the CIFAR10 (best NLL) setup, except those that are explicitly varied as part of the
+ablation study and mentioned in Tab. 6 in the paper.
+
+    8https://github.com/rtqichen/torchdiffeq (MIT License)
+
+                                                          33
+Table 7: Hyperparameters for our main models. We use the same notations and abbreviations as in Tab. 6 in
+main paper.
+
+Hyperparameter                     CIFAR10 CIFAR10 CIFAR10 CelebA-HQ-256 CelebA-HQ-256 OMNIGLOT MNIST
+                                   (best FID) (balanced) (best NLL) (best quantitative) (best qualitative)
+
+VAE Backbone                         0            0           2             2                 2            0          0
+# normalizing flows                  1            1           1             3                 2            1          1
+# latent variable scales            20           20           4             8                10            3          2
+# groups in each scale             162           162        162     1282, 642, 322       1282, 642       162         82
+spatial dims. of z in each scale     9            9          45            20                20           20         20
+# channel in z                     128           128        256            64                64           64         64
+# initial channels in enc.           2            2           3             2                 2            3          1
+# residual cells per group         10-2         10-2        10-2       3 × 10-2          3 × 10-2       10-2       10-2
+NVAE's spectral reg. 
+                                                 600        400           200               200          200        200
+Training                              400       10-2        10-2         10-2               10-2        10-2       10-2
+(VAE pre-training)                   10-2                                                                           100
+# epochs                                         32          64             4                 4           64
+learning rate VAE                     32          8           4            16                16            2          2
+batch size per GPU                            KL=1.0     KL=0.7        KL=1.0            KL=1.0       KL=1.0     KL=0.7
+# GPUs                                 8
+KL annealing to                    KL=0.7         3           3             4                 5            3          2
+                                                  8           8             8                 8            8          8
+Latent SGM Prior                       3      [512]×3    [512]×3    256, [512]×3    [320]×2, [640]×3  [256]×3    [256]×2
+# number of scales                     8         yes         yes          yes                yes          no         no
+# residual cells per scale         [512]×3
+# conv. channels at each scale        yes       1875        1875         1000               2000        1500        800
+use FIR [107]                                   10-4        10-4         10-4                 -         10-4       10-4
+                                                10-4        10-4         10-4                         3 × 10-4   3 × 10-4
+Training                             1875                                                   10-4
+(Main LSGM training)                 10-4        16          16             4                 8           32         32
+# epochs                             10-4        16          16            16                16            4          4
+                                                 no      continued         no                no       continued  continued
+learning rate VAE                      16     VPSDE    Geo. VPSDE       VPSDE                          VPSDE      VPSDE
+                                                 0.0     3 × 10-5         0.0             VPSDE           0.0        0.0
+learning rate SGM prior                16         -        0.999            -                0.0           -          -
+batch size per GPU                              0.01         0.0          0.01                -          0.01       0.01
+# GPUs                             continued     wun         wll          wre               0.01          wll        wll
+KL annealing                                   run(t)      U[0, 1]       rre(t)              wre        rll(t)     rll(t)
+SDE                                 VPSDE        rew.       rew.         rll(t)            rre(t)        rew.       rew.
+02 (= m2 in for Geo. VPSDE)                                                                   -
+m2 ax (only for Geo. VPSDE)            0.0      10-6        10-6         10-5                           10-5       10-5
+t-sampling cutoff during training               10-5        10-5         10-5               10-5        10-5       10-5
+SGM prior weighting mechanism           -                                                   10-5
+t-sampling approach (SGM-obj.)
+t-sampling approach (q-obj.)          0.01
+                                      wun
+                                     run(t)
+                                      rew.
+
+Evaluation                         10-6
+ODE solver integration cutoff      10-5
+ODE solver error tolerance
+
+As discussed in the main paper, the results of this ablation study overall validate that importance
+sampling is important to stabilize training, that the wll-weighting mechanism as well as our novel
+geometric VPSDE are well suited for training towards strong likelihood, and that the wun- and
+wre-weighting mechanisms tend to produce better FIDs. Although these trends generally hold, it is
+noteworthy that not all results translate perfectly to our large models that we used to produce our
+main results. For instance, the setting with wre-weighting and no importance sampling for the SGM
+objective, which produced the best FID in Tab. 6 (main paper), is generally unstable for our bigger
+
+models, in line with our observation that IS is usually necessary to stabilize training. The stable
+
+training run for this setting in Tab. 6 can be considered an outlier.
+
+Furthermore, for CIFAR10 we obtained our very best FID results using the VPSDE, wun-weighting,
+IS, and sample reweighting for the q-objective, while for the slightly smaller models used for the
+results in Tab. 6, there is no difference between using sample reweighting and drawing a separate
+batch t with rll(t) for training q for this case (see Tab. 6 main paper, VPSDE, wun, run(t) fields). Also,
+CelebA-HQ-256 behaves slightly different for the large models in that the VPSDE with wre-weighting
+and sampling a separate batch t with rll(t) for q-training performed best by a small margin (see
+hyperparameter Tab. 7).
+
+G.5.2 Ablation: End-to-End Training
+
+The model used for the results on the ablation study regarding end-to-end training vs. fully separate
+VAE and SGM prior training is the same one as used for the ablation study on SDEs, objective
+weighting mechanisms and variance reduction above, evaluated in a similar way. For this experiment,
+we used the VPSDE, wun-objective weighting, IS for t with run(t) when training the SGM prior,
+and we did draw a second batch t with rll(t) for training q (only relevant for the end-to-end training
+setup).
+
+                                                       34
+G.5.3 Ablation: Mixing Normal and Neural Score Functions
+
+The model used for the ablation study on mixing Normal and neural score functions is again similar
+to the one used for the other ablations with the exception that the underlying VAE has only a single
+latent variable group, which makes it much smaller and removes all hierarchical dependencies
+between latent variables. We tried training multiple models with larger backbone VAEs, but they were
+generally unstable when trained without our mixed score parametrization, which only hightlights
+its importance. As for the previous ablation, for this experiment we used the VPSDE, wun-objective
+weighting, IS for t with run(t) when training the SGM prior, and we did draw a second batch t with
+rll(t) for training q.
+
+G.6 Training Algorithms
+
+To unambiguously clarify how we train our LSGMs, we summarized the training procedures in three
+different algorithms for different situations:
+
+       1. Likelihood training with IS. In this case, the SGM prior and the encoder share the same
+          weighted likelihood objective and do not need to be updated separately.
+
+       2. Un/Reweighted training with separate IS of t for SGM-objective and q-objective. Here,
+           the SGM prior and the encoder need to be updated with different weightings, because the
+           encoder always needs to be trained using the weighted (maximum likelihood) objective.
+          We draw separate batches t using separate IS distribution for the two differently weighted
+           objectives (i.e. last term in Eq. 8 from main paper vs. Eq. 9).
+
+       3. Un/Reweighted training with IS of t for the SGM-objective and reweighting for the q-
+           objective. What this means is that when training the encoder with the score-based cross
+           entropy term (last term in Eq. 8 from main paper), we are using an importance sampling
+           distribution that was actually tailored to un- or reweighted training for the SGM objective
+          (Eq. 9 from main paper) and therefore isn't optimal for the weighted (maximum likelihood)
+           objective necessary for encoder training. However, if we nevertheless use the same impor-
+           tance sampling distribution, we do not need to draw a second batch of t for encoder training.
+           In practice, this boils down to different (re-)weighting factors in the cross entropy term (see
+          Algorithm 3).
+
+For efficiency comparison between approaches (2) and (3), we observe that (3) consumes more
+memory than (2) in general but it can be faster due to the shared computation for the denoising step.
+Due to the memory limitations, we use (2) on large image datasets. Note that the choice between (2)
+and (3) may affect generative performance as we empirically observed in our experiments.
+
+Algorithm 1 Likelihood training with IS
+
+Input: data x, parameters {, , }
+
+Draw z0  q(z0|x) using encoder.
+
+Draw t  rll(t) with IS distribution of likelihood weighting (Sec. B).
+Calculate µt(z0) and t2 according to SDE.
+Draw zt  q(zt|z0) using zt = µt(z0) + t2 where  N ( , 0, I).
+Calculate score (zt, t) = t(1 - ) zt +  (zt, t).
+
+Calculate cross entropy CE(q(z0|x)||p(z0))       1      wll (t)  ||  -  (zt, t)||22.
+                                               rll (t)     2
+
+Calculate objective L(x, , , ) = - log p(x|z0) + log q(z0|x) + CE(q(z0|x)||p(z0)).
+
+Update all parameters {, , } by minimizing L(x, , , ).
+
+                                           35
+Algorithm 2 Un/Reweighted training with separate IS of t
+
+   Input: data x, parameters {, , }
+   Draw z0  q(z0|x) using encoder.
+
+Update SGM prior
+
+Draw t  run/re(t) with IS distribution for un/reweighted objective (Sec. B).
+
+Calculate µt(z0) and t2 according to SDE.
+Draw zt  q(zt|z0) using zt = µt(z0) + t2 where  N ( , 0, I).
+Calculate score (zt, t) = t(1 - ) zt +  (zt, t).
+
+Calculate objective L()         || 1 wun/re(t)        -    (zt, t)||22.
+
+                             run/re(t) 2
+
+Update SGM prior parameters  by minimizing L().
+
+Update VAE Encoder and Decoder with new t sample
+
+Draw t  rll(t) with IS distribution for likelihood weighting (Sec. B).
+Calculate µt(z0) and t2 according to SDE.
+Draw zt  q(zt|z0) using zt = µt(z0) + t2 where  N ( , 0, I).
+Calculate score (zt, t) = t(1 - ) zt +  (zt, t).
+
+Calculate cross entropy CE(q(z0|x)||p(z0))                      1      wll (t)  ||  -  (zt, t)||22.
+                                                              rll (t)     2
+
+Calculate objective L(x, , ) = - log p(x|z0) + log q(z0|x) + CE(q(z0|x)||p(z0)).
+
+Update VAE parameters {, } by minimizing L(x, , ).
+
+Algorithm 3 Un/Reweighted training with IS of t for the SGM objective
+
+   Input: data x, parameters {, , }
+   Draw z0  q(z0|x) using encoder.
+   Draw t  run/re(t) with IS distribution for un/reweighted objective (Sec. B).
+   Calculate µt(z0) and t2 according to SDE.
+   Draw zt  q(zt|z0) using zt = µt(z0) + t2 where  N ( , 0, I).
+   Calculate score (zt, t) = t(1 - ) zt +  (zt, t).
+   Compute LDSM := || - (zt, t)||22
+
+SGM prior loss
+
+Calculate  objective  L()        1       wun/re  (t)  LDS     .
+                             run/re (t)       2
+                                                           M
+
+VAE Encoder and Decoder loss computed with the same t sample
+
+Calculate  cross  entropy  CE(q (z0 |x)||p (z0 ))                 1       wll (t)   LDS  M  .
+                                                              run/re (t)     2
+
+Calculate objective L(x, , ) = - log p(x|z0) + log q(z0|x) + CE(q(z0|x)||p(z0)).
+
+   Update all parameters
+Update SGM prior parameters  by minimizing L().
+Update VAE parameters {, } by minimizing L(x, , ).
+
+G.7 Computational Resources
+In total, the research project consumed  350, 000 GPU hours, which translates to an electricity
+consumption of about  50 MWh. We used an in-house GPU cluster of V100 NVIDIA GPUs.
+
+H Additional Experiments
+
+H.1 Additional Samples
+In this section, we provide additional samples generated by our models for CIFAR-10 in Fig. 7, and
+CelebA-256-HQ in Fig. 8.
+
+                                                          36
+Table 8: Experiment with a small VAE architecture on dynamically binarized MNIST.
+
+Method                                        NELBO  (nats)
+
+Small VAE [24]                                   84.08±0.10
+Small VAE + inverse autoregressive flow [24]     80.80±0.07
+
+Our small VAE                                       83.85
+Our LSGM w/ small VAE                               79.23
+
+Table 9: Number of function evaluations (NFE) of ODE solver during proba-
+bility flow-based latent SGM prior sampling and corresponding sampling time
+for our main CIFAR-10 models. Sampling was done in batches of size 16 using
+a single Titan V GPU. Results are averaged over 20 sampling runs. See Tab. 2
+in main text for generative performance metrics.
+
+Method           NFE                          Sampling Time 
+
+LSGM (FID)       138                          11.07 sec.
+                                              9.58 sec.
+LSGM (NLL)       120                          10.26 sec.
+
+LSGM (balanced)  128
+
+H.2 MNIST: Small VAE Experiment
+
+Here, we examine our LSGM on a small VAE architecture. We specifically follow [24] and build
+a small VAE in the NVAE codebase. In particular, the model does not have hierarchical latent
+variables, but only a single latent variable group with a total of 64 latent variables. Encoder and
+decoder consist of small ResNets with 6 residual cells in total (every two cells there is a down- or
+up-sampling operation, so we have 3 blocks with 2 residual cells per block). The experiments are
+done on dynamically binarized MNIST. As we can see in Table 8, our implementation of the VAE
+obtains a similar test NELBO as [24]. However, our LSGM improves the NELBO by almost 4.6 nats.
+This simple experiment shows that we can even obtain good generative performance with our LSGM
+using small VAE architectures.
+
+H.3 CIFAR-10: Neural Network Evaluations during Sampling
+
+In Tab. 9, we report the number of neural network evaluations performed by the ODE solver during
+sampling from our CIFAR-10 models. ODE solver error tolerance is 10-5 and time integration
+cutoff is 10-6. CIFAR-10 is a highly diverse and more multimodal dataset, compared to CelebA-HQ-
+256. Because of that, the latent SGM prior that is learnt is more complex, requiring more function
+evaluations.
+
+H.4 CIFAR-10: Sub-VPSDE vs. VPSDE
+
+In App. B.5 we discussed how variance reduction techniques derived based on the VPSDE can also
+help reducing the variance of the sample-based estimate of the training objective when using the
+Sub-VPSDE in the latent space SGM. Here, we perform a quantitative comparison between the
+VPSDE and the Sub-VPSDE, following the same experimental setup and using the same models as
+for the ablation study on SDEs, objective weighting mechanisms, and variance reduction (experiment
+details in App. G.5.1). The results are reported in Tab. 10. We find that the VPSDE generally
+performs slightly better in FID, while we observed little difference in NELBO in these experiments.
+Importantly, the Sub-VPSDE also did not outperform our novel geometric VPSDE in NELBO. We
+also see that the combination of Sub-VPSDE with wre-weighting performs poorly. Consequently, we
+did not explore the Sub-VPSDE further in our main experiments.
+
+H.5 CelebA-HQ-256: Different ODE Solver Error Tolerances
+
+In Fig. 9, we visualize CelebA-HQ-256 samples from our LSGM model for varying ODE solver error
+tolerances.
+
+                                                          37
+Table 10: Comparing the VPSDE and Sub-VPSDE in LSGM. For detailed explanations
+of abbreviations in the table, see Tab. 6 in main paper. Note that importance sampling
+distributions are generally based on derivations with the VPSDE, even when using the
+Sub-VPSDE, as discussed in App. B.5.
+
+ SGM-obj.-weighting     wll     wun     wre
+t-sampling (SGM-obj.)  rll(t)  run(t)  rre(t)
+                       rew.    rll(t)  rll(t)
+  t-sampling (q-obj.)
+
+VPSDE      FID         8.00    5.39    6.19
+
+           NELBO       2.97    2.98    2.99
+
+Sub-VPSDE    FID       8.46    5.73    19.10
+           NELBO       2.97    2.97    3.04
+
+Figure 7: Additional uncurated samples generated by LSGM on the CIFAR-10 dataset (best FID
+model). Sampling in the latent space is done using the probability flow ODE.
+
+                                                          38
+Figure 8: Additional uncurated samples generated by LSGM on the CelebA-HQ-256 dataset. Sam-
+pling in the latent space is done using the probability flow ODE.
+
+                                                          39
+H.6 CelebA-HQ-256: Ancestral Sampling
+For our experiments in this paper, we use the probability flow ODE to sample from the model.
+However, on CelebA-HQ-256, we observe that ancestral sampling [2, 1, 27] from the prior instead
+of solving the probability flow ODE often generates much higher quality samples. However, the
+FID score is slightly worse for this approach. In Fig. 10, Fig. 11, and Fig. 12, we visualize samples
+generated with different numbers of steps in ancestral sampling.
+H.7 CelebA-HQ-256: Sampling from VAE Backbone vs. LSGM
+For the quantitative results on the CelebA-HQ-256 dataset in the main text, we use an LSGM with
+spatial dimension of 32×32 for the latent variables in the SGM prior. However, for the qualitative
+results we used an LSGM with the prior spatial dimension of 64×64. The 32×32 dimensional model
+achieves a better FID score compared to the 64×64 dimensional model (FID 7.22 vs. 8.53) and
+sampling from it is much faster (2.7 sec. vs. 39.9 sec.). However, the visual quality of the samples
+is slightly worse. In this section, we visualize samples generated by the 32×32 dimensional model
+as well as the VAE backbone for this model. In this experiment, the VAE backbone is fully trained.
+Samples from our VAE backbone are visualized in Fig. 13 and for our 32×32 dimensional LSGM in
+Fig. 14.
+H.8 Evolution Samples on the ODE and SDE Reverse Generative Process
+In Fig. 15, we visualize the evolution of the latent variables under both the reverse generative SDE and
+also the probability flow ODE. We are decoding the intermediate latent samples along the reverse-time
+generative process via the decoder to pixel space.
+
+                                                          40
+                                           (a) ODE solver error tolerance 10-2
+
+                                            (b) ODE solver error tolerance 10-3
+
+                                            (c) ODE solver error tolerance 10-4
+
+                                            (d) ODE solver error tolerance 10-5
+Figure 9: The effect of ODE solver error tolerance on the quality of samples. In contrast to the original SGM [2]
+where high error tolerance results in pixelated images (see Fig. 3 in [2]), in our case high error tolerances create
+low-frequency artifacts. Reducing the error tolerance improves subtle details slightly.
+
+                                                          41
+Figure 10: Uncurated samples generated by LSGM on the CelebA-HQ-256 dataset using 200-step
+ancestral sampling for the prior.
+
+                                                          42
+Figure 11: Uncurated samples generated by LSGM on the CelebA-HQ-256 dataset using 1000-step
+ancestral sampling for the prior.
+
+                                                          43
+Figure 12: Additional uncurated samples generated by LSGM on the CelebA-HQ-256 dataset using
+1000-step ancestral sampling.
+
+                                                          44
+Figure 13: Uncurated samples generated by our VAE backbone without changing the temperature of
+the prior. The poor quality of the samples from the VAE backbone is partially due to the large spatial
+dimensions of the latent space in which long-range correlations are not encoded well.
+
+Figure 14: Uncurated samples generated by LSGM with the SGM prior applied to the latent variables
+of 32×32 spatial dimensions, on the CelebA-HQ-256 dataset. Sampling in the latent space is done
+using the probability flow ODE.
+
+                                                          45
+                                     (a) Evolution of latent variables under the SDE
+
+                                      (b) Evolution of latent variables under the SDE
+
+                                      (c) Evolution of latent variables under the ODE
+
+                                      (d) Evolution of latent variables under the ODE
+Figure 15: We visualize the evolution of the latent variables under both the reverse gener-
+ative SDE (a-b) and also the probability flow ODE (c-d). Specifically, we feed latent vari-
+ables from different stages along the generative denoising diffusion process to the decoder to
+map them back to image space. The 13 different images in each row correspond to the times
+t = [1.0, 0.9, 0.8, 0.7, 0.6, 0.5, 0.4, 0.3, 0.2, 0.1, 0.05, 0.01, 10-5] along the reverse denoising diffu-
+sion process. The evolution of the images is noticeably different from diffusion models that are run
+directly in pixel space (see, for example, Fig. 1 in [2]).
+
+                                                          46
+

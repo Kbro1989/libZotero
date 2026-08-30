@@ -1,0 +1,372 @@
+arXiv:2310.09499v4 [cs.CL] 23 Apr 2024                  ONE-SHOT SENSITIVITY-AWARE MIXED SPARSITY PRUNING
+                                                                           FOR LARGE LANGUAGE MODELS
+
+                                                      Hang Shao1, Bei Liu1, Bo Xiao2, Ke Zeng2, Guanglu Wan2, Yanmin Qian1
+
+                                                                   1Auditory Cognition and Computational Acoustics Lab
+                                                                     MoE Key Lab of Artificial Intelligence, AI Institute
+
+                                        Department of Computer Science and Engineering, Shanghai Jiao Tong University, Shanghai, China
+                                                                                     2Meituan, Beijing, China
+
+                                                                         ABSTRACT                               techniques are able to reduce memory cost of each weight element
+                                                                                                                from 16-bit as a float point number to equivalently 3-4 bits.
+                                        Various Large Language Models (LLMs) from the Generative Pre-
+                                        trained Transformer (GPT) family have achieved outstanding per-            In addition, Model sparsity pruning method mainly involves re-
+                                        formances in a wide range of text generation tasks. However, the        moving network elements by individual weights (unstructured prun-
+                                        enormous model sizes have hindered their practical use in real-world    ing) or by entire rows and columns of weight matrices (structured
+                                        applications due to high inference latency. Therefore, improving        pruning). Pruning can also be applied to various parts of the model,
+                                        the efficiencies of LLMs through quantization, pruning, and other       including entire layers [17], heads, intermediate dimensions [18],
+                                        means has been a key issue in LLM studies. In this work, we pro-        and blocks of weight matrices [19]. The study of model pruning
+                                        pose a method based on Hessian sensitivity-aware mixed sparsity         emerged since the 1980s' [20­22], and it has demonstrated favor-
+                                        pruning to prune LLMs to at least 50% sparsity without the need of      able outcomes across Computer Vision and NLP tasks. However,
+                                        any retraining. It allocates sparsity adaptively based on sensitivity,  these methods require extensive retraining of pruned models to re-
+                                        allowing us to reduce pruning-induced error while maintaining the       store the performance level of the original models [13]. While this is
+                                        overall sparsity level. The advantages of the proposed method ex-       feasible for smaller-scale models, it becomes prohibitive for LLMs
+                                        hibit even more when the sparsity is extremely high. Furthermore,       due to the associated computational costs. While there are some
+                                        our method is compatible with quantization, enabling further com-       one-shot pruning methods that don't require retraining [22,23], their
+                                        pression of LLMs. We have released the available code1.                 effectiveness are limited. Therefore, extending the existing pruning
+                                                                                                                methods to models with 10-100+ billion parameters is still an open
+                                           Index Terms-- model compression, sparsity pruning, large lan-        and challenging problem.
+                                        guage models, mixed sparsity
+                                                                                                                   Recently, SparseGPT [14] further developed the Optimal Brain
+                                                                   1. INTRODUCTION                              Surgeon (OBS) [21] approach. It achieved at least 50% pruning ra-
+                                                                                                                tio on LLMs with over a billion parameters in one shot, minimizing
+                                        Large language models (LLMs) from the GPT family have demon-            performance loss without requiring any retraining. Based on previ-
+                                        strated exceptional performances across a wide range of tasks. How-     ous studies in this area, we believe there is still considerable room for
+                                        ever, due to their large sizes and high computational costs, model      further improvements. Firstly, saliency criterion for weight element
+                                        deployment face new challenges upon GPU memory consumption              selection, such as OBS and OBD [21], each captured one aspect of
+                                        as well as inference latency. Consequently, there's a prominent need    the weight element's saliency. We show that fusing the two criteria
+                                        to compress LLM models to a feasible range in order to make use of      of OBS and OBD yields a better option for selecting the weights to
+                                        them in real applications. In the literature, there have been various   be pruned, as observed in our experiments.
+                                        mainstream model compression techniques available, for pre-trained
+                                        models in particular, including knowledge distillation [1­4], model        Moreover, SparseGPT assumes a uniform sparsity across all lay-
+                                        quantization [5­9], model sparsity pruning [10­14], and etc.            ers. Inspired by the analysis of weight sensitivity in mixed-precision
+                                                                                                                quantization methods [24,25], we investigated the sensitivity proper-
+                                           Knowledge distillation focuses on transferring knowledge from a      ties of different LLM layers. The magnitude of pruning ratios (spar-
+                                        large teacher model to a smaller student model by predicting pseudo-    sity) for each layer are then determined based on their respective
+                                        labels or leveraging the knowledge from intermediate hidden lay-        sensitivities. Specifically, we utilize second-order information (the
+                                        ers. This process enables the compact student model to achieve          Hessian matrix) to assess the sensitivity of each layer.
+                                        approximate accuracy comparable to that of the teacher model.
+                                        Model quantization involves replacing high-precision floating-point        Furthermore, we extend pruning to individual weight-level, an
+                                        parameters with lower-precision integer parameters, thereby reduc-      even finer granularity, for more precise trade-off. This means that
+                                        ing the model's storage capacity and inference latency. Quantization    each weight matrix is assigned a distinct sparsity level according to
+                                        methods can be categorized into Post-Training Quantization (PTQ)        its sensitivity. In experiments with multiple cutting edge LLMs, our
+                                        [15] and Quantization-Aware Training (QAT) [16] approaches. At          approach beats SparseGPT in terms of both perplexity and zero-shot
+                                        present, 4-bit quantization [6] and mixed-precision quantization [9]    downstream task performances.
+
+                                              corresponding author                                                 In summary, our contributions are as follows: (1) We introduce
+                                            1https://github.com/talkking/MixGPT                                 a more comprehensive criterion for selecting the pruned weight el-
+                                                                                                                ements. (2) We propose a novel sensitivity-aware mixed sparsity
+                                                                                                                pruning strategy based on Hessian information. (3) To the best of our
+                                                                                                                knowledge, this work achieves a new state-of-the-art performance in
+the field of LLM pruning.
+                          2. METHODOLOGY
+
+This section describes the Improved Saliency Criterion (ISC) and
+the sensitivity-aware mixed sparsity pruning method. ISC serves the
+purpose of selecting the optimal weight elements to be pruned, and
+the sensitivity level facilitates the allocation of the pruning ratios for
+different layers.
+
+2.1. Mask Selection and Weight Reconstruction Based on OBS
+
+In this sub-section, we review the OBS algorithm [21] adopted in
+
+SparseGPT [14], which serves as a part of our saliency criterion. The
+
+OBS algorithm firstly prunes some weight elements, then updates
+
+the rest for error compensation. Denoting the original weights as
+W , the objective is to ensure that the optimally pruned weights W 
+
+satisfy equation (1), where X is the input data used for calibration
+
+purpose.                                                                    Fig. 1: Sensitivity level of different layers for three LLM models:
+                                                                            LLaMA-7B, LLaMA2-7B, and Baichuan-7B.
+          W  = arg min ||W X - W^ X||22,           (1)
+                     W^                                                     2.3.1. Calculation of Sensitivity Based on Hessian Average Trace
+
+   In the first step, to-be-pruned weight elements are determined           Sensitivity level is defined as the degree to which perturbations in
+                                                                            model weights would affect the output error. Inspired by mixed-
+through the saliency criterion, denoted e.g., m for the m-th row.           precision quantization [25], we extend the sensitivity of model
+                                                                            weights in mixed-precision quantization to the field of LLM pruning.
+In OBS, m is given by (2), where wm represents the original                 The sensitivity level is derived from the trace of the Hessian matrix
+weight elements of the m-th row. H-1 denotes the inverse matrix of          H. Direct computation of H for LLM is challenging because ex-
+H = XXT (the Hessian matrix of the objective function). One can             plicit calculation the Hessian matrix under cross-entropy loss would
+                                                                            be time-and-space consuming. Nevertheless, we can address this is-
+select the weight elements associated with the smallest p% (sparsity        sue using stochastic linear algebra [26] based methods for fast trace
+                                                                            estimation. As shown in (5), I denotes identity matrix, and z is
+level) of m, and set them to 0.                                             a random vector with i.i.d. components, sampled from a standard
+                                                                            Gaussian distribution. N denotes the number of sampled data points.
+                  m  =      wm 2                   (2)                      The second line in (5) uses the Hutchinson algorithm [27] for effi-
+                         [H -1 ]mm                                          cient approximation, which we follow in the implementation.
+
+   Secondly, one need to update the remaining weights to compen-
+sate for the error. Let W = W  - W be the optimal adjustment
+
+of the remaining weight elements. The objective then becomes min-
+imizing the expectation of ||W X - (W + W )X||22. Following
+Taylor expansion, the update formula is given by (3) for the m-th
+
+row of W .
+
+          Wm      =  -   [H  wm      H:-,m1        (3)
+                             -1 ]mm
+                                                                            T r(H) = T r(HI) = T r(HE[zzT ]) = E[T r(HzzT )]
+
+2.2. Improved Saliency Criterion                                            = E[zT Hz]  1         N                           (5)
+                                                                                               N
+An alternative saliency criterion s had been proposed in the Optimal                                   ziT Hzi
+Brain Damage (OBD) [20] work, where s = wm 2 Hmm. The first
+step involves computing the second-order derivative of the loss with                              i=1
+respect to the weights W , which is the Hessian matrix H = XXT ,
+derived from (1). The weight elements are then sorted according                For each weight matrix, we select the average trace of the Hessian
+to the saliency levels, and elements with lower saliency are pruned.        as its sensitivity sen, as shown in (6), where T r(H)i,j represents
+This approach aimed to achieve the minimal error in the pruning             the trace of the Hessian matrix for the j-th weight matrix in the i-th
+process. However, it only focused on minimizing the direct error            layer, and n denotes the number of diagonal elements in the Hessian
+and did not take error compensation into account.                           matrix. seni,j represents the sensitivity of the corresponding weight
+                                                                            matrix.
+   Building upon the OBS and OBD approaches, this work consid-
+ers combining the saliency criteria  and s, in order to balance the                               1
+different aspects of previously used methods. We also apply error           seni,j = n T r(H)i,j                              (6)
+compensation following the approach in 2.1. We define a more com-
+prehensive saliency criterion ­ ISC (Improved Saliency Criterion) in        2.3.2. Rational Mixed Sparsity Assignment Based on Sensitivity
+(4). This criterion allows for a more precise determination of prun-
+ing targets.                                                                After obtaining the sensitivity level of weight matrices, we can al-
+                                                                            locate sparsity ratio individually to each one. This is referred to as
+          ISC  =  wm 2 (Hmm       +       1     )  (4)                      weight-level mixed sparsity allocation. Pruning targets are selected
+                                     [H -1 ]mm                              adaptively within each weight matrix. We can also sum the sensitiv-
+                                                                            ities of all weight matrices in the same layer to obtain the sensitivity
+2.3. Mixed Sparsity Pruning Based on Hessian Sensitivity                    level of that layer. This is referred to as layer-level mixed sparsity
+Awareness                                                                   allocation.
+
+In Section 2.1 we assumed a constant sparsity ratio p. In this section,        Layer-level sensitivity analysis can be seen in Figure 1. The three
+we propose a sensitivity-aware pruning strategy.                            different models exhibit some commonalities in that the bottom and
+Fig. 2: Sensitivity level of different weight components in LLaMA-                                   3. EXPERIMENTS
+7B.                                                                      3.1. Experiment Setup
+
+top layers are more likely to show higher sensitivities, while the in-   3.1.1. Model, Dataset and Evaluation
+termediate layers have lower sensitivities. This may be attributed to
+the fact that the bottom layers determine the model's initial encod-     We employ several cutting edge LLM models in the experiments,
+ing of the input embeddings, and their variations can have a signif-     including LLaMA [28], LLaMA2 [29], and Baichuan [30]. We pri-
+icant impact on the intermediate layers, thereby affecting the over-     oritize the study on 7B/13B models as these are more widely adopted
+all model performance. The top layers are also sensitive since they      in research and applications. We evaluate the pruned models on stan-
+have a direct influence on the model's output. Weight-level sensi-       dard benchmarks such as raw-WikiText2 [31], PTB [32], and C4 [33]
+tivity analysis can be seen in Figure 2. The value matrices (plot        (a subset of the validation sets). As usual, we employ perplexity as
+in green color) in self-attention modules and the down projection        the evaluation metric.
+weights (plot in gray color) in MLP modules are relatively more sen-
+sitive.                                                                     To examine the pruned models' performances on downstream
+                                                                         tasks, we conduct zero-shot accuracy tests on the OpenLLM Leader-
+   We use Algorithm 1 to determine the sparsity of each unit (layer      Board2 by utilizing the popular open-source auto-regressive lan-
+or weight) based on their sensitivities. We rank the sensitivity of      guage model evaluation framework EleutherAI-evalharness 3 . We
+the weight matrices, then assign a corresponding sparsity to each        employ a variety of tasks including ARC (Challenge) [34], Hel-
+one, ensuring that the overall sparsity of this mixed sparsity approach  laSwag [35], TruthfulQA (Multiple-Choice2) [36], and PIQA [37]
+equals a pre-defined overall sparsity level p. For example, the typical  to compare the pruned models with their corresponding original ver-
+value for sparsity interval's half-width  is 0.1. When the overall       sions. This allows us to assess the performance of the model across a
+sparsity p is 0.5, L and R would be 0.4 and 0.6, respectively. This      variety of tasks and gain insights into its generalization capabilities.
+means that the sparsity of each weight falls within the interval [0.4,   The experimental results of our approach are primarily compared
+0.6], and the total sparsity of all weights adds up to 0.5.              with the relative values of dense and baseline models.
+
+Algorithm 1 Sparsity Assignment Based on Sensitivity                     3.1.2. Setup
+
+Input: sen, The sensitivity of each weight within each layer.            We implement our method using PyTorch and HuggingFace's Trans-
+Input: Overall sparsity p, sparsity interval's half-width .              formers library. The most computation-heavy step in our experiment
+Output: spa, The sparsity of each weight within each layer.              was around calculating the trace of the Hessian matrix, which re-
+                                                                         quired 8 NVIDIA A100 GPUs for 13B-parameter models. All prun-
+1: function SPARSITY-ASSIGNMENT(sen,p,)                                  ing experiments are one-shot and do not require any fine-tuning or
+                                                                         retraining. For calibration data, we utilized 128 2048-token seg-
+2: total weight  []                                                      ments. These segments are randomly selected from the first partition
+                                                                         of the C4 dataset. We ensure that no task-specific data is seen during
+3: Append(all elements of sen) to total weight                           the pruning process to guarantee zero-shot conditions. The baselines
+                                                                         we compare against mainly consist of the standard magnitude prun-
+4: total weight  sorted(total weight)                                    ing [38] and SparseGPT [14] methods.
+
+5: for i  0 to length(sen)-1 do                                          3.2. Experiment Results and Analysis
+
+6:   for j  0 to length(sen[i])-1 do                                     3.2.1. Evaluation on Improved Saliency Criterion
+
+7:   id  rank(total weight, sen[i,j]) # base 0                           In this experiment, we verify the effectiveness of the proposed
+                                                                         saliency criterion. In Table 1, we compare the perplexity for the
+8:   L1-p-                                                               two LLM models under different sparsity strategies and saliency cri-
+                                                                         teria. The experiment results have validated the effectiveness of
+9:   R  2 * (1 - p) - L                                                  ISC as well as the mixed sparsity strategy, as the perplexity of the
+                                                                         pruned models were lower in comparison to Uniform sparsity and
+10:  spa[i,j]  L + id * (R - L) / (len(total weight) - 1)                OBS saliency on all of the examined data sets.
+
+11: return spa                                                           3.2.2. Evaluation on Mixed Sparsity Pruning
+
+                                                                         We adopt a mixed sparsity approach to prune different base models,
+                                                                         as shown in Table 2. It can be seen that our method outperforms
+                                                                         SparseGPT in three mainstream 13B LLM models. The experiment
+                                                                         results demonstrate that our method can further reduce the perfor-
+                                                                         mance degradation caused by pruning, bringing it closer to the dense
+                                                                         model. Since the overall sparsity is set at 50%, our method and
+                                                                         SparseGPT achieve an equal model compression ratio and inference
+                                                                         acceleration effect.
+
+                                                                            Moreover, we conduct tests on zero-shot downstream NLP tasks.
+                                                                         As shown in Table 3, with an overall sparsity level of 50%, the pro-
+                                                                         posed approach outperforms SparseGPT in terms of accuracy. These
+
+                                                                             2https://huggingface.co/spaces/HuggingFaceH4/
+                                                                         open_llm_leaderboard
+
+                                                                             3https://github.com/EleutherAI/
+                                                                         lm-evaluation-harness
+Table 1: Performance perplexity comparison under the condition of
+an overall sparsity level of 50%. "Uniform" denotes a uniform spar-
+sity level; "Mixed" denotes the proposed sensitivity-aware pruning
+strategy.
+
+Model         Sparsity  Saliency  WikiText2     PTB     C4
+LLaMA7B       Uniform     OBS         7.79      65.77   10.17
+              Mixed       ISC         7.11      61.42   9.27
+Baichuan7B    Uniform     OBS         6.77      52.10   8.88
+              Mixed       ISC         6.76      50.12   8.82
+                          OBS        16.74      43.82   27.43
+                          ISC        14.77      38.54   24.54
+                          OBS        14.43      38.50   24.13
+                          ISC        12.29      33.04   20.63
+
+results validate that our method is effective in reducing the errors in-
+troduced by pruning.
+
+Table 2: Under the condition of an overall sparsity rate of 50%,          Fig. 3: Perplexity of different methods with varying sparsity levels
+the three base models have different perplexity results under various     evaluated on PTB.
+methods.
+
+Model         Method     WikiText2              PTB     C4                proach of SparseGPT, where pruning is applied prior to quantization.
+LLaMA-13B     Dense          5.03               32.26   6.80              As shown in Table 4, 3-bit quantization using GPTQ method yields
+LLaMA2-13B    Magnitude     20.25               149.43  25.11             much heavier loss in comparison to 4-bit quantization, with only
+Baichuan-13B  SparseGPT      6.12               43.92   8.13              minor increase of compression ratio [6]. However, when we com-
+              Ours           5.68               38.69   7.56              bine SparseGPT with 50% sparsity and 4-bit quantization, higher
+              Dense          4.88               40.99   6.73              compression ratio and lower performance loss are achieved together.
+              Magnitude      6.77               117.69  9.38              Moreover, as indicated in the last row, the proposed method further
+              SparseGPT      5.99               59.03   8.23              improves the performance compared to SparseGPT at the same com-
+              Ours           5.51               53.03   7.57              pression ratio, confirming the effectiveness of the mixed sparsity ap-
+              Dense          5.61               16.49   8.23              proach. It offers a new SOTA performance via combining quantiza-
+              Magnitude     15.64               48.74   22.23             tion and pruning.
+              SparseGPT      7.52               21.46   10.95
+              Ours           6.63               19.25   9.71              Table 4: The perplexity performance of LLaMA-7B after com-
+                                                                          pression under different methods. Ratio represents the theoretical
+                                                                          model compression ratio.
+
+Table 3: Comparison of the accuracy results of the different methods      Method                     WikiText2  PTB     C4     Ratio
+for zero-shot with an overall sparsity of 50%, where HS stands for        Dense                          5.63   35.79   7.34
+HellaSwag and TQ stands for TruthfulQA.                                   4bit GPTQ [6]                  7.07   34.34   8.19     1.0
+                                                                          3bit GPTQ                     35.25   226.29  17.92  4.0×
+Model         Method     ARC HS TQ PIQA Avg                               SparseGPT 50% + 4bit GPTQ     12.80   88.60   11.37  5.3×
+                                                                          Ours 50% + 4bit GPTQ          10.23   65.49   9.91   8.0×
+              Dense      51.0 77.8 34.3 79.2 60.6                                                                              8.0×
+
+LLaMA-7B SparseGPT 39.5 69.2 36.2 76.6 55.4
+
+              Ours       40.2 71.2 38.1 77.5 56.8                                                     4. CONCLUSIONS
+
+              Dense      47.6 79.1 39.9 80.1 61.7                         In this paper, we have proposed a mixed sparsity pruning method
+                                                                          based on Hessian sensitivity awareness, which assigns sparsity lev-
+LLaMA-13B SparseGPT 41.8 73.9 37.5 79.0 58.1                              els to each weight by discerning their sensitivity through the average
+                                                                          trace of the Hessian matrix. Under the same overall sparsity con-
+              Ours       43.8 76.5 40.4 79.8 60.1                         straint as SparseGPT, our mixed sparsity allocation scheme further
+                                                                          reduces the error introduced by pruning. Moreover, our method ex-
+              Dense      46.3 75.9 38.9 79.1 60.1                         hibits even more significant advantages in scenarios with extremely
+                                                                          high overall sparsity. Additionally, our approach is compatible with
+LLaMA2-7B SparseGPT 41.3 71.1 38.3 76.9 56.9                              quantization, achieving higher compression ratios while minimiz-
+                                                                          ing model performance degradation. Future work will explore the
+              Ours       44.1 72.8 39.4 77.5 58.5                         combination of our approach with mixed-precision quantization to
+                                                                          achieve further improved results.
+              Dense      48.9 79.4 36.9 80.5 61.4
+                                                                                               5. ACKNOWLEDGEMENTS
+LLaMA2-13B SparseGPT 44.9 74.3 37.9 77.9 58.8
+                                                                          This work was supported in part by China NSFC projects un-
+              Ours       47.5 76.9 39.4 79.5 60.8                         der Grants 62122050 and 62071288, in part by Shanghai Mu-
+                                                                          nicipal Science and Technology Commission Project under Grant
+3.2.3. Evaluation on Very High Sparsity Models                            2021SHZDZX0102.
+
+Figure 3 shows that performance degradation expands when the spar-
+sity level increases, which is a common effect for all pruning meth-
+ods examined (results for LLaMA2-13B model plotted). Never-
+theless, the proposed method helps mitigating the degradation even
+more as the sparsity level becomes higher.
+
+3.2.4. Joint Mixed Sparsity Pruning and Quantization
+
+In this experiment, we carry out joint quantization and pruning of
+the model, to see if their effects can be combined. We follow the ap-
+                            6. REFERENCES                                [20] Y. LeCun et al., "Optimal brain damage," Neural Information
+                                                                               Processing Systems,Neural Information Processing Systems,
+ [1] S. Sun et al., "Contrastive distillation on intermediate represen-        Jan 1989.
+      tations for language model compression," in Proceedings of the
+      2020 Conference on Empirical Methods in Natural Language           [21] B. Hassibi et al., "Second order derivatives for network prun-
+      Processing (EMNLP), Jan 2020.                                            ing: Optimal brain surgeon," Neural Information Processing
+                                                                               Systems,Neural Information Processing Systems, Nov 1992.
+ [2] H. Pan et al., "Meta-kd: A meta knowledge distillation frame-
+      work for language model compression across domains," in            [22] E. Frantar et al., "Optimal brain compression: A framework for
+      Proceedings of the 59th Annual Meeting of the Association                accurate post-training quantization and pruning," Aug 2022.
+      for Computational Linguistics and the 11th International Joint
+      Conference on Natural Language Processing (Volume 1: Long          [23] I. Hubara et al., "Accelerated sparse neural training: A prov-
+      Papers), Jan 2021.                                                       able and efficient method to find n:m transposable masks,"
+                                                                               Neural Information Processing Systems,Neural Information
+ [3] S. Sun et al., "Patient knowledge distillation for bert model             Processing Systems, Dec 2021.
+      compression," in Proceedings of the 2019 Conference on Em-
+      pirical Methods in Natural Language Processing and the 9th         [24] Z. Dong et al., "Hawq: Hessian aware quantization of neural
+      International Joint Conference on Natural Language Process-              networks with mixed-precision," in 2019 IEEE/CVF Interna-
+      ing (EMNLP-IJCNLP), Jan 2019.                                            tional Conference on Computer Vision (ICCV), Oct 2019.
+
+ [4] V. Sanh et al., "Distilbert, a distilled version of bert: smaller,  [25] Z. Dong et al., "Hawq-v2: Hessian aware trace-weighted quan-
+      faster, cheaper and lighter," arXiv preprint arXiv:1910.01108,           tization of neural networks," arXiv: Computer Vision and Pat-
+      2019.                                                                    tern Recognition,arXiv: Computer Vision and Pattern Recog-
+                                                                               nition, Nov 2019.
+ [5] H. Bai et al., "Binarybert: Pushing the limit of bert quantiza-
+      tion," in Proceedings of the 59th Annual Meeting of the Associ-    [26] M. Mahoney, "Randomized algorithms for matrices and data,"
+      ation for Computational Linguistics and the 11th International           Mar 2012.
+      Joint Conference on Natural Language Processing (Volume 1:
+      Long Papers), Jan 2021.                                            [27] H. Avron et al., "Randomized algorithms for estimating the
+                                                                               trace of an implicit symmetric positive semi-definite matrix,"
+ [6] E. Frantar et al., "Gptq: Accurate post-training quantization             Journal of the ACM, p. 1­34, Apr 2011.
+      for generative pre-trained transformers," Oct 2022.
+                                                                         [28] H. Touvron et al., "Llama: Open and efficient foundation lan-
+ [7] Z. Yao et al., "Zeroquant: Efficient and affordable post-training         guage models," arXiv preprint arXiv:2302.13971, 2023.
+      quantization for large-scale transformers," Jun 2022.
+                                                                         [29] H. Touvron et al., "Llama 2: Open foundation and fine-tuned
+ [8] G. Xiao et al., "Smoothquant: Accurate and efficient post-                chat models," arXiv preprint arXiv:2307.09288, 2023.
+      training quantization for large language models," Nov 2022.
+                                                                         [30] Baichuan-Inc, "Baichuan-7b," 2023, accessed on Sep 4th,
+ [9] T. Dettmers et al., "Spqr: A sparse-quantized representation              2023.
+      for near-lossless llm weight compression," Jun 2023.
+                                                                         [31] S. Merity et al., "Pointer sentinel mixture models," arXiv:
+[10] Z. Wang et al., "Structured pruning of large language models,"            Computation and Language,arXiv: Computation and Lan-
+      in Proceedings of the 2020 Conference on Empirical Methods               guage, Sep 2016.
+      in Natural Language Processing (EMNLP), Jan 2020.
+                                                                         [32] M. Marcus et al., "The penn treebank: annotating predicate ar-
+[11] E. Kurtic et al., "The optimal bert surgeon: Scalable and accu-           gument structure," in Proceedings of the workshop on Human
+      rate second-order pruning for large language models."                    Language Technology - HLT '94, Jan 1994.
+
+[12] O. Zafrir et al., "Prune once for all: Sparse pre-trained lan-      [33] C. Raffel et al., "Exploring the limits of transfer learning
+      guage models."                                                           with a unified text-to-text transformer," arXiv: Learning,arXiv:
+                                                                               Learning, Oct 2019.
+[13] X. Ma et al., "Llm-pruner: On the structural pruning of large
+      language models."                                                  [34] M. Boratko et al., "A systematic classification of knowledge,
+                                                                               reasoning, and context within the arc dataset," Jun 2018.
+[14] E. Frantar et al., "Sparsegpt: Massive language models can be
+      accurately pruned in one-shot," Jan 2023.                          [35] R. Zellers et al., "Hellaswag: Can a machine really finish your
+                                                                               sentence?" arXiv preprint arXiv:1905.07830, 2019.
+[15] Z. Liu et al., "Post-training quantization for vision trans-
+      former," Advances in Neural Information Processing Systems,        [36] S. Lin et al., "Truthfulqa: Measuring how models mimic hu-
+      vol. 34, pp. 28 092­28 103, 2021.                                        man falsehoods," arXiv preprint arXiv:2109.07958, 2021.
+
+[16] S. A. Tailor et al., "Degree-quant: Quantization-aware training     [37] S. Tata et al., "Piqa: an algebra for querying protein data sets,"
+      for graph neural networks," arXiv preprint arXiv:2008.05000,             in 15th International Conference on Scientific and Statistical
+      2020.                                                                    Database Management, 2003., Dec 2003.
+
+[17] H. Sajjad et al., "Poor man's bert: Smaller and faster trans-       [38] M. Zhu et al., "To prune, or not to prune: exploring the efficacy
+      former models," arXiv preprint arXiv:2004.03844, vol. 2,                 of pruning for model compression," Oct 2017.
+      no. 2, 2020.
+
+[18] Z. Wang et al., "Structured pruning of large language models,"
+      arXiv preprint arXiv:1910.04732, 2019.
+
+[19] F. Lagunas et al., "Block pruning for faster transformers,"
+      arXiv preprint arXiv:2109.04838, 2021.
+

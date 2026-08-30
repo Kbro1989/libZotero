@@ -1,0 +1,852 @@
+                                       GLIDE: Towards Photorealistic Image Generation and Editing with
+                                                               Text-Guided Diffusion Models
+
+                                       Alex Nichol * Prafulla Dhariwal * Aditya Ramesh * Pranav Shyam Pamela Mishkin Bob McGrew
+                                                                                      Ilya Sutskever Mark Chen
+
+arXiv:2112.10741v3 [cs.CV] 8 Mar 2022                          Abstract                                  their corresponding text prompts.
+
+                                             Diffusion models have recently been shown to                On the other hand, unconditional image models can syn-
+                                             generate high-quality synthetic images, especially          thesize photorealistic images (Brock et al., 2018; Karras
+                                             when paired with a guidance technique to trade              et al., 2019a;b; Razavi et al., 2019), sometimes with enough
+                                             off diversity for fidelity. We explore diffusion            fidelity that humans can't distinguish them from real images
+                                             models for the problem of text-conditional im-              (Zhou et al., 2019). Within this line of research, diffusion
+                                             age synthesis and compare two different guid-               models (Sohl-Dickstein et al., 2015; Song & Ermon, 2020b)
+                                             ance strategies: CLIP guidance and classifier-free          have emerged as a promising family of generative models,
+                                             guidance. We find that the latter is preferred by           achieving state-of-the-art sample quality on a number of
+                                             human evaluators for both photorealism and cap-             image generation benchmarks (Ho et al., 2020; Dhariwal &
+                                             tion similarity, and often produces photorealistic          Nichol, 2021; Ho et al., 2021).
+                                             samples. Samples from a 3.5 billion parameter
+                                             text-conditional diffusion model using classifier-          To achieve photorealism in the class-conditional setting,
+                                             free guidance are favored by human evaluators to            Dhariwal & Nichol (2021) augmented diffusion models
+                                             those from DALL-E, even when the latter uses                with classifier guidance, a technique which allows diffusion
+                                             expensive CLIP reranking. Additionally, we find             models to condition on a classifier's labels. The classifier
+                                             that our models can be fine-tuned to perform im-            is first trained on noised images, and during the diffusion
+                                             age inpainting, enabling powerful text-driven im-           sampling process, gradients from the classifier are used
+                                             age editing. We train a smaller model on a fil-             to guide the sample towards the label. Ho & Salimans
+                                             tered dataset and release the code and weights at           (2021) achieved similar results without a separately trained
+                                             https://github.com/openai/glide-text2im.                    classifier through the use of classifier-free guidance, a form
+                                                                                                         of guidance that interpolates between predictions from a
+                                       1. Introduction                                                   diffusion model with and without labels.
+
+                                       Images, such as illustrations, paintings, and photographs,        Motivated by the ability of guided diffusion models to gen-
+                                       can often be easily described using text, but can require         erate photorealistic samples and the ability of text-to-image
+                                       specialized skills and hours of labor to create. Therefore,       models to handle free-form prompts, we apply guided dif-
+                                       a tool capable of generating realistic images from natural        fusion to the problem of text-conditional image synthesis.
+                                       language can empower humans to create rich and diverse            First, we train a 3.5 billion parameter diffusion model that
+                                       visual content with unprecedented ease. The ability to edit       uses a text encoder to condition on natural language de-
+                                       images using natural language further allows for iterative re-    scriptions. Next, we compare two techniques for guiding
+                                       finement and fine-grained control, both of which are critical     diffusion models towards text prompts: CLIP guidance and
+                                       for real world applications.                                      classifier-free guidance. Using human and automated eval-
+                                                                                                         uations, we find that classifier-free guidance yields higher-
+                                       Recent text-conditional image models are capable of syn-          quality images.
+                                       thesizing images from free-form text prompts, and can com-
+                                       pose unrelated objects in semantically plausible ways (Xu         We find that samples from our model generated with
+                                       et al., 2017; Zhu et al., 2019; Tao et al., 2020; Ramesh et al.,  classifier-free guidance are both photorealistic and reflect
+                                       2021; Zhang et al., 2021). However, they are not yet able         a wide breadth of world knowledge. When evaluated by
+                                       to generate photorealistic images that capture all aspects of     human judges, our samples are preferred to those from
+                                                                                                         DALL-E (Ramesh et al., 2021) 87% of the time when evalu-
+                                            Equal contribution. Correspondence to alex@openai.com,       ated for photorealism, and 69% of the time when evaluated
+                                       prafulla@openai.com, aramesh@openai.com                           for caption similarity.
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+"a hedgehog using a               "a corgi wearing a red bowtie                "robots meditating in a       "a fall landscape with a small
+     calculator"                      and a purple party hat"                     vipassana retreat"             cottage next to a lake"
+
+"a surrealist dream-like oil      "a professional photo of a                   "a high-quality oil painting    "an illustration of albert
+ painting by salvador dal´i        sunset behind the grand                      of a psychedelic hamster     einstein wearing a superhero
+of a cat playing checkers"
+                                            canyon"                                       dragon"                       costume"
+
+"a boat in the canals of venice"  "a painting of a fox in the style            "a red cube on top             "a stained glass window
+                                           of starry night"                     of a blue cube"              of a panda eating bamboo"
+
+"a crayon drawing of a space elevator" "a futuristic city in synthwave style"  "a pixel art corgi pizza"     "a fog rolling into new york"
+
+Figure 1. Selected samples from GLIDE using classifier-free guidance. We observe that our model can produce photorealistic images with
+shadows and reflections, can compose multiple concepts in the correct way, and can produce artistic renderings of novel concepts. For
+random sample grids, see Figure 17 and 18.
+
+While our model can render a wide variety of text prompts                      which allows humans to iteratively improve model samples
+zero-shot, it can can have difficulty producing realistic im-                  until they match more complex prompts. Specifically, we
+ages for complex prompts. Therefore, we provide our model                      fine-tune our model to perform image inpainting, finding
+with editing capabilities in addition to zero-shot generation,                 that it is capable of making realistic edits to existing im-
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+"zebras roaming in the field"                                 "a girl hugging a corgi on a pedestal"
+
+"a man with red hair"                                         "a vase of flowers"
+
+"an old car in a snowy forest"                                "a man wearing a white hat"
+
+Figure 2. Text-conditional image inpainting examples from GLIDE. The green region is erased, and the model fills it in conditioned on the
+given prompt. Our model is able to match the style and lighting of the surrounding context to produce a realistic completion.
+
+ages using natural language prompts. Edits produced by the    2. Background
+model match the style and lighting of the surrounding con-
+text, including convincing shadows and reflections. Future    In the following sections, we outline the components of
+applications of these models could potentially aid humans     the final models we will evaluate: diffusion, classifier-free
+in creating compelling custom images with unprecedented       guidance, and CLIP guidance.
+speed and ease.
+                                                              2.1. Diffusion Models
+We observe that our resulting model can significantly reduce
+the effort required to produce convincing disinformation      We consider the Gaussian diffusion models introduced by
+or Deepfakes. To safeguard against these use cases while      Sohl-Dickstein et al. (2015) and improved by Song & Ermon
+aiding future research, we release a smaller diffusion model  (2020b); Ho et al. (2020). Given a sample from the data
+and a noised CLIP model trained on filtered datasets.         distribution x0  q(x0), we produce a Markov chain of
+                                                              latent variables x1, ..., xT by progressively adding Gaussian
+We refer to our system as GLIDE, which stands for Guided      noise to the sample:
+Language to Image Diffusion for Generation and Editing.
+We refer to our small filtered model as GLIDE (filtered).                                        
+                                                                       q(xt|xt-1) := N (xt; txt-1, (1 - t)I)
+
+                                                              If the magnitude 1 - t of the noise added at each
+                                                              step is small enough, the posterior q(xt-1|xt) is well-
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+"a cozy living room"  "a painting of a corgi    "a round coffee table  "a vase of flowers on a  "a couch in the corner
+                        on the wall above       in front of a couch"         coffee table"            of a room"
+                             a couch"
+
+Figure 3. Iteratively creating a complex scene using GLIDE. First, we generate an image for the prompt "a cozy living room", then use the
+shown inpainting masks and follow-up text prompts to add a painting to the wall, a coffee table, and a vase of flowers on the coffee table,
+and finally to move the wall up to the couch.
+
+"a corgi wearing a bow tie and a birthday hat"                     While there exists a tractable variational lower-bound on
+                                                                   log p(x0), better results arise from optimizing a surrogate
+                                                                   objective which re-weighs the terms in the VLB. To compute
+                                                                   this surrogate objective, we generate samples xt  q(xt|x0)
+                                                                   by applying Gaussian noise to to x0, then train a model 
+                                                                   to predict the added noise using a standard mean-squared
+                                                                   error loss:
+
+                                                                     Lsimple := Et[1,T ],x0q(x0), N (0,I)[|| - (xt, t)||2]
+
+                                   "a fire in the background"      Ho et al. (2020) show how to derive µ(xt) from (xt, t),
+                                                                   and fix  to a constant. They also show the equivalence to
+                              "only one cloud in the sky today"    previous denoising score-matching based models (Song &
+                                                                   Ermon, 2020b;a), with the score function xt log p(xt) 
+Figure 4. Examples of text-conditional SDEdit (Meng et al., 2021)   (xt, t). In a follow-up work, Nichol & Dhariwal (2021)
+with GLIDE, where the user combines a sketch with a text caption   present a strategy for learning , which enables the model
+to do more controlled modifications to an image.                   to produce high quality samples with fewer diffusion steps.
+                                                                   We adopt this technique in training the models in this paper.
+
+                                                                   Diffusion models have also been successfully applied to
+                                                                   image super-resolution (Nichol & Dhariwal, 2021; Saharia
+                                                                   et al., 2021b). Following the standard formulation of diffu-
+                                                                   sion, high-resolution images y0 are progressively noised in
+                                                                   a sequence of steps. However, p(yt-1|yt, x) additionally
+                                                                   conditions on the downsampled input x, which is provided
+                                                                   to the model by concatenating x (bicubic upsampled) in the
+                                                                   channel dimension. Results from these models outperform
+                                                                   prior methods on FID, IS, and in human comparison scores.
+
+approximated by a diagonal Gaussian. Furthermore, if the           2.2. Guided Diffusion
+magnitude 1 - 1...T of the total noise added through-
+out the chain is large enough, xT is well approximated             Dhariwal & Nichol (2021) find that samples from class-
+by N (0, I). These properties suggest learning a model             conditional diffusion models can often be improved
+p(xt-1|xt) to approximate the true posterior:                      with classifier guidance, where a class-conditional diffu-
+                                                                   sion model with mean µ(xt|y) and variance (xt|y)
+              p(xt-1|xt) := N (µ(xt), (xt))                        is additively perturbed by the gradient of the log-
+                                                                   probability log p(y|xt) of a target class y predicted by
+which can be used to produce samples x0  p(x0) by start-           a classifier. The resulting new perturbed mean µ^(xt|y) is
+ing with Gaussian noise xT  N (0, I) and gradually re-             given by
+ducing the noise in a sequence of steps xT -1, xT -2, ..., x0.
+                                                                      µ^(xt|y) = µ(xt|y) + s · (xt|y)xt log p(y|xt)
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+The coefficient s is called the guidance scale, and Dhariwal    Since CLIP provides a score of how close an image is to a
+& Nichol (2021) find that increasing s improves sample          caption, several works have used it to steer generative mod-
+quality at the cost of diversity.                               els like GANs towards a user-defined text caption (Galatolo
+                                                                et al., 2021; Patashnik et al., 2021; Murdock, 2021; Gal
+2.3. Classifier-free guidance                                   et al., 2021). To apply the same idea to diffusion models,
+                                                                we can replace the classifier with a CLIP model in classifier
+Ho & Salimans (2021) recently proposed classifier-free guid-    guidance. In particular, we perturb the reverse-process mean
+ance, a technique for guiding diffusion models that does        with the gradient of the dot product of the image and caption
+not require a separate classifier model to be trained. For      encodings with respect to the image:
+classifier-free guidance, the label y in a class-conditional
+diffusion model (xt|y) is replaced with a null label  with        µ^(xt|c) = µ(xt|c) + s · (xt|c)xt (f (xt) · g(c))
+a fixed probability during training. During sampling, the
+output of the model is extrapolated further in the direction    Similar to classifier guidance, we must train CLIP on noised
+of (xt|y) and away from (xt|) as follows:                       images xt to obtain the correct gradient in the reverse pro-
+                                                                cess. Throughout our experiments, we use CLIP models
+^(xt|y) = (xt|) + s · ( (xt|y) - (xt|))                         that were explicitly trained to be noise-aware, which we
+                                                                refer to as noised CLIP models.
+Here s  1 is the guidance scale. This functional form is
+inspired by the implicit classifier                             Prior work Crowson (2021a;b) has shown that the public
+                                                                CLIP models, which have not been trained on noised images,
+pi(y|xt)    p(xt|y)                                             can still be used to guide diffusion models. In Appendix D,
+             p(xt)                                              we show that our noised CLIP guidance performs favorably
+                                                                to this approach without requiring additional tricks like data
+whose gradient can be written in terms of the true scores       augmentation or perceptual losses. We hypothesize that
+                                                                guiding using the public CLIP model adversely impacts
+xt log pi(xt|y)  xt log p(xt|y) - xt log p(xt)                  sample quality because the noised intermediate images en-
+                     (xt|y) - (xt)                              countered during sampling are out-of-distribution for the
+                                                                model.
+To implement classifier-free guidance with generic text
+prompts, we sometimes replace text captions with an empty       3. Related Work
+sequence (which we also refer to as ) during training. We
+then guide towards the caption c using the modified predic-     Many works have approached the problem of text-
+tion ^:                                                         conditional image generation. Xu et al. (2017); Zhu et al.
+                                                                (2019); Tao et al. (2020); Zhang et al. (2021); Ye et al.
+^(xt|c) = (xt|) + s · ( (xt|c) - (xt|))                         (2021) train GANs with text-conditioning using publicly
+                                                                available image captioning datasets. Ramesh et al. (2021)
+Classifier-free guidance has two appealing properties. First,   synthesize images conditioned on text by building on the
+it allows a single model to leverage its own knowledge          approach of van den Oord et al. (2017), wherein an autore-
+during guidance, rather than relying on the knowledge of        gressive generative model is trained on top of discrete latent
+a separate (and sometimes smaller) classification model.        codes. Concurrently with our work, Gu et al. (2021) train
+Second, it simplifies guidance when conditioning on infor-      text-conditional discrete diffusion models on top of discrete
+mation that is difficult to predict with a classifier (such as  latent codes, finding that the resulting system can produce
+text).                                                          competitive image samples.
+
+2.4. CLIP Guidance                                              Several works have explored image inpainting with diffusion
+                                                                models. Meng et al. (2021) finds that diffusion models
+Radford et al. (2021) introduced CLIP as scalable approach      can not only inpaint regions of an image, but can do so
+for learning joint representations between text and images.     conditioned on a rough sketch (or set of colors) for the image.
+A CLIP model consists of two separate pieces: an image          Saharia et al. (2021a) finds that, when trained directly on
+encoder f (x) and a caption encoder g(c). During training,      the inpainting task, diffusion models can smoothly inpaint
+batches of (x, c) pairs are sampled from a large dataset, and   regions of an image without edge artifacts.
+the model optimizes a contrastive cross-entropy loss that
+encourages a high dot-product f (x) · g(c) if the image x       CLIP has previously been used to guide image generation.
+is paired with the given caption c, or a low dot-product if     Galatolo et al. (2021); Patashnik et al. (2021); Murdock
+the image and caption correspond to different pairs in the      (2021); Gal et al. (2021) use CLIP to guide GAN gener-
+training data.                                                  ation towards text prompts. The online AI-generated art
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+community has produced promising early results using un-        This model is conditioned on text in the same way as the
+noised CLIP-guided diffusion (Crowson, 2021a;b). Kim &          base model, but uses a smaller text encoder with width 1024
+Ye (2021) edits images using text prompts by fine-tuning        instead of 2048. Otherwise, the architecture matches the Im-
+a diffusion model to target a CLIP loss while reconstruct-      ageNet upsampler from Dhariwal & Nichol (2021), except
+ing the original image's DDIM (Song et al., 2020a) latent.      that we increase the number of base channels to 384.
+Zhou et al. (2021) trains GAN models conditioned on per-
+turbed CLIP image embeddings, resulting in a model which        We train the base model for 2.5M iterations at batch
+can condition images on CLIP text embeddings. None of           size 2048. We train the upsampling model for 1.6M itera-
+these works explore noised CLIP models, and often rely on       tions at batch size 512. We find that these models train stably
+data augmentations and perceptual losses as a result.           with 16-bit precision and traditional loss scaling (Micike-
+                                                                vicius et al., 2017). The total training compute is roughly
+Several works have explored text-based image editing.           equal to that used to train DALL-E.
+Zhang et al. (2020) propose a dual attention mechanism
+for using text embeddings to inpaint missing regions of an      4.2. Fine-tuning for classifier-free guidance
+image. Stap et al. (2020) propose a method for editing im-
+ages of faces using feature vectors grounded in text. Bau       After the initial training run, we fine-tuned our base model
+et al. (2021) pair CLIP with state-of-the-art GAN models        to support unconditional image generation. This training
+to inpaint images using text targets. Concurrently with our     procedure is exactly like pre-training, except 20% of text
+work, Avrahami et al. (2021) use CLIP-guided diffusion to       token sequences are replaced with the empty sequence. This
+inpaint regions of images conditioned on text.                  way, the model retains its ability to generate text-conditional
+                                                                outputs, but can also generate images unconditionally.
+4. Training
+                                                                4.3. Image Inpainting
+For our main experiments, we train a 3.5 billion parameter
+text-conditional diffusion model at 64 × 64 resolution, and     Most previous work that uses diffusion models for inpaint-
+another 1.5 billion parameter text-conditional upsampling       ing has not trained diffusion models explicitly for this task
+diffusion model to increase the resolution to 256 × 256. For    (Sohl-Dickstein et al., 2015; Song et al., 2020b; Meng et al.,
+CLIP guidance, we also train a noised 64 × 64 ViT-L CLIP        2021). In particular, diffusion model inpainting can be per-
+model (Dosovitskiy et al., 2020).                               formed by sampling from the diffusion model as usual, but
+                                                                replacing the known region of the image with a sample
+4.1. Text-Conditional Diffusion Models                          from q(xt|x0) after each sampling step. This has the disad-
+                                                                vantage that the model cannot see the entire context during
+We adopt the ADM model architecture proposed by Dhari-          the sampling process (only a noised version of it), occa-
+wal & Nichol (2021), but augment it with text conditioning      sionally resulting in undesired edge artifacts in our early
+information. For each noised image xt and corresponding         experiments.
+text caption c, our model predicts p(xt-1|xt, c). To con-
+dition on the text, we first encode it into a sequence of K     To achieve better results, we explicitly fine-tune our model
+tokens, and feed these tokens into a Transformer model          to perform inpainting, similar to Saharia et al. (2021a). Dur-
+(Vaswani et al., 2017). The output of this transformer is       ing fine-tuning, random regions of training examples are
+used in two ways: first, the final token embedding is used      erased, and the remaining portions are fed into the model
+in place of a class embedding in the ADM model; second,         along with a mask channel as additional conditioning in-
+the last layer of token embeddings (a sequence of K fea-        formation. We modify the model architecture to have four
+ture vectors) is separately projected to the dimensionality of  additional input channels: a second set of RGB channels,
+each attention layer throughout the ADM model, and then         and a mask channel. We initialize the corresponding input
+concatenated to the attention context at each layer.            weights for these new channels to zero before fine-tuning.
+                                                                For the upsampling model, we always provide the full low-
+We train our model on the same dataset as DALL-E (Ramesh        resolution image, but only provide the unmasked region of
+et al., 2021). We use the same model architecture as the Im-    the high-resolution image.
+ageNet 64 × 64 model from Dhariwal & Nichol (2021), but
+scale the model width to 512 channels, resulting in roughly     4.4. Noised CLIP models
+2.3 billion parameters for the visual part of the model. For
+the text encoding Transformer, we use 24 residual blocks of     To better match the classifier guidance technique from Dhari-
+width 2048, resulting in roughly 1.2 billion parameters.        wal & Nichol (2021), we train noised CLIP models with an
+                                                                image encoder f (xt, t) that receives noised images xt and
+Additionally, we train a 1.5 billion parameter upsampling       is otherwise trained with the same objective as the original
+diffusion model to go from 64 × 64 to 256 × 256 resolution.     CLIP model. We train these models at 64 × 64 resolution
+                    GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+Real Image
+
+XMC-GAN
+
+DALL-E
+
+GLIDE (CLIP Guid.)
+
+GLIDE (CF Guid.)
+
+                    "a green train is coming  "a group of skiers are  "a small kitchen with  "a group of elephants walking   "a living area with a
+                        down the tracks"      preparing to ski down       a low ceiling"            in muddy water."        television and a table"
+
+                                                   a mountain."
+
+Figure 5. Random image samples on MS-COCO prompts. For XMC-GAN, we take samples from Zhang et al. (2021). For DALL-E, we
+generate samples at temperature 0.85 and select the best of 256 using CLIP reranking. For GLIDE, we use CLIP guidance with scale 2.0
+and classifier-free guidance with scale 3.0. We do not perform any CLIP reranking or cherry-picking for GLIDE.
+
+with the same noise schedule as our base model.                       produced using classifier-free guidance, a choice which we
+                                                                      justify in the next section.
+5. Results
+                                                                      In Figure 1, we observe that GLIDE with classifier-free
+5.1. Qualitative Results                                              guidance is capable of generalizing to a wide variety of
+                                                                      prompts. The model often generates realistic shadows and
+When visually comparing CLIP guidance to classifier-free              reflections, as well as high-quality textures. It is also capable
+guidance in Figure 5, we find that samples from classifier-           of producing illustrations in various styles, such as the style
+free guidance often look more realistic than those produced           of a particular artist or painting, or in general styles like
+using CLIP guidance. The remainder of our samples are                 pixel art. Finally, the model is able to compose several
+                                        GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+                0.625                                                                                             Classifier-free guidance                                    Classifier-free guidance
+                0.600
+                0.575                                           Classifier-free guidance                  16      CLIP guidance                                           16  CLIP guidance
+                0.550                                           CLIP guidance
+                0.525
+MS-COCO Recall  0.500                                                                        MS-COCO FID  14                                                 MS-COCO FID  14
+                0.475
+                0.450                                                                                     12                                                              12
+
+                       0.56                                                                               10                                                              10
+
+                                                                                                          8                                                               8
+
+                                             0.58   0.60  0.62         0.64      0.66                             17  18         19         20   21  22  23                   26.5  27.0                27.5     28.0  28.5
+
+                                                    MS-COCO Precision                                                                MS-COCO IS                                              MS-COCO CLIP score
+
+                                        (a) Precision/Recall                                                              (b) IS/FID                                                (c) CLIP score/FID
+
+Figure 6. Comparing the diversity-fidelity trade-off of classifier-free guidance and CLIP guidance on MS-COCO 64 × 64.
+
+                                        250                                      Classifier-free guidance                                   of-the-art text-conditional image generation models on cap-
+                                        200                                      CLIP guidance                                              tions from MS-COCO, finding that our model produces
+                                        150                                                                                                 more realistic images without CLIP reranking or cherry-
+                relative elo (quality)  100                                                                                                 picking.
+
+                                          50        2           4             6           8                   10                            For additional qualitative comparisons, see Appendix C, D,
+                                           0                                                                                                E.
+
+                                        -50                                                                                                 5.2. Quantitative Results
+
+                                                 0                                                                                          We first evaluate the difference between classifier-free
+                                                                                                                                            guidance and CLIP guidance by looking at the Pareto
+                                                                       scale                                                                frontier of the quality-fidelity trade-off. In Figure 6 we
+                                                                                                                                            evaluate both approaches on zero-shot MS-COCO gener-
+                                                    (a) Photorealism                                                                        ation at 64 × 64 resolution. We look at Precision/Recall
+                                                                                                                                            (Kynka¨a¨nniemi et al., 2019), FID (Heusel et al., 2017), In-
+                                        250                                                                                                 ception Score (Salimans et al., 2016), and CLIP score1
+                                                                                                                                            (Radford et al., 2021). As we increase both guidance scales,
+                                        200                                                                                                 we observe a clean trade-off in FID vs. IS, Precision vs.
+                                                                                                                                            Recall, and CLIP score vs. FID. In the former two curves,
+                relative elo (caption)  150                                                                                                 we find that classifier-free guidance is (nearly) Pareto opti-
+                                                                                                                                            mal. We see the exact opposite trend when plotting CLIP
+                                        100                                                                                                 score against FID; in particular, CLIP guidance seems to
+                                                                                                                                            be able to boost CLIP score much more than classifier-free
+                                        50                                       Classifier-free guidance                                   guidance.
+                                                                                 CLIP guidance
+                                         0                                                                                                  We hypothesize that CLIP guidance is finding adversarial
+                                              0     2     4            scale  6           8                   10                            examples for the evaluation CLIP model, rather than actu-
+                                                                                                                                            ally outperforming classifier-free guidance when it comes
+                                                    (b) Caption Similarity                                                                  to matching the prompt. To verify this hypothesis, we em-
+                                                                                                                                            ployed human evaluators to judge the sample quality of
+Figure 7. Elo scores from human evaluations for finding the opti-                                                                           generated images. In this setup, human evaluators are pre-
+mal guidance scales for classifier-free guidance and CLIP guidance.                                                                         sented with two 256 × 256 images and must choose which
+The classifier-free guidance and CLIP guidance comparisons were                                                                             sample either 1) better matches a given caption, or 2) looks
+performed separately, but can be super-imposed onto the same                                                                                more photorealistic. The human evaluator may also indicate
+graph my normalizing for the Elo score of unguided sampling.                                                                                that neither image is significantly better than the other, in
+                                                                                                                                            which case half of a win is assigned to both models.
+concepts (e.g. a corgi, bowtie, and birthday hat), all while
+binding attributes (e.g. colors) to these objects.                                                                                          Using our human evaluation protocol, we first sweep over
+
+On the inpainting task, we find that GLIDE can realisti-                                                                                        1We define CLIP score as E[s(f (image) · g(caption))] where
+cally modify existing images using text prompts, inserting                                                                                  the expectation is taken over the batch of samples and s is the
+new objects, shadows and reflections when necessary (Fig-                                                                                   CLIP logit scale.
+ure 2). The model can even match styles when editing
+objects into paintings. We also experiment with SDEdit
+(Meng et al., 2021) in Figure 4, finding that our model is
+capable of turning sketches into realistic image edits. In
+Figure 3 we show how we can use GLIDE iteratively to pro-
+duce a complex scene using a zero-shot generation followed
+by a series of inpainting edits.
+
+In Figure 5, we compare our model to the previous state-
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+Table 1. Elo scores resulting from a human evaluation of unguided        Table 3. Human evaluation results comparing GLIDE to DALL-E.
+diffusion sampling, classifier-free guidance, and CLIP guidance          We report win probabilities of our model for both photorealism
+on MS-COCO validation prompts at 256 × 256 resolution. For               and caption similarity. In the final row, we apply the dVAE used
+classifier-free guidance, we use scale 3.0, and for CLIP guidance        by DALL-E to the outputs of GLIDE.
+scale 2.0. See Appendix A.1 for more details on how Elo scores
+are computed.                                                                             DALL-E  Photo-    Caption
+                                                                                           Temp.  realism  Similarity
+        Guidance          Photorealism  Caption                             No reranking
+                                                                                             1.0   91%        83%
+        Unguided              -88.6     -106.2                           DALL-E reranked    0.85   84%        80%
+     CLIP guidance            -73.2       29.3                           DALL-E reranked
+Classifier-free guidance       82.7      110.9                           + GLIDE blurred     1.0   89%        71%
+                                                                                            0.85   87%        69%
+Table 2. Comparison of FID on MS-COCO 256 × 256. Like pre-
+vious work, we sample 30k captions for our models, and compare                               1.0   72%        63%
+against the entire validation set. For our model, we report numbers                         0.85   66%        61%
+for classifier-free guidance with scale 1.5, since this yields the best
+FID.                                                                     and GLIDE. First, we compare both models when using
+                                                                         no CLIP reranking. Second, we use CLIP reranking only
+               Model            FID     Zero-shot FID                    for DALL-E. Finally, we use CLIP reranking for DALL-E
+                                                                         and also project GLIDE samples through the discrete VAE
+   AttnGAN (Xu et al., 2017)    35.49         28                         used by DALL-E. The latter allows us to assess how DALL-
+  DM-GAN (Zhu et al., 2019)     32.64        26.94                       E's blurry samples affect human judgement. We do all
+   DF-GAN (Tao et al., 2020)    21.42        12.24                       evals using two temperatures for the DALL-E model. Our
+DM-GAN + CL (Ye et al., 2021)   20.79        12.89                       model is preferred by the human evalautors in all settings,
+XMC-GAN (Zhang et al., 2021)    9.33                                     even in the configurations that heavily favor DALL-E by
+  LAFITE (Zhou et al., 2021)    8.12                                     allowing it to use a much larger amount of test-time compute
+                                                                         (through CLIP reranking) while reducing GLIDE sample
+ DALL-E (Ramesh et al., 2021)                                            quality (through VAE blurring).
+  LAFITE (Zhou et al., 2021)
+               GLIDE                                                     For sample grids from DALL-E with CLIP reranking and
+   GLIDE (Validation filtered)                                           GLIDE with various guidance strategies, see Appendix G.
+
+guidance scales for both approaches separately (Figure 7),               6. Safety Considerations
+then compare the two methods with the best scales from the
+previous stage (Table 1). We find that humans disagree with              Our model is capable of producing fake but realistic images
+CLIP score, finding classifier-free guidance to yield higher-            and enables unskilled users to quickly make convincing
+quality samples that agree more with the corresponding                   edits to existing images. As a result, releasing our model
+prompt.                                                                  without safeguards would significantly reduce the skills re-
+                                                                         quired to create convincing disinformation or Deepfakes.
+We also compare GLIDE with other text-conditional gen-                   Additionally, since the model's samples reflect various bi-
+erative image models. We find in Table 2 that our model                  ases, including those from the dataset, applying it could
+obtains competitive FID on MS-COCO without ever explic-                  unintentionally perpetuate harmful societal biases.
+itly training on this dataset. We also compute FID against a
+subset of the MS-COCO validation set that has been purged                In order to mitigate potentially harmful impacts of releasing
+of all images similar to images in our training set, as done             these models, we filtered training images before training
+by Ramesh et al. (2021). This reduces the validation batch               models for release. First, we gathered a dataset of several
+by 21%. We find that our FID increases slightly from 12.24               hundred million images from the internet, which is largely
+to 12.89 in this case, which could largely be explained by the           disjoint from the datasets used to train CLIP and DALL-E,
+change in FID bias when using a smaller reference batch.                 and then applied several filters to this data. We filtered out
+                                                                         training images containing people to reduce the capabili-
+Finally, we compare GLIDE against DALL-E using our                       ties of the model in many people-centric problematic use
+human evaluation protocol (Table 3). Note that GLIDE was                 cases. We also had concerns about our models being used
+trained with roughly the same training compute as DALL-E                 to produce violent images and hate symbols, so we filtered
+but with a much smaller model (3.5 billion vs. 12 billion                out several of these as well. For more details on our data
+parameters). It also requires less sampling latency and no               filtering process, see Appendix F.1.
+CLIP reranking.
+                                                                         We trained a small 300 million parameter model, which we
+We perform three sets of comparisons between DALL-E
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+"an illustration of a cat  "a bicycle that has continuous        "a mouse hunting a lion"  "a car with triangular wheels"
+  that has eight legs"       tracks instead of wheels"
+
+Figure 8. Failure cases of GLIDE when prompted for certain unusual objects or scenarios.
+
+refer to as GLIDE (filtered), on our filtered dataset. We        GLIDE (filtered) and a public 64 × 64 ImageNet model.
+then investigated how GLIDE (filtered) mitigates the risk of     On the prompts that we tried, we found that the new CLIP
+misuse if the model weights were open sourced. During this       model did not significantly increase the quality of violent
+investigation, which involved red teaming the model using        images or images of people over the quality of such images
+a set of adversarial prompts, we did not find any instances      produced by existing public CLIP models.
+where the model was able to generate recognizable images
+of humans, suggesting that our data filter had a sufficiently    We also tested the ability of GLIDE (filtered) to directly re-
+low false-negative rate. We also probed GLIDE (filtered) for     gurgitate training images. For this experiment, we sampled
+some forms of bias and found that it retains, and may even       images for 30K prompts in the training set, and computed
+amplify, biases in the dataset. For example, when asked          the distance between each generated image and the original
+to generate "toys for girls", our model produces more pink       training image in CLIP latent space. We then inspected
+toys and stuffed animals than it does for the prompt "toys       the pairs with the smallest distances. The model did not
+for boys". Separately, we also found that, when prompted         faithfully reproduce the training images in any of the pairs
+for generic cultural imagery such as "a religious place",        we inspected.
+our model often reinforces Western stereotypes. We also
+observed that the model's biases are amplified when using        7. Limitations
+classifier-free guidance. Finally, while we have hindered the
+model's capabilities to generate images in specific classes, it  While our model can often compose disparate concepts in
+retains inpainting capabilities, the misuse potential of which   complex ways, it sometimes fails to capture certain prompts
+are an important area for further interdisciplinary research.    which describe highly unusual objects or scenarios. In Fig-
+For detailed examples and images, see Appendix F.2.              ure 8, we provide some examples of these failure cases.
+
+The above investigation studies GLIDE (filtered) on its own,     Our unoptimized model takes 15 seconds to sample one
+but no model lives in a vacuum. For example, it is often         image on a single A100 GPU. This is much slower than
+possible to combine multiple models to obtain a new set          sampling for related GAN methods, which produce images
+of capabilities. To explore this issue, we swapped GLIDE         in a single forward pass and are thus more favorable for use
+(filtered) into a publicly available CLIP-guided diffusion       in real-time applications.
+program (Crowson, 2021a) and studied the generation capa-
+bilities of the resulting pair of models. We generally found     8. Acknowledgements
+that, while the CLIP model (which was trained on unfiltered
+data) allowed our model to produce some recognizable fa-         We would like to thank Lama Ahmad, Rosie Campbell,
+cial expressions or hateful imagery, the same CLIP model         Gretchen Krueger, Steven Adler, Miles Brundage, and Tyna
+produced roughly the same quality of images when paired          Eloundou for thoughtful exploration and discussion of our
+with a publicly available ImageNet diffusion model. For          models and their societal implications. We would also like to
+more details, see Appendix F.2.                                  thank Yura Burda for providing feedback on an early draft
+                                                                 of this paper, and to Mikhail Pavlov for finding difficult
+To enable further research on CLIP-guided diffusion, we          prompts for text-conditional generative models.
+also train and release a noised ViT-B CLIP model trained
+on a filtered dataset. We combine the dataset used to train
+GLIDE (filtered) with a filtered version of the original CLIP
+dataset. To red team this model, we used it to guide both
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+References                                                      Ho, J. and Salimans, T. Classifier-free diffusion guidance.
+                                                                   In NeurIPS 2021 Workshop on Deep Generative Models
+Avrahami, O., Lischinski, D., and Fried, O. Blended                and Downstream Applications, 2021. URL https://
+   diffusion for text-driven editing of natural images.            openreview.net/forum?id=qw8AKxfYbI.
+   arXiv:2111.14818, 2021.
+                                                                Ho, J., Jain, A., and Abbeel, P. Denoising diffusion proba-
+Bau, D., Andonian, A., Cui, A., Park, Y., Jahanian, A., Oliva,     bilistic models. arXiv:2006.11239, 2020.
+  A., and Torralba, A. Paint by word. arXiv:2103.10951,
+   2021.                                                        Ho, J., Saharia, C., Chan, W., Fleet, D. J., Norouzi, M., and
+                                                                   Salimans, T. Cascaded diffusion models for high fidelity
+Brock, A., Donahue, J., and Simonyan, K. Large scale               image generation. arXiv:2106.15282, 2021.
+   gan training for high fidelity natural image synthesis.
+   arXiv:1809.11096, 2018.                                      Karras, T., Laine, S., and Aila, T. A style-based gen-
+                                                                   erator architecture for generative adversarial networks.
+Buolamwini, J. and Gebru, T. Gender shades: Intersectional         arXiv:arXiv:1812.04948, 2019a.
+   accuracy disparities in commercial gender classification.
+   In Friedler, S. A. and Wilson, C. (eds.), Proceedings        Karras, T., Laine, S., Aittala, M., Hellsten, J., Lehtinen, J.,
+   of the 1st Conference on Fairness, Accountability and           and Aila, T. Analyzing and improving the image quality
+  Transparency, volume 81 of Proceedings of Machine                of stylegan. arXiv:1912.04958, 2019b.
+  Learning Research, pp. 77­91. PMLR, 23­24 Feb 2018.
+   URL https://proceedings.mlr.press/v81/                       Kim, G. and Ye, J. C. Diffusionclip: Text-guided image
+   buolamwini18a.html.                                             manipulation using diffusion models. arXiv:2110.02711,
+                                                                   2021.
+Crowson, K. Clip guided diffusion hq 256x256. https:
+  //colab.research.google.com/drive/                            Kynka¨a¨nniemi, T., Karras, T., Laine, S., Lehtinen, J., and
+  12a_Wrfi2_gwwAuN3VvMTwVMz9TfqctNj,                              Aila, T. Improved precision and recall metric for assess-
+   2021a.                                                          ing generative models. arXiv:1904.06991, 2019.
+
+Crowson, K.  Clip guided diffusion 512x512,                     Meng, C., Song, Y., Song, J., Wu, J., Zhu, J.-Y., and Ermon,
+                                                                   S. Sdedit: Image synthesis and editing with stochastic
+secondary model method.      https://                              differential equations. arXiv:2108.01073, 2021.
+
+twitter.com/RiversHaveWings/status/                             Micikevicius, P., Narang, S., Alben, J., Diamos, G., Elsen,
+                                                                   E., Garcia, D., Ginsburg, B., Houston, M., Kuchaiev, O.,
+1462859669454536711, 2021b.                                       Venkatesh, G., and Wu, H. Mixed precision training.
+                                                                   arXiv:1710.03740, 2017.
+Dhariwal, P. and Nichol, A. Diffusion models beat gans on
+   image synthesis. arXiv:2105.05233, 2021.                     Murdock, R. The big sleep. https://twitter.com/
+                                                                   advadnoun/status/1351038053033406468,
+Dosovitskiy, A., Beyer, L., Kolesnikov, A., Weissenborn,           2021.
+   D., Zhai, X., Unterthiner, T., Dehghani, M., Minderer,
+   M., Heigold, G., Gelly, S., Uszkoreit, J., and Houlsby, N.   Nichol, A. and Dhariwal, P. Improved denoising diffusion
+  An image is worth 16x16 words: Transformers for image            probabilistic models. arXiv:2102.09672, 2021.
+   recognition at scale. arXiv:2010.11929, 2020.
+                                                                Patashnik, O., Wu, Z., Shechtman, E., Cohen-Or, D., and
+Gal, R., Patashnik, O., Maron, H., Chechik, G., and Cohen-         Lischinski, D. Styleclip: Text-driven manipulation of
+   Or, D. Stylegan-nada: Clip-guided domain adaptation of          stylegan imagery. arXiv:2103.17249, 2021.
+   image generators. arXiv:2108.00946, 2021.
+                                                                Radford, A., Kim, J. W., Hallacy, C., Ramesh, A., Goh, G.,
+Galatolo, F. A., Cimino, M. G. C. A., and Vaglini, G. Gener-      Agarwal, S., Sastry, G., Askell, A., Mishkin, P., Clark,
+   ating images from caption and vice versa via clip-guided       J., Krueger, G., and Sutskever, I. Learning transfer-
+   generative latent space search. arXiv:2102.01645, 2021.         able visual models from natural language supervision.
+                                                                   arXiv:2103.00020, 2021.
+Gu, S., Chen, D., Bao, J., Wen, F., Zhang, B., Chen, D.,
+  Yuan, L., and Guo, B. Vector quantized diffusion model        Ramesh, A., Pavlov, M., Goh, G., Gray, S., Voss, C., Rad-
+   for text-to-image synthesis. arXiv:2111.14822, 2021.            ford, A., Chen, M., and Sutskever, I. Zero-shot text-to-
+                                                                   image generation. arXiv:2102.12092, 2021.
+Heusel, M., Ramsauer, H., Unterthiner, T., Nessler, B., and
+   Hochreiter, S. Gans trained by a two time-scale update
+   rule converge to a local nash equilibrium. Advances in
+  Neural Information Processing Systems 30 (NIPS 2017),
+   2017.
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+Razavi, A., van den Oord, A., and Vinyals, O. Gen-             Ye, H., Yang, X., Takac, M., Sunderraman, R., and Ji, S.
+   erating diverse high-fidelity images with VQ-VAE-2.            Improving text-to-image synthesis using contrastive learn-
+   arXiv:1906.00446, 2019.                                        ing. arXiv:2107.02423, 2021.
+
+Saharia, C., Chan, W., Chang, H., Lee, C. A., Ho, J., Sali-    Zhang, H., Koh, J. Y., Baldridge, J., Lee, H., and Yang,
+   mans, T., Fleet, D. J., and Norouzi, M. Palette: Image-to-    Y. Cross-modal contrastive learning for text-to-image
+   image diffusion models. arXiv:2111.05826, 2021a.               generation. arXiv:2101.04702, 2021.
+
+Saharia, C., Ho, J., Chan, W., Salimans, T., Fleet, D. J.,     Zhang, L., Chen, Q., Hu, B., and Jiang, S. Text-guided
+   and Norouzi, M. Image super-resolution via iterative           neural image inpainting. In Proceedings of the 28th ACM
+   refinement. arXiv:arXiv:2104.07636, 2021b.                    International Conference on Multimedia, MM '20, pp.
+                                                                 1302­1310, New York, NY, USA, 2020. Association for
+Salimans, T., Goodfellow, I., Zaremba, W., Cheung, V.,            Computing Machinery. ISBN 9781450379885. doi: 10.
+   Radford, A., and Chen, X. Improved techniques for             1145/3394171.3414017. URL https://doi.org/
+   training gans. arXiv:1606.03498, 2016.                        10.1145/3394171.3414017.
+
+Santurkar, S., Tsipras, D., Tran, B., Ilyas, A., Engstrom,     Zhou, S., Gordon, M. L., Krishna, R., Narcomey, A., Fei-
+   L., and Madry, A. Image synthesis with a single (robust)       Fei, L., and Bernstein, M. S. Hype: A benchmark for
+   classifier. arXiv:1906.09453, 2019.                            human eye perceptual evaluation of generative models,
+                                                                  2019.
+Sohl-Dickstein, J., Weiss, E. A., Maheswaranathan, N., and
+   Ganguli, S. Deep unsupervised learning using nonequi-       Zhou, Y., Zhang, R., Chen, C., Li, C., Tensmeyer, C., Yu, T.,
+   librium thermodynamics. arXiv:1503.03585, 2015.                Gu, J., Xu, J., and Sun, T. Lafite: Towards language-free
+                                                                  training for text-to-image generation. arXiv:2111.13792,
+Song, J., Meng, C., and Ermon, S. Denoising diffusion             2021.
+   implicit models. arXiv:2010.02502, 2020a.
+                                                               Zhu, M., Pan, P., Chen, W., and Yang, Y. Dm-gan: Dy-
+Song, Y. and Ermon, S. Improved techniques for train-             namic memory generative adversarial networks for text-
+   ing score-based generative models. arXiv:2006.09011,           to-image synthesis. arXiv:1904.01310, 2019.
+   2020a.
+
+Song, Y. and Ermon, S. Generative modeling
+   by estimating gradients of the data distribution.
+   arXiv:arXiv:1907.05600, 2020b.
+
+Song, Y., Sohl-Dickstein, J., Kingma, D. P., Kumar,
+  A., Ermon, S., and Poole, B. Score-based genera-
+   tive modeling through stochastic differential equations.
+   arXiv:2011.13456, 2020b.
+
+Stap, D., Bleeker, M., Ibrahimi, S., and ter Hoeve, M.
+   Conditional image generation and manipulation for user-
+   specified content. arXiv:2005.04909, 2020.
+
+Tao, M., Tang, H., Wu, S., Sebe, N., Jing, X.-Y., Wu, F.,
+   and Bao, B. Df-gan: Deep fusion generative adversarial
+   networks for text-to-image synthesis. arXiv:2008.05865,
+   2020.
+
+van den Oord, A., Vinyals, O., and Kavukcuoglu, K. Neural
+   discrete representation learning. arXiv:1711.00937, 2017.
+
+Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones,
+   L., Gomez, A. N., Kaiser, L., and Polosukhin, I. Attention
+   is all you need. arXiv:1706.03762, 2017.
+
+Xu, T., Zhang, P., Huang, Q., Zhang, H., Gan, Z., Huang,
+  X., and He, X. Attngan: Fine-grained text to image gen-
+   eration with attentional generative adversarial networks.
+   arXiv:1711.10485, 2017.
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+A. Evaluation Setup                                            Table 4. Elo scores resulting from a human evaluation comparing
+                                                               our small model to our larger model
+A.1. Human Evaluations
+
+When gathering human evaluations, we always collect 1,000       Size  Guide. Scale  Photorealism  Caption
+pairwise comparisons when evaluating photorealism. We
+also collect 1,000 comparisons for evaluating caption sim-     300M        1.0          -131.8    -136.4
+ilarity, except for sweeps over guidance scales where we       300M        4.0           28.2       70.9
+only collect 500.                                              3.5B        1.0          -23.9      -27.1
+                                                               3.5B        3.0          133.0      140.5
+
+When computing wins and Elo scores, we count a tie as
+half of a win for each model. By doing this, ties effectively
+dilute the wins of each model.
+
+To compute Elo scores, we construct a matrix A such that       B.2. Sampling Hyperparameters
+entry Aij is the number of times model i beats model j. We
+initialize Elo scores for all N models as i = 0, i  [1, N ].   For samples shown in this paper, we sample the base model
+We compute Elo scores by minimizing the objective:             using 150 diffusion steps, except for inpainting samples
+                                                               where we only use 100 steps. For evaluations, we sample
+Lelo := -               1                                      the base model using 250 diffusion steps, since this gives a
+                Aij · log 1 + 10(i-j)/400                      slight boost in FID.
+           i,j
+                                                               For the upsampler, we use a special strided sampling sched-
+A.2. Automated Evaluations                                     ule to achieve good sample quality with only 27 diffusion
+                                                               steps. In particular, we split the sampling process into
+We compute MS-COCO FIDs and other evaluation metrics           five segments, and sample from the following number of
+using 30,000 samples from validation prompts. We use the       evenly-spaced steps within in each segment: 10, 10, 3, 2, 2.
+entire validation set as a reference batch unless otherwise    This means that we only sample two timesteps in the range
+stated, and center-crop the validation images. This crop-      (800, 1000], but 10 timesteps in the range (0, 200]. This
+ping matches Ramesh et al. (2021) but is a departure from      schedule was found by sweeping over FID on our internal
+most previous literature on text-conditional image synthesis,  validation set.
+which squeezes images rather than center-cropping them.
+However, center-cropping is standard practice in the major-    C. Comparison to Smaller Models
+ity of work on unconditional and class-conditional image
+synthesis, and we hope that it will become standard practice   Was it worth training our large GLIDE model? To answer
+in the future for text-conditional image synthesis as well.    this question, we train another 300 million parameter model
+                                                               (referred to as GLIDE (small)) on our full dataset using the
+For CLIP score, we employ the CLIP ViT-B/16 model re-          same hyperparameters as GLIDE (filtered). We compare
+leased by Radford et al. (2021), and scale scores by the       samples from our large, small, and safe models to determine
+CLIP logit scale (100 in this case).                           what capabilities we gain from training such a large model
+                                                               on a large, diverse dataset.
+B. Hyperparameters
+                                                               In Figure 9, we observe that the smaller models often fail
+B.1. Training Hyperparameters                                  at binding attributes to objects (e.g. the corgi) and perform
+                                                               worse at compositional tasks (e.g. the blocks). All of the
+Our noised CLIP models process 64 × 64 images using a          models can often produce realistic images, but the two mod-
+ViT (Dosovitskiy et al., 2020) with patch size 4 × 4. We       els trained on our full dataset are much better at combining
+trained our CLIP models for 390K iterations with batch size    unusual concepts (e.g. a hedgehog using a calculator).
+32K on a 50%-50% mixture of the datasets used by Radford
+et al. (2021) and Ramesh et al. (2021). For our final CLIP     We also conduct a human evaluation comparing our small
+model, we trained a ViT-L with weight decay 0.0125. After      and large models with and without classifier-free guidance.
+training, we fine-tuned the final ViT-L for 30K iterations on  We first swept over guidance scales for the 300M model us-
+an even broader dataset of internet images.                    ing a human evaluation, finding that humans slightly prefer
+                                                               scale 4.0 to 3.0 for this small model. We then ran a human
+We pre-trained GLIDE (filtered) for 1.1M iterations before     evaluation comparing both models with and without guid-
+fine-tuning for another 500K iterations for classifier-free    ance (Table 4). We find that classifier-free guidance gives a
+guidance and inpainting. Additionally, we trained a small      larger Elo boost than scaling the model by roughly 10x.
+filtered upsampler model with 192 base channels and 512
+text encoder channels for 400K iterations.
+                         GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+GLIDE
+
+GLIDE (small)
+
+GLIDE (filtered)
+
+GLIDE (filtered) + CLIP
+
+                         "a hedgehog using a calculator"  "a corgi wearing a red bowtie  "a red cube on top of a blue cube"  "a high-quality oil painting of a
+                                                               and purple party hat"                                          psychedelic hamster dragon"
+
+Figure 9. Comparing classifier-free guided samples from our large model (first row), a small version trained on the same data (second
+row), and our released small model trained on a smaller, filtered dataset. In the final row, we show samples using our small model guided
+by a CLIP model trained on filtered data. Samples are not cherry-picked.
+
+D. Comparison to Unnoised CLIP Guidance                                                  as Radford et al. (2021). We then use this noised CLIP
+                                                                                         model to guide a pre-trained ImageNet model towards the
+Existing work has used the publicly-available CLIP models                                text prompt, using a fixed gradient scale of 15.0. Since the
+to guide diffusion models. To get recognizable samples                                   ImageNet model is class-conditional, we select a different
+from this approach, it is typically necessary to engineer a                              random class label at each timestep. We then upsample the
+set of augmentations and auxiliary losses for the generative                             resulting 64 × 64 image to 256 × 256 using our diffusion
+process. We hypothesize that this is largely due to the CLIP                             upsampler. We find that this approach, while much simpler
+model's training: it was not trained to recognize the noised                             than the approach used by the notebook, produces images
+or blurry images that are produced during the diffusion                                  of equal or higher quality, suggesting that making CLIP
+sampling process.                                                                        noise-aware is indeed helpful.
+
+To test this hypothesis, we compare a popular CLIP-guided
+diffusion program (Crowson, 2021a) to our approach based
+on a noised CLIP model (Figure 10). We train a noised ViT-
+B CLIP model on 64 × 64 images using the same dataset
+                            GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+"a corgi in a field"
+
+"a dumpster full of trash"
+
+"a monkey eating a banana"
+
+                            Unnoised CLIP (+ aux losses) Noised CLIP (+ upsampler)  GLIDE
+
+Figure 10. Comparison of GLIDE to two CLIP guidance strategies applied to pre-trained ImageNet diffusion models. On the left, we
+use a vanilla CLIP model to guide the 256 × 256 diffusion model from Dhariwal & Nichol (2021), using a combination of engineered
+perceptual losses and data augmentations (Crowson, 2021a). In the middle, we use our noised ViT-B CLIP model to guide the ImageNet
+64 × 64 diffusion model from Dhariwal & Nichol (2021), then apply a diffusion upsampler. On the right, we show random samples from
+GLIDE with classifier-free guidance scale 3.0.
+
+E. Comparison to Blended Diffusion                             masked xt. With this approach, the model seems to fol-
+                                                               low the caption more consistently, but sometimes produces
+While the code for Blended Diffusion (Avrahami et al.,         objects which don't fit as smoothly into the scene.
+2021) is not yet available, we evaluate our model on a few
+of the prompts shown in the paper (Figure 11). We find         F. GLIDE (filtered)
+that our fine-tuned model sometimes chooses to ignore the
+given text prompt and instead produces an image that seems     F.1. Data Filtering for GLIDE (filtered)
+influenced only by the surrounding context. To mitigate this
+phenomenon, we also evaluate our model with the context        To remove images of humans and human-like objects from
+fully masked out. This is the inpainting technique first pro-  our dataset, we first collect several thousand boolean labels
+posed by Sohl-Dickstein et al. (2015), wherein the model       for random samples in the training set. To train the classifier,
+only receives information about the context via the noised     we resize each image so that the smaller side is 224 pixels,
+                                   GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+Input + mask
+
+(1)
+
+(2)
+
+(3)
+
+Ours (implicit) Ours (fine-tuned)
+
+                                   "pink yarn ball" "red dog collar"  "dog bone"  "pizza"  "golden necklace" "blooming tree" "tie with black "blue short pants"
+                                                                                                                                              and yellow stripes"
+
+Figure 11. Comparison of image inpainting quality on real images. (1) Local CLIP-guided diffusion (Crowson, 2021a), (2) PaintByWord++
+(Bau et al., 2021; Avrahami et al., 2021), (3) Blended Diffusion (Avrahami et al., 2021). For our results, we follow Avrahami et al. (2021)
+and use CLIP to select the best of 64 samples. Our fine-tuned samples have more realistic lighting, shadows and textures, but sometimes
+don't focus on the prompt (eg. golden necklace), whereas implicit samples capture the prompt better.
+
+and then take three crops at the endpoints and middle along                                low-light or obstructed conditions would be missed by the
+the longer side. We feed all three crops into a pre-trained                                classifier. However, after switching to a ViT-B/16 for feature
+CLIP ViT-B/16, and mean-pool the resulting feature vec-                                    extraction (which has higher hidden-state resolution than
+tors. Finally, we fit an SVM with an RBF kernel to the                                     the ViT-B/32), we found that this effect was remedied in all
+resulting feature vectors, and tune the bias to result in less                             the previously observed failure cases.
+than a 1% false negative rate. We tested this model on a
+separate batch of 1024 samples, and found that it produced                                 To remove images of violent objects, we first used CLIP
+no false negatives (i.e. we manually visually inspected the                                to search our dataset for words and phrases like "weapon",
+images the model classified as not containing people, and                                  "violence", etc. After collecting a few hundred positive and
+we ourselves found no images of people).                                                   negative examples, we trained an SVM similar to the one
+                                                                                           above. We then labeled samples near the decision boundary
+While developing the people filter, we were aiming to de-                                  of this SVM to obtain another few hundred negative and
+tect all people in all types of environments reliably, a task                              positive examples. We iterated on this process several times,
+which is often difficult for modern face detection systems                                 and then tuned the bias of the final SVM to result in less than
+especially when dealing with people of all demographics                                    a 1% false negative rate. When tested on a separate batch of
+(Buolamwini & Gebru, 2018; Santurkar et al., 2019). In                                     1024 samples, this classifier produced no false negatives.
+our initial experiments, where we used a ViT-B/32 instead
+of a ViT-B/16, we observed some cases where people in                                      We initially approached the removal of hate symbols the
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+(a) "toys for boys"                                               (a) Unguided
+
+(b) "toys for girls"                                              (b) Classifier-free guidance (scale 3.0)
+
+Figure 12. GLIDE (filtered) samples for the same random seed      Figure 13. GLIDE (filtered) samples for the prompt "a religious
+when changing the gender in the prompt.                           place" using the same random seed, but with different guidance
+                                                                  scales.
+same way, using CLIP to search the dataset for particu-
+lar keywords. However, we found that this approach sur-           smaller dataset available to GLIDE (filtered).
+faced very few relevant images, suggesting that our data
+sources had already filtered for this content in some way.        We also incorporated GLIDE (filtered) into a publicly-
+Nonetheless, we used a search engine to collect images of         available CLIP-guided diffusion program (Crowson, 2021a).
+two prevalent hate symbols in America, the swastika and           We found that the resulting combination had some ability
+the confederate flag, and trained an SVM on this data. We         to generate face-like objects (e.g. Figure 15). While, the
+used the active learning procedure described above to col-        original CLIP-guided diffusion program using a publicly-
+lect more negative examples near the decision boundary (but       available diffusion model often produced more recognizable
+could not find positive ones), and tuned the resulting SVM's      images in response to our prompts, these findings highlight
+bias to result in less than a 1% false negative rate on this      one of the limitations of our filtering approach. We also
+curated dataset.                                                  found that GLIDE (filtered) still exhibits a strong Western
+                                                                  bias in some cases, often exceeding the bias exhibited by
+F.2. Biases and CLIP Guidance for GLIDE (filtered)                the existing publicly-available diffusion model (Figure 16).
+
+GLIDE (filtered) continues to exhibit bias ­ a demonstra-         G. Additional Samples
+tion both of how biases in image datasets extend beyond
+those found in images of people, and pointing to biases in        In Figures 17 and 18 we show 4×4 grids of random samples
+the choices we made in filtering. For example, the model          from our model with no guidance, classifier-free guidance,
+produces different outputs when asked to generate toys for        and CLIP guidance using the same random seeds, as well
+boys and toys for girls (Figure 12). When asked to gener-         as samples from DALL-E. We find that classifier-free guid-
+ate "a religious place", the model tends to gravitate towards     ance produces the highest-quality images most reliably. For
+church-like buildings, and this bias is amplified by classifier-  DALL-E, we sample 512 images for each prompt and select
+free guidance (Figure 13).                                        the top 16 using CLIP reranking. For all other sample grids,
+                                                                  we show 16 random samples without CLIP reranking.
+We expect that our hate symbol classifier has a strong Amer-
+ican and Western bias, since it was only trained on two
+prevalent hate symbols in America. As a result, it is likely
+that the training data retains images depicting hateful sym-
+bols we did not actively filter. However, we do find that
+the filtered model is less able to generate non-hate symbols
+(Figure 14). We hypothesize that this may be a result of the
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+GLIDE (filtered)      GLIDE (small)                                  GLIDE (filtered)  GLIDE (small)
+
+(a) Generations for "orange triangle"                                (b) Generations for "recycling symbol"
+
+Figure 14. Comparison of GLIDE (filtered) and GLIDE (small) samples for the prompt "orange triangle" (left) and "recycling symbol"
+(right). Even though these symbols were not filtered from the model, the filtered model generates less faithful renditions, likely due to the
+smaller dataset available.
+
+(a) GLIDE (filtered)                                                 (a) GLIDE (filtered)
+
+(b) GLIDE (filtered) + unfiltered public CLIP                        (b) GLIDE (filtered) + unfiltered public CLIP
+
+(c) Baseline (publicly-available models)                             (c) Baseline (publicly-available models)
+
+Figure 15. Generations for the prompt "a happy person". In (a),      Figure 16. Generations for the prompt "a place of worship". In (a),
+we show GLIDE (filtered) with classifier-free guidance scale 3.0.    we show GLIDE (filtered) with classifier-free guidance scale 3.0.
+In (b), we use a publicly-available CLIP model to guide GLIDE        In (b), we use a publicly-available CLIP model to guide GLIDE
+(filtered). In (c), we use a publicly-available CLIP model to guide  (filtered). In (c), we use a publicly-available CLIP model to guide
+a publicly-available ImageNet diffusion model.                       a publicly-available ImageNet diffusion model.
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+(a) DALL-E (Temp 0.85, CLIP reranked top 16 out of 512)  (b) GLIDE (Unguided)
+
+(c) GLIDE (CLIP guidance, scale 2.0)                     (d) GLIDE (Classifier-free guidance, scale 3.0)
+
+Figure 17. Random samples from DALL-E and GLIDE on the prompt "a stained glass window of a panda eating bamboo". We do not
+perform any CLIP reranking for GLIDE.
+GLIDE: Towards Photorealistic Image Generation and Editing with Text-Guided Diffusion Models
+
+(a) DALL-E (Temp 0.85, CLIP reranked top 16 out of 512)  (b) GLIDE (Unguided)
+
+(c) GLIDE (CLIP guidance, scale 2.0)                     (d) GLIDE (Classifier-free guidance, scale 3.0)
+
+Figure 18. Random samples from DALL-E and GLIDE on the prompt "A cozy living room with a painting of a corgi on the wall above a
+couch and a round coffee table in front of a couch and a vase of flowers on a coffee table". We do not perform any CLIP reranking for
+GLIDE.
+

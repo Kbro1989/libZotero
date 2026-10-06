@@ -1,1 +1,1 @@
-This folder contains the built output assets for the worker "zotero" generated at 2026-09-14T20:33:54.949Z.
+This folder contains the built output assets for the worker "zotero" generated at 2026-10-06T01:13:58.762Z.
